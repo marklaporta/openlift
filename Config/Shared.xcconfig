@@ -1,0 +1,7 @@
+OPENLIFT_APP_BUNDLE_ID = com.example.openlift
+OPENLIFT_TEST_BUNDLE_ID = com.example.openlift.tests
+OPENLIFT_ICLOUD_CONTAINER = iCloud.com.example.openlift
+OPENLIFT_KVSTORE_ID = com.example.openlift
+OPENLIFT_DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

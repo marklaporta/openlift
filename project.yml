@@ -1,0 +1,45 @@
+name: OpenLift
+options:
+  bundleIdPrefix: com.example
+targets:
+  OpenLift:
+    type: application
+    platform: iOS
+    supportedDestinations: [iOS, macCatalyst]
+    configFiles:
+      Debug: Config/OpenLift.xcconfig
+      Release: Config/OpenLift.xcconfig
+    deploymentTarget:
+      iOS: "17.0"
+      macCatalyst: "17.0"
+    sources: [Sources]
+    resources: [Resources]
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: Sources/OpenLift.entitlements
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: OpenLift
+        OpenLiftICloudContainerIdentifier: $(OPENLIFT_ICLOUD_CONTAINER)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+  OpenLiftTests:
+    type: bundle.unit-test
+    platform: iOS
+    supportedDestinations: [iOS, macCatalyst]
+    configFiles:
+      Debug: Config/OpenLiftTests.xcconfig
+      Release: Config/OpenLiftTests.xcconfig
+    deploymentTarget:
+      iOS: "17.0"
+      macCatalyst: "17.0"
+    sources: [Tests]
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: OpenLift

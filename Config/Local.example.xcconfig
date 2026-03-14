@@ -1,0 +1,7 @@
+// Copy this file to Config/Local.xcconfig and customize for your machine.
+
+OPENLIFT_APP_BUNDLE_ID = com.yourname.openlift
+OPENLIFT_TEST_BUNDLE_ID = com.yourname.openlift.tests
+OPENLIFT_ICLOUD_CONTAINER = iCloud.com.yourname.openlift
+OPENLIFT_KVSTORE_ID = com.yourname.openlift
+OPENLIFT_DEVELOPMENT_TEAM = YOURTEAMID
