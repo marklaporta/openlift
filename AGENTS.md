@@ -1,51 +1,124 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
-This repository is currently PRD-first and contains one source of truth: `prd.md` (Hypertrophy Rotation Tracker requirements).
-As implementation begins, keep a predictable layout:
-- `src/` application code (group by domain: `cycle/`, `session/`, `export/`)
-- `tests/` unit and integration tests mirroring `src/`
-- `assets/` static fixtures or sample JSON payloads
-- `docs/` design notes and API/data-model decisions
+## Project Overview
+OpenLift is a fully implemented iOS app for hypertrophy rotation tracking. Built with SwiftUI and SwiftData, targeting iOS 17.0+. No external dependencies — pure Apple frameworks only.
 
-Keep data model names aligned with the PRD (`Exercise`, `CycleTemplate`, `ActiveCycleInstance`, `Session`, `SetEntry`).
+## Project Structure
+```
+Sources/          application source (SwiftUI views + services)
+Tests/            unit tests mirroring service logic
+Config/           build configuration
+  Shared.xcconfig   safe public defaults (committed)
+  Local.xcconfig    personal Apple team/bundle ID (gitignored)
+docs/             architecture and workflow documentation
+Resources/        reference exercise notes
+```
 
-## Build, Test, and Development Commands
-No build tooling is committed yet. When adding runtime/tooling, expose standard commands through a single entry point (`Makefile` or package scripts).
-Recommended baseline:
-- `make dev` or `npm run dev`: run app locally
-- `make test` or `npm test`: run full test suite
-- `make lint` or `npm run lint`: static analysis and style checks
-- `make format` or `npm run format`: auto-format code
+### Sources files
+| File | Responsibility |
+|---|---|
+| `OpenLiftApp.swift` | App entry; SwiftData container init with resilient in-memory fallback |
+| `Models.swift` | All SwiftData models and supporting enums |
+| `RootTabView.swift` | Four-tab navigation root (Workout / History / Cycle / Import) |
+| `WorkoutView.swift` | Draft session, set entry, prefill, workout completion, draft export |
+| `HistoryView.swift` | Completed session display, deduplication, export recovery |
+| `CycleView.swift` | Template listing, editing, cloning, activation, published import |
+| `ImportView.swift` | Instructional UI for adding published cycles via iCloud |
+| `OpenLiftStateResolver.swift` | Centralised active-template / cycle / draft selection logic |
+| `OpenLiftValidator.swift` | Model validation for all SwiftData types |
+| `CycleOrdering.swift` | Day/slot ordering by position, with legacy label-based fallback |
+| `BootstrapDataService.swift` | Exercise catalog seeding, starter template, history hydration from exports |
+| `PublishedCycleService.swift` | iCloud cycle JSON discovery, parsing, fuzzy exercise name resolution |
+| `SessionExportService.swift` | Writes completed workouts and draft snapshots to iCloud / local Documents |
 
-Document final command choices in this file and keep examples up to date.
+## Data Models
+All models use SwiftData `@Model` with `@Attribute(.unique) var id: UUID`.
 
-## Coding Style & Naming Conventions
-Use 4 spaces for indentation in Markdown/JSON examples; follow language defaults in code formatters.
-Naming:
-- Types/classes: `PascalCase`
-- Variables/functions: `camelCase`
-- File names: `<feature>.<role>.<ext>` when useful (example: `session.service.ts`)
-- Tests: `<unit>.test.<ext>`
+| Model | Key fields |
+|---|---|
+| `Exercise` | `name`, `primaryMuscle`, `type`, `equipment`, `isActive` |
+| `CycleTemplate` | `name`, `days: [CycleDay]`, `rotationPools: [RotationPool]` |
+| `CycleDay` | `position`, `label`, `slots: [CycleSlot]` |
+| `CycleSlot` | `position`, `muscle`, `exerciseId`, `defaultSetCount` |
+| `RotationPool` | `key`, `entries` — quad compound rotation |
+| `RotationIndex` | `key`, `value` — tracks rotation position per cycle instance |
+| `ActiveCycleInstance` | `templateId`, `currentDayIndex`, `rotationIndices` |
+| `Session` | `cycleInstanceId`, `cycleDayIndex`, `cycleNameSnapshot`, `dayLabelSnapshot`, `status`, `exportStatus` |
+| `SetEntry` | `sessionId`, `exerciseId`, `setIndex`, `weight`, `reps`, `isLocked` |
+| `SessionSlotOverride` | `sessionId`, `slotPosition`, `exerciseId` |
 
-Prefer small, deterministic modules. Keep business logic (rotation/session rules) separate from storage and UI layers.
+## Build & Test Commands
+
+**Run tests (simulator):**
+```
+xcodebuild test -scheme OpenLift -destination 'platform=iOS Simulator,name=iPhone 17'
+```
+
+**Build for connected device:**
+```
+xcodebuild -scheme OpenLift -destination 'id=<DEVICE_UDID>' -configuration Debug build
+```
+
+**Install on connected device (after build):**
+```
+xcrun devicectl device install app --device <DEVICE_UDID> <path-to-.app>
+```
+
+**Find device UDID:**
+```
+xcrun devicectl list devices
+```
+
+**List available destinations:**
+```
+xcodebuild -scheme OpenLift -showdestinations
+```
+
+No Makefile. No npm. All build config lives in `Config/Shared.xcconfig`; personal Apple team ID and bundle ID override go in `Config/Local.xcconfig` (gitignored).
+
+## Architecture Patterns
+- **Static enum services** — `BootstrapDataService`, `SessionExportService`, `PublishedCycleService`, `OpenLiftValidator`, `CycleOrdering`, `OpenLiftStateResolver` are all caseless enums with only static functions. No stored state.
+- **SwiftUI `@Query`** — views fetch all models reactively; derived state flows through `OpenLiftStateResolver`.
+- **SwiftData `@Environment(\.modelContext)`** — views inject the model context for writes and deletes.
+- **UserDefaults** — stores `openlift.lastActivatedTemplateId` and `openlift.lastActivatedTemplateName`.
+- **iCloud + local fallback** — exports write to `OpenLift/exports/` in iCloud Drive; fall back to local Documents if iCloud is unavailable.
+- **Snapshot resilience** — `Session` stores `cycleNameSnapshot` and `dayLabelSnapshot` so history survives template deletion or renaming.
 
 ## Testing Guidelines
-Use deterministic tests for rotation advancement, set add/remove behavior, prefill logic, and export payload shape.
-Minimum expectations for new logic:
-- unit tests for happy path + edge cases
-- regression test for each bug fix
-- fixtures for PRD-conformant JSON models
+Tests live in `Tests/` and cover service logic only — no UI tests.
+
+Current test suites:
+- `BootstrapDataServiceTests` — template preference, day inference, history hydration, draft selection
+- `CycleOrderingTests` — position-based and semantic (Upper/Lower) day ordering
+- `PublishedCycleServiceTests` — JSON parsing, exercise name aliases
+- `OpenLiftStateResolverTests` — active cycle/template/draft resolution
+- `WorkoutDraftSelectionTests` — draft session preference rules
+- `WorkoutEntryEditingTests` — set add/delete/reentry, weight prefill, entry repair
+
+Expectations for new logic:
+- Unit tests for happy path + edge cases
+- Regression test for each bug fix
+- Test service functions directly; don't test SwiftUI views
 
 ## Commit & Pull Request Guidelines
-This workspace has no visible commit history yet, so use Conventional Commits going forward:
+Use Conventional Commits:
 - `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`
 
 PRs should include:
-- concise summary of behavior changes
-- linked issue/task (if available)
-- test evidence (command + result)
-- sample payload/screenshot when UI or export output changes
+- Concise summary of behaviour changes
+- Test evidence (command + result)
+- Sample payload or screenshot when export output or UI changes
 
-## Security & Configuration Tips
-Do not commit secrets or personal training exports. Keep environment values in `.env.local` (ignored), and provide safe defaults via `.env.example`.
+## Security & Configuration
+- `Config/Local.xcconfig` is gitignored — it holds your personal Apple Team ID and real bundle ID. Never commit it.
+- Do not commit `.env` files, personal exports, or training data JSONs.
+- The tracked bundle ID in `Shared.xcconfig` is a placeholder (`com.example.openlift`). Your real bundle ID lives only in `Local.xcconfig`.
+- iCloud container: `iCloud.com.example.openlift` (mirrored from real bundle ID in local config).
+
+## Documentation
+Detailed design notes live in `docs/`:
+- `architecture.md` — code-path map, data model intent, debugging hotspots
+- `setup.md` — local dev environment, Apple account requirements
+- `templates.md` — built-in starter template, published JSON format
+- `data-and-history.md` — storage model, export paths, history recovery rules
+- `ai-workflows.md` — what AI agents can/cannot do, recommended task types
