@@ -542,7 +542,7 @@ struct WorkoutView: View {
         do {
             let current = entries(for: exerciseId, sessionId: sessionId)
             let newIndex = (current.last?.setIndex ?? 0) + 1
-            let prefills = prefillValues(exerciseId: exerciseId, setIndex: newIndex)
+            let prefills = prefillValues(exerciseId: exerciseId, setIndex: newIndex, preferredSessionId: sessionId)
             let newEntry = SetEntry(
                 sessionId: sessionId,
                 exerciseId: exerciseId,
@@ -921,6 +921,11 @@ private struct ExerciseSection: View {
         exercise?.usesAssistanceLoad ?? false
     }
 
+    private enum RowField: Hashable {
+        case weight(UUID), reps(UUID)
+    }
+    @FocusState private var focusedField: RowField?
+
     var body: some View {
         Section {
             ForEach(entries) { entry in
@@ -962,6 +967,7 @@ private struct ExerciseSection: View {
                     .frame(width: 82)
                     .disabled(entry.isLocked)
                     .opacity(entry.isLocked ? 1 : 0.55)
+                    .focused($focusedField, equals: .weight(entry.id))
 
                     Text("R")
                         .font(.caption2)
@@ -996,8 +1002,10 @@ private struct ExerciseSection: View {
                     .frame(width: 56)
                     .disabled(entry.isLocked)
                     .opacity(entry.isLocked ? 1 : 0.55)
+                    .focused($focusedField, equals: .reps(entry.id))
 
                     Button {
+                        focusedField = nil
                         if !entry.isLocked && entry.weight == 0 && entry.reps == 0 {
                             return
                         }
