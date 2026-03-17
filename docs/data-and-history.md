@@ -29,7 +29,7 @@ Completed workouts:
 
 - `OpenLift/exports/workout-YYYYMMDD-HHMMSS.json`
 
-Draft snapshots:
+Draft snapshots (one per active session, deleted automatically when the workout is finished):
 
 - `OpenLift/exports/drafts/draft-<session-id>.json`
 
