@@ -424,6 +424,7 @@ struct WorkoutView: View {
             } catch {
                 session.exportStatus = .failed
             }
+            SessionExportService.deleteDraftSnapshot(sessionId: session.id)
 
             cycle.currentDayIndex = (dayIndex + 1) % max(template.days.count, 1)
             try cycle.validate(template: template)

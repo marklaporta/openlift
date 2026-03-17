@@ -74,6 +74,21 @@ enum SessionExportService {
         try writeExportData(data: data, relativeSubdirectory: "exports", filename: filename)
     }
 
+    static func deleteDraftSnapshot(sessionId: UUID) {
+        let filename = "draft-\(sessionId.uuidString).json"
+        let candidates: [URL] = [
+            FileManager.default.url(forUbiquityContainerIdentifier: nil).map {
+                $0.appendingPathComponent("Documents/OpenLift/exports/drafts/\(filename)")
+            },
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first.map {
+                $0.appendingPathComponent("OpenLift/exports/drafts/\(filename)")
+            }
+        ].compactMap { $0 }
+        for url in candidates {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     static func exportDraftSnapshot(snapshot: DraftSnapshot) throws {
         let exerciseById = Dictionary(uniqueKeysWithValues: snapshot.exercises.map { ($0.id, $0) })
         let grouped = Dictionary(grouping: snapshot.entries, by: \.exerciseId)
