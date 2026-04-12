@@ -44,6 +44,7 @@ enum BootstrapDataService {
         existingTemplates: [CycleTemplate],
         exercises: [Exercise]
     ) throws -> CycleTemplate? {
+        if AppRuntime.isUITesting { return nil }
         if !existingTemplates.isEmpty { return nil }
 
         let published = try PublishedCycleService.listPublishedCycles()
@@ -80,6 +81,7 @@ enum BootstrapDataService {
         existingTemplates: [CycleTemplate],
         exercises: [Exercise]
     ) throws -> CycleTemplate? {
+        if AppRuntime.isUITesting { return nil }
         if let existing = matchingTemplate(named: templateName, in: existingTemplates) {
             return existing
         }
@@ -181,6 +183,7 @@ enum BootstrapDataService {
     }
 
     static func allExportSummaries() -> [SessionExportService.ExportPayload] {
+        if AppRuntime.isUITesting { return [] }
         let fileManager = FileManager.default
         var directories: [URL] = []
 

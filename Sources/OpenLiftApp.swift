@@ -4,6 +4,7 @@ import SwiftData
 @main
 struct OpenLiftApp: App {
     private static let sharedModelContainer: ModelContainer = {
+        AppRuntime.prepareForUITesting()
         let schema = Schema([
             Exercise.self,
             CycleSlot.self,
@@ -28,6 +29,20 @@ struct OpenLiftApp: App {
     }
 
     private static func makeContainer(schema: Schema) -> ModelContainer {
+        if AppRuntime.isUITesting {
+            let inMemoryConfiguration = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: true,
+                cloudKitDatabase: .none
+            )
+
+            do {
+                return try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
+            } catch {
+                fatalError("Failed to create UI test model container: \(error)")
+            }
+        }
+
         let configuration = ModelConfiguration(
             schema: schema,
             cloudKitDatabase: .none

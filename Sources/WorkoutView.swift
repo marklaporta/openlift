@@ -114,9 +114,10 @@ struct WorkoutView: View {
             }
         }
         .sheet(item: $swapContext) { context in
+            let currentExercise = exercises.first(where: { $0.id == context.currentExerciseId })
             ExerciseSwapSheet(
-                currentExercise: exercises.first(where: { $0.id == context.currentExerciseId }),
-                candidates: swapCandidates(for: context.slot, currentExerciseId: context.currentExerciseId),
+                currentExercise: currentExercise,
+                exercises: exercises,
                 slotMuscle: context.slot.muscle,
                 onSelect: { selected in
                     applySwap(
@@ -127,12 +128,13 @@ struct WorkoutView: View {
                     )
                     swapContext = nil
                 },
-                onCreate: { name, type, equipment in
+                onCreate: { name, muscle, type, equipment in
                     createExerciseAndSwap(
                         sessionId: context.sessionId,
                         slot: context.slot,
                         fromExerciseId: context.currentExerciseId,
                         name: name,
+                        muscle: muscle,
                         type: type,
                         equipment: equipment
                     )
@@ -583,12 +585,6 @@ struct WorkoutView: View {
         }
     }
 
-    private func swapCandidates(for slot: CycleSlot, currentExerciseId: UUID) -> [Exercise] {
-        exercises
-            .filter { $0.isActive && $0.primaryMuscle == slot.muscle && $0.id != currentExerciseId }
-            .sorted { $0.name < $1.name }
-    }
-
     private func applySwap(sessionId: UUID, slot: CycleSlot, fromExerciseId: UUID, toExerciseId: UUID) {
         guard fromExerciseId != toExerciseId else { return }
 
@@ -645,6 +641,7 @@ struct WorkoutView: View {
         slot: CycleSlot,
         fromExerciseId: UUID,
         name: String,
+        muscle: MuscleGroup,
         type: ExerciseType,
         equipment: EquipmentType
     ) {
@@ -667,7 +664,7 @@ struct WorkoutView: View {
         do {
             let newExercise = Exercise(
                 name: trimmedName,
-                primaryMuscle: slot.muscle,
+                primaryMuscle: muscle,
                 type: type,
                 equipment: equipment
             )
@@ -961,7 +958,7 @@ private struct ExerciseSection: View {
                                 onEntryUpdated()
                             }
                         ),
-                        format: .number
+                        format: WeightFormatting.style
                     )
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.decimalPad)
@@ -1036,6 +1033,8 @@ private struct ExerciseSection: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .frame(width: actionButtonSize, height: actionButtonSize)
+                    .accessibilityIdentifier("workout.swap.\(slot.position)")
+                    .accessibilityLabel("Swap \(exercise?.name ?? "exercise")")
                     Button(action: onHistory) {
                         Image(systemName: "calendar")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1084,7 +1083,7 @@ private struct ExerciseHistorySheet: View {
                                 HStack {
                                     Text("Set \(set.setIndex)")
                                     Spacer()
-                                    Text("\(set.weight, format: .number) x \(set.reps)")
+                                    Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) x \(set.reps)")
                                         .foregroundStyle(.secondary)
                                 }
                             }
@@ -1111,12 +1110,13 @@ private struct ExerciseHistorySheet: View {
 
 private struct ExerciseSwapSheet: View {
     let currentExercise: Exercise?
-    let candidates: [Exercise]
+    let exercises: [Exercise]
     let slotMuscle: MuscleGroup
     let onSelect: (Exercise) -> Void
-    let onCreate: (_ name: String, _ type: ExerciseType, _ equipment: EquipmentType) -> Void
+    let onCreate: (_ name: String, _ muscle: MuscleGroup, _ type: ExerciseType, _ equipment: EquipmentType) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedMuscle: MuscleGroup
     @State private var newExerciseName: String = ""
     @State private var newExerciseType: ExerciseType = .isolation
     @State private var newExerciseEquipment: EquipmentType = .dumbbell
@@ -1124,17 +1124,61 @@ private struct ExerciseSwapSheet: View {
     private let exerciseTypes: [ExerciseType] = [.compound, .isolation]
     private let equipmentTypes: [EquipmentType] = [.machine, .barbell, .dumbbell, .cable, .bodyweight]
 
+    init(
+        currentExercise: Exercise?,
+        exercises: [Exercise],
+        slotMuscle: MuscleGroup,
+        onSelect: @escaping (Exercise) -> Void,
+        onCreate: @escaping (_ name: String, _ muscle: MuscleGroup, _ type: ExerciseType, _ equipment: EquipmentType) -> Void
+    ) {
+        self.currentExercise = currentExercise
+        self.exercises = exercises
+        self.slotMuscle = slotMuscle
+        self.onSelect = onSelect
+        self.onCreate = onCreate
+        _selectedMuscle = State(
+            initialValue: ExerciseSwapService.initialMuscleSelection(
+                currentExercise: currentExercise,
+                slotMuscle: slotMuscle
+            )
+        )
+    }
+
+    private var candidates: [Exercise] {
+        guard let currentExercise else { return [] }
+        return ExerciseSwapService.swapCandidates(
+            exercises: exercises,
+            selectedMuscle: selectedMuscle,
+            currentExerciseId: currentExercise.id
+        )
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 Section("Current") {
                     Text(currentExercise?.name ?? "Unknown Exercise")
                         .foregroundStyle(.secondary)
+
+                    HStack {
+                        Text("Slot Muscle")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(slotMuscle.displayName)
+                    }
                 }
 
                 Section("Swap To") {
+                    Picker("Muscle", selection: $selectedMuscle) {
+                        ForEach(MuscleGroup.allCases, id: \.self) { muscle in
+                            Text(muscle.displayName).tag(muscle)
+                        }
+                    }
+                    .pickerStyle(.navigationLink)
+                    .accessibilityIdentifier("swap.musclePicker")
+
                     if candidates.isEmpty {
-                        Text("No alternate exercises available for this muscle group.")
+                        Text("No alternate exercises available for \(selectedMuscle.displayName).")
                             .foregroundStyle(.secondary)
                     }
 
@@ -1143,6 +1187,7 @@ private struct ExerciseSwapSheet: View {
                             onSelect(exercise)
                             dismiss()
                         }
+                        .accessibilityIdentifier("swap.candidate.\(exercise.name)")
                     }
                 }
 
@@ -1155,7 +1200,7 @@ private struct ExerciseSwapSheet: View {
                         Text("Muscle")
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text(slotMuscle.displayName)
+                        Text(selectedMuscle.displayName)
                     }
 
                     Picker("Type", selection: $newExerciseType) {
@@ -1171,7 +1216,7 @@ private struct ExerciseSwapSheet: View {
                     }
 
                     Button("Create & Swap") {
-                        onCreate(newExerciseName, newExerciseType, newExerciseEquipment)
+                        onCreate(newExerciseName, selectedMuscle, newExerciseType, newExerciseEquipment)
                         dismiss()
                     }
                     .disabled(newExerciseName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1250,7 +1295,7 @@ enum WorkoutEntryEditing {
     }
 
     static func displayWeight(_ weight: Double) -> Double? {
-        weight == 0 ? nil : weight
+        weight == 0 ? nil : WeightFormatting.normalized(weight)
     }
 
     static func displayReps(_ reps: Int) -> Int? {
@@ -1262,7 +1307,7 @@ enum WorkoutEntryEditing {
         guard !entries[entryIndex].isLocked else { return }
 
         let previousWeight = entries[entryIndex].weight
-        let clampedWeight = max(0, newWeight ?? 0)
+        let clampedWeight = max(0, WeightFormatting.normalized(newWeight ?? 0))
         entries[entryIndex].weight = clampedWeight
 
         for index in entries.indices where entries[index].setIndex > setIndex && !entries[index].isLocked {
@@ -1350,6 +1395,15 @@ enum WorkoutEntryEditing {
 
     private static func normalizeExerciseName(_ name: String) -> String {
         name.lowercased().replacingOccurrences(of: "dumbell", with: "dumbbell")
+    }
+}
+
+enum WeightFormatting {
+    static let style = FloatingPointFormatStyle<Double>.number
+        .precision(.fractionLength(0 ... 1))
+
+    static func normalized(_ weight: Double) -> Double {
+        (weight * 10).rounded() / 10
     }
 }
 

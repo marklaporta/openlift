@@ -1,7 +1,9 @@
 OPENLIFT_APP_BUNDLE_ID = com.example.openlift
 OPENLIFT_TEST_BUNDLE_ID = com.example.openlift.tests
+OPENLIFT_UI_TEST_BUNDLE_ID = com.example.openlift.uitests
 OPENLIFT_ICLOUD_CONTAINER = iCloud.com.example.openlift
 OPENLIFT_KVSTORE_ID = com.example.openlift
 OPENLIFT_DEVELOPMENT_TEAM =
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
 
 #include? "Local.xcconfig"

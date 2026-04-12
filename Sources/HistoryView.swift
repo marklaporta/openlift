@@ -195,7 +195,7 @@ private struct SessionDetailView: View {
                         HStack {
                             Text("Set \(set.setIndex)")
                             Spacer()
-                            Text("\(set.weight, format: .number) x \(set.reps)")
+                            Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) x \(set.reps)")
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -376,7 +376,7 @@ private struct ExportedSessionDetailView: View {
                         HStack {
                             Text("Set \(set.set_index)")
                             Spacer()
-                            Text("\(set.weight, format: .number) x \(set.reps)")
+                            Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) x \(set.reps)")
                                 .foregroundStyle(.secondary)
                         }
                     }

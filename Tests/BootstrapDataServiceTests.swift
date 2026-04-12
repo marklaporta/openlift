@@ -365,6 +365,25 @@ final class WorkoutEntryEditingTests: XCTestCase {
         XCTAssertEqual(entries[2].reps, 8)
     }
 
+    func testDisplayWeightKeepsIntegersWholeAndTenthsVisible() {
+        XCTAssertEqual(WorkoutEntryEditing.displayWeight(20), 20)
+        XCTAssertEqual(WorkoutEntryEditing.displayWeight(22.5), 22.5)
+        XCTAssertNil(WorkoutEntryEditing.displayWeight(0))
+    }
+
+    func testWeightEditRoundsToSingleDecimalAndAutofillsFollowingSets() {
+        var entries = [
+            WorkoutEntryEditing.EntryState(setIndex: 1, weight: 10, reps: 8, isLocked: false),
+            WorkoutEntryEditing.EntryState(setIndex: 2, weight: 10, reps: 8, isLocked: false)
+        ]
+
+        WorkoutEntryEditing.applyWeightEdit(to: &entries, setIndex: 1, newWeight: 22.56)
+
+        XCTAssertEqual(entries[0].weight, 22.6)
+        XCTAssertEqual(entries[1].weight, 22.6)
+        XCTAssertEqual(WorkoutEntryEditing.displayWeight(entries[0].weight), 22.6)
+    }
+
     func testRepairKnownMalformedEntryFixesReportedWorkoutValues() {
         var cableWeight = 15.0
         var cableReps = 68
