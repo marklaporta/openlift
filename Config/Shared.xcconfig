@@ -1,8 +1,8 @@
-OPENLIFT_APP_BUNDLE_ID = com.example.openlift
-OPENLIFT_TEST_BUNDLE_ID = com.example.openlift.tests
-OPENLIFT_UI_TEST_BUNDLE_ID = com.example.openlift.uitests
-OPENLIFT_ICLOUD_CONTAINER = iCloud.com.example.openlift
-OPENLIFT_KVSTORE_ID = com.example.openlift
+OPENLIFT_APP_BUNDLE_ID = com.mark.openlift
+OPENLIFT_TEST_BUNDLE_ID = com.mark.openlift.tests
+OPENLIFT_UI_TEST_BUNDLE_ID = com.mark.openlift.uitests
+OPENLIFT_ICLOUD_CONTAINER = iCloud.com.mark.openlift
+OPENLIFT_KVSTORE_ID = com.mark.openlift
 OPENLIFT_DEVELOPMENT_TEAM =
 IPHONEOS_DEPLOYMENT_TARGET = 17.0
 

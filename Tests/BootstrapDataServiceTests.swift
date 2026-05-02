@@ -25,6 +25,55 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(preferred?.name, "fb-2d")
     }
 
+    func testSessionExportWritesVisibleLocalDocumentsMirror() throws {
+        let docs = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
+        let exportDir = docs
+            .appendingPathComponent("OpenLift", isDirectory: true)
+            .appendingPathComponent("exports", isDirectory: true)
+        try? FileManager.default.removeItem(at: exportDir)
+
+        let exercise = Exercise(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000111")!,
+            name: "Hack Squat",
+            primaryMuscle: .quads,
+            type: .compound,
+            equipment: .machine
+        )
+        let session = Session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000222")!,
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 1,
+            finishedAt: Date(timeIntervalSince1970: 1_767_228_645),
+            status: .completed,
+            exportStatus: .pending
+        )
+        let entries = [
+            SetEntry(sessionId: session.id, exerciseId: exercise.id, setIndex: 1, weight: 100, reps: 10, isLocked: true),
+            SetEntry(sessionId: session.id, exerciseId: exercise.id, setIndex: 2, weight: 110, reps: 8, isLocked: true)
+        ]
+
+        try SessionExportService.export(
+            session: session,
+            cycleName: "Export Visibility Test",
+            exercises: [exercise],
+            setEntries: entries
+        )
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: exportDir,
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("workout-") && $0.pathExtension == "json" }
+        XCTAssertEqual(files.count, 1)
+
+        let data = try Data(contentsOf: files[0])
+        let payload = try JSONDecoder().decode(SessionExportService.ExportPayload.self, from: data)
+        XCTAssertEqual(payload.session_id, session.id.uuidString)
+        XCTAssertEqual(payload.cycle_name, "Export Visibility Test")
+        XCTAssertEqual(payload.cycle_day_index, 1)
+        XCTAssertEqual(payload.exercises.first?.exercise_name, "Hack Squat")
+        XCTAssertEqual(payload.exercises.first?.sets.count, 2)
+    }
+
     func testPreferredPublishedCycleFallsBackToFirst() {
         let first = PublishedCycleFile(
             url: URL(fileURLWithPath: "/tmp/first.json"),
