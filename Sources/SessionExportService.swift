@@ -124,7 +124,9 @@ enum SessionExportService {
         relativeSubdirectory: String,
         filename: String
     ) throws {
-        var iCloudWriteError: Error?
+        var writeErrors: [Error] = []
+        var didWrite = false
+
         if let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) {
             do {
                 let exportDir = iCloudURL
@@ -133,25 +135,30 @@ enum SessionExportService {
                     .appendingPathComponent(relativeSubdirectory, isDirectory: true)
                 try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
                 try data.write(to: exportDir.appendingPathComponent(filename), options: [.atomic])
-                return
+                didWrite = true
             } catch {
-                iCloudWriteError = error
+                writeErrors.append(error)
             }
         }
 
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let fallbackDir = docs
+        let localDocumentsDir = docs
             .appendingPathComponent("OpenLift", isDirectory: true)
             .appendingPathComponent(relativeSubdirectory, isDirectory: true)
 
         do {
-            try FileManager.default.createDirectory(at: fallbackDir, withIntermediateDirectories: true)
-            try data.write(to: fallbackDir.appendingPathComponent(filename), options: [.atomic])
+            try FileManager.default.createDirectory(at: localDocumentsDir, withIntermediateDirectories: true)
+            try data.write(to: localDocumentsDir.appendingPathComponent(filename), options: [.atomic])
+            didWrite = true
         } catch {
-            if let iCloudWriteError {
-                throw iCloudWriteError
+            writeErrors.append(error)
+        }
+
+        if !didWrite {
+            if let firstError = writeErrors.first {
+                throw firstError
             }
-            throw error
+            throw CocoaError(.fileWriteUnknown)
         }
     }
 

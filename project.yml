@@ -1,6 +1,6 @@
 name: OpenLift
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: com.mark
 targets:
   OpenLift:
     type: application
@@ -23,6 +23,13 @@ targets:
       properties:
         CFBundleDisplayName: OpenLift
         OpenLiftICloudContainerIdentifier: $(OPENLIFT_ICLOUD_CONTAINER)
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        NSUbiquitousContainers:
+          $(OPENLIFT_ICLOUD_CONTAINER):
+            NSUbiquitousContainerIsDocumentScopePublic: true
+            NSUbiquitousContainerName: OpenLift
+            NSUbiquitousContainerSupportedFolderLevels: Any
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true

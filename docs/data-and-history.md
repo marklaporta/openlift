@@ -33,13 +33,12 @@ Draft snapshots (one per active session, deleted automatically when the workout 
 
 - `OpenLift/exports/drafts/draft-<session-id>.json`
 
-Preferred location:
+Write locations:
 
-- iCloud Documents container
+- iCloud Documents container: `Documents/OpenLift/exports`
+- local app Documents: `OpenLift/exports`
 
-Fallback:
-
-- the app's local documents directory
+The app intentionally writes to both when possible. The local Documents mirror keeps exports visible through Finder / Files app / device-container tooling even when the iCloud Documents container is slow, broken, or not materialized on a Mac.
 
 ## Recovery Behavior
 
