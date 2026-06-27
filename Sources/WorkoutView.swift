@@ -271,7 +271,7 @@ struct WorkoutView: View {
 
     private func hydrateLatestCompletedSessionIfPossible(cycle: ActiveCycleInstance, template: CycleTemplate) throws {
         guard let export = BootstrapDataService.latestExportSummary() else { return }
-        guard let finishedAt = ISO8601DateFormatter().date(from: export.date) else { return }
+        guard let finishedAt = SessionExportService.parseExportDate(export.date) else { return }
 
         let completed = Session(
             cycleInstanceId: cycle.id,
@@ -313,13 +313,12 @@ struct WorkoutView: View {
 
         var existingSessionIds = Set(sessions.map { $0.id.uuidString.uppercased() })
         let exercisesByName = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name.lowercased(), $0) })
-        let iso = ISO8601DateFormatter()
 
         for export in exports {
             let exportSessionId = export.session_id.uppercased()
             guard !existingSessionIds.contains(exportSessionId) else { continue }
             guard let sessionUUID = UUID(uuidString: export.session_id),
-                  let finishedAt = iso.date(from: export.date) else { continue }
+                  let finishedAt = SessionExportService.parseExportDate(export.date) else { continue }
 
             let recovered = Session(
                 id: sessionUUID,
@@ -420,13 +419,16 @@ struct WorkoutView: View {
                     session: session,
                     cycleName: template.name,
                     exercises: exercises,
-                    setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked }
+                    setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
+                    requireICloudMirror: true
                 )
                 session.exportStatus = .success
+                SessionExportService.deleteDraftSnapshot(sessionId: session.id)
             } catch {
                 session.exportStatus = .failed
+                SessionExportService.scheduleBackgroundExportRetry()
+                errorMessage = error.localizedDescription
             }
-            SessionExportService.deleteDraftSnapshot(sessionId: session.id)
 
             cycle.currentDayIndex = (dayIndex + 1) % max(template.days.count, 1)
             try cycle.validate(template: template)
@@ -785,8 +787,6 @@ struct WorkoutView: View {
             directories.append(docs)
         }
 
-        let decoder = JSONDecoder()
-        let iso = ISO8601DateFormatter()
         var efforts: [ExerciseEffort] = []
         let targetName = exerciseName.lowercased()
 
@@ -799,8 +799,8 @@ struct WorkoutView: View {
 
             for fileURL in urls where fileURL.pathExtension == "json" && fileURL.lastPathComponent.hasPrefix("workout-") {
                 guard let data = try? Data(contentsOf: fileURL),
-                      let payload = try? decoder.decode(SessionExportService.ExportPayload.self, from: data),
-                      let date = iso.date(from: payload.date),
+                      let payload = SessionExportService.decodeExportPayload(data: data, fileURL: fileURL),
+                      let date = SessionExportService.parseExportDate(payload.date),
                       let exercise = payload.exercises.first(where: { $0.exercise_name.lowercased() == targetName }) else {
                     continue
                 }
@@ -880,7 +880,7 @@ private struct SwapContext: Identifiable {
     }
 }
 
-private struct ExerciseHistoryContext: Identifiable {
+struct ExerciseHistoryContext: Identifiable {
     let exerciseId: UUID
     let exerciseName: String
 
@@ -889,7 +889,7 @@ private struct ExerciseHistoryContext: Identifiable {
     }
 }
 
-private struct ExerciseEffort: Identifiable {
+struct ExerciseEffort: Identifiable {
     let id: String
     let date: Date
     let cycleName: String
@@ -897,7 +897,7 @@ private struct ExerciseEffort: Identifiable {
     let sets: [ExerciseEffortSet]
 }
 
-private struct ExerciseEffortSet {
+struct ExerciseEffortSet {
     let setIndex: Int
     let weight: Double
     let reps: Int
@@ -1064,7 +1064,7 @@ private struct ExerciseSection: View {
     }
 }
 
-private struct ExerciseHistorySheet: View {
+struct ExerciseHistorySheet: View {
     let exerciseName: String
     let efforts: [ExerciseEffort]
 

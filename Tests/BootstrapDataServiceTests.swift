@@ -74,6 +74,39 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(payload.exercises.first?.sets.count, 2)
     }
 
+    func testParseExportDateAcceptsFractionalSeconds() throws {
+        let parsed = try XCTUnwrap(SessionExportService.parseExportDate("2026-05-03T21:22:07.763664Z"))
+        XCTAssertEqual(Int(parsed.timeIntervalSince1970), 1_777_843_327)
+    }
+
+    func testDecodeOffScheduleImportPayloadUsesSimpleShape() throws {
+        let json = """
+        {
+          "date": "2026-05-03T21:22:07Z",
+          "exercises": [
+            {
+              "exercise_name": "Incline Dumbbell Press",
+              "sets": [
+                { "weight": 75, "reps": 10 },
+                { "weight": 75, "reps": 9 }
+              ]
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let payload = try XCTUnwrap(SessionExportService.decodeExportPayload(
+            data: json,
+            fileURL: URL(fileURLWithPath: "/tmp/offschedule-20260503.json")
+        ))
+
+        XCTAssertEqual(payload.cycle_name, "Off-Schedule")
+        XCTAssertEqual(payload.cycle_day_index, 0)
+        XCTAssertEqual(payload.exercises.first?.exercise_name, "Incline Dumbbell Press")
+        XCTAssertEqual(payload.exercises.first?.sets.map(\.set_index), [1, 2])
+        XCTAssertNotNil(UUID(uuidString: payload.session_id))
+    }
+
     func testPreferredPublishedCycleFallsBackToFirst() {
         let first = PublishedCycleFile(
             url: URL(fileURLWithPath: "/tmp/first.json"),
@@ -431,6 +464,24 @@ final class WorkoutEntryEditingTests: XCTestCase {
         XCTAssertEqual(entries[0].weight, 22.6)
         XCTAssertEqual(entries[1].weight, 22.6)
         XCTAssertEqual(WorkoutEntryEditing.displayWeight(entries[0].weight), 22.6)
+    }
+
+    func testWeightEditCarriesForwardFromLatestOverrideOnly() {
+        var entries = [
+            WorkoutEntryEditing.EntryState(setIndex: 1, weight: 0, reps: 0, isLocked: false),
+            WorkoutEntryEditing.EntryState(setIndex: 2, weight: 0, reps: 0, isLocked: false),
+            WorkoutEntryEditing.EntryState(setIndex: 3, weight: 0, reps: 0, isLocked: false),
+            WorkoutEntryEditing.EntryState(setIndex: 4, weight: 0, reps: 0, isLocked: false)
+        ]
+
+        WorkoutEntryEditing.applyWeightEdit(to: &entries, setIndex: 1, newWeight: 20)
+        XCTAssertEqual(entries.map(\.weight), [20, 20, 20, 20])
+
+        WorkoutEntryEditing.applyWeightEdit(to: &entries, setIndex: 3, newWeight: 25)
+        XCTAssertEqual(entries.map(\.weight), [20, 20, 25, 25])
+
+        WorkoutEntryEditing.applyWeightEdit(to: &entries, setIndex: 1, newWeight: 22.5)
+        XCTAssertEqual(entries.map(\.weight), [22.5, 22.5, 25, 25])
     }
 
     func testRepairKnownMalformedEntryFixesReportedWorkoutValues() {

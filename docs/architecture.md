@@ -150,6 +150,7 @@ Important consequence:
 
 - SwiftData is the primary store
 - export JSON is the recovery layer
+- failed/pending completed-session exports are retried on launch, foreground activation, and iOS background app refresh
 
 If history looks wrong after corruption or data loss, inspect both the SwiftData store and the export files.
 

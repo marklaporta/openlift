@@ -23,6 +23,10 @@ targets:
       properties:
         CFBundleDisplayName: OpenLift
         OpenLiftICloudContainerIdentifier: $(OPENLIFT_ICLOUD_CONTAINER)
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.mark.openlift.export-retry
+        UIBackgroundModes:
+          - fetch
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         NSUbiquitousContainers:
