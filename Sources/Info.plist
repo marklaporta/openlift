@@ -22,6 +22,14 @@
 	<string>1</string>
 	<key>OpenLiftICloudContainerIdentifier</key>
 	<string>$(OPENLIFT_ICLOUD_CONTAINER)</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.mark.openlift.export-retry</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>

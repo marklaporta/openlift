@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A11111111111111111111111 /* LogWorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22222222222222222222222 /* LogWorkoutView.swift */; };
 		02DA37FA2EF34418B76A2695 /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BFA6838778B4C1F8BD337E6 /* AppRuntime.swift */; };
 		04D8FD89F53261F38AEB610E /* PublishedCycleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 152C10B5009490BBC2CAF54F /* PublishedCycleService.swift */; };
 		1D001C9D45315DE1EC11CFD8 /* BootstrapDataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FC1716D76135B2B3E68D7CB /* BootstrapDataServiceTests.swift */; };
@@ -47,6 +48,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A22222222222222222222222 /* LogWorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogWorkoutView.swift; sourceTree = "<group>"; };
 		152C10B5009490BBC2CAF54F /* PublishedCycleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishedCycleService.swift; sourceTree = "<group>"; };
 		174D0F7D6748402A8FDE3758 /* OpenLiftStateResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenLiftStateResolver.swift; sourceTree = "<group>"; };
 		2B34E4F17E014EBC9E80CF15 /* SwapExerciseUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwapExerciseUITests.swift; sourceTree = "<group>"; };
@@ -142,6 +144,7 @@
 				3A276F5E5098E9F746A85B25 /* ExerciseSwapService.swift */,
 				36BC97ACBFC2F3135919BE0C /* HistoryView.swift */,
 				E7E50088A602E2773296E6DD /* ImportView.swift */,
+				A22222222222222222222222 /* LogWorkoutView.swift */,
 				9B5C389CDFB0AC4404609392 /* Info.plist */,
 				AABD1A8273A28304CAF8742B /* Models.swift */,
 				174D0F7D6748402A8FDE3758 /* OpenLiftStateResolver.swift */,
@@ -274,6 +277,7 @@
 				5631A4B67B638E84567D4DA4 /* ExerciseSwapService.swift in Sources */,
 				70C2298C3C511DC074837077 /* HistoryView.swift in Sources */,
 				1F6E588A059838A62777CE81 /* ImportView.swift in Sources */,
+				A11111111111111111111111 /* LogWorkoutView.swift in Sources */,
 				87F67DB5992A7D5B22EF2FD4 /* Models.swift in Sources */,
 				2F4917A0A3D84D81B76A164F /* OpenLiftStateResolver.swift in Sources */,
 				61BB964C30B2859AED8F245A /* OpenLiftApp.swift in Sources */,

@@ -197,8 +197,6 @@ enum BootstrapDataService {
             directories.append(docsDir)
         }
 
-        let decoder = JSONDecoder()
-        let iso = ISO8601DateFormatter()
         var parsed: [(payload: SessionExportService.ExportPayload, date: Date)] = []
 
         for directory in directories {
@@ -210,8 +208,8 @@ enum BootstrapDataService {
 
             for fileURL in urls where fileURL.pathExtension == "json" && fileURL.lastPathComponent.hasPrefix("workout-") {
                 guard let data = try? Data(contentsOf: fileURL),
-                      let payload = try? decoder.decode(SessionExportService.ExportPayload.self, from: data),
-                      let date = iso.date(from: payload.date) else { continue }
+                      let payload = SessionExportService.decodeExportPayload(data: data, fileURL: fileURL),
+                      let date = SessionExportService.parseExportDate(payload.date) else { continue }
                 parsed.append((payload: payload, date: date))
             }
         }

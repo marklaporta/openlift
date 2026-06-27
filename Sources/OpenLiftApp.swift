@@ -26,6 +26,9 @@ struct OpenLiftApp: App {
             RootTabView()
         }
         .modelContainer(Self.sharedModelContainer)
+        .backgroundTask(.appRefresh(SessionExportService.backgroundRefreshIdentifier)) {
+            await SessionExportService.runBackgroundExportRetry(modelContainer: Self.sharedModelContainer)
+        }
     }
 
     private static func makeContainer(schema: Schema) -> ModelContainer {

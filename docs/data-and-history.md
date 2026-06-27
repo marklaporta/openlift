@@ -40,6 +40,8 @@ Write locations:
 
 The app intentionally writes to both when possible. The local Documents mirror keeps exports visible through Finder / Files app / device-container tooling even when the iCloud Documents container is slow, broken, or not materialized on a Mac.
 
+Completed workouts only count as successfully exported after the iCloud Documents mirror is written and read back. If that mirror is unavailable, SwiftData remains the source of truth, the local Documents copy remains a rescue copy, and OpenLift retries failed/pending completed-session exports when the app opens, returns to foreground, or receives a background app-refresh slot.
+
 ## Recovery Behavior
 
 The app can rebuild missing completed sessions from export files during bootstrap. That is why export files matter even though SwiftData is the primary store.
