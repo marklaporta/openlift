@@ -91,7 +91,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertThrowsError(try AdaptiveProgramService.validate(capDraft, exercises: exercises)) { error in
             XCTAssertEqual(
                 error as? AdaptiveProgramValidationError,
-                .complexExceedsMovementCap(name: "Chest Demo", count: 2, cap: 1)
+                .complexExceedsMovementCap(name: "Chest", count: 2, cap: 1)
             )
         }
     }
@@ -179,8 +179,199 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         )
     }
 
+    func testLegacyDemoLabelsNormalizeWithoutChangingCustomNames() throws {
+        let exercises = makeRankedExercises()
+        let (context, _) = makeContext()
+        let program = try AdaptiveProgramService.saveVersion(
+            draft: AdaptiveProgramService.demoDraft(exercises: exercises),
+            replacing: nil,
+            allPrograms: [],
+            exercises: exercises,
+            modelContext: context
+        )
+        program.name = "Adaptive Demo — Review Required"
+        let chest = try XCTUnwrap(program.complexes.first { $0.primaryMuscle == .chest })
+        let back = try XCTUnwrap(program.complexes.first { $0.primaryMuscle == .back })
+        chest.name = "Chest Demo"
+        back.name = "My Back Rotation"
+
+        let snapshot = PlannedComplexSnapshot(
+            sourceDefinitionId: chest.definitionId,
+            sourceVersion: chest.version,
+            position: 0,
+            name: "Chest Demo",
+            primaryMuscle: .chest,
+            reasonCodes: [],
+            exercises: []
+        )
+        context.insert(
+            GeneratedWorkoutPlan(
+                localDateKey: "2026-07-21",
+                timeZoneIdentifier: "America/Los_Angeles",
+                status: .proposed,
+                adaptiveProgramId: program.id,
+                adaptiveProgramVersion: program.version,
+                readinessCheckId: UUID(),
+                plannerVersion: 3,
+                reasonCodes: [],
+                complexes: [snapshot]
+            )
+        )
+        try context.save()
+
+        XCTAssertEqual(try AdaptiveProgramService.normalizeLegacyDemoLabels(modelContext: context), 3)
+        XCTAssertEqual(program.name, "Adaptive Program")
+        XCTAssertEqual(chest.name, "Chest")
+        XCTAssertEqual(back.name, "My Back Rotation")
+        XCTAssertEqual(snapshot.name, "Chest")
+        XCTAssertEqual(try AdaptiveProgramService.normalizeLegacyDemoLabels(modelContext: context), 0)
+    }
+
+    func testRequestedExerciseSelectionDefaultsPinLowerFoundationsAndRotateAvailableUpperWork() throws {
+        let (context, _) = makeContext()
+        let beltSquat = Exercise(
+            name: "Belt Squat",
+            primaryMuscle: .quads,
+            type: .compound,
+            equipment: .machine
+        )
+        let stiffLegDeadlift = Exercise(
+            name: "Stiff-Leg Deadlift",
+            primaryMuscle: .hamstrings,
+            type: .compound,
+            equipment: .barbell
+        )
+        let reverseHyper = Exercise(
+            name: "Reverse Hyper",
+            primaryMuscle: .hamstrings,
+            type: .isolation,
+            equipment: .machine
+        )
+        let gluteHamRaise = Exercise(
+            name: "Glute-Ham Raise",
+            primaryMuscle: .hamstrings,
+            type: .compound,
+            equipment: .bodyweight
+        )
+        let inclinePress = Exercise(
+            name: "Incline Dumbbell Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        let machinePress = Exercise(
+            name: "Machine Chest Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .machine
+        )
+        let assistedDips = Exercise(
+            name: "Assisted Dips",
+            primaryMuscle: .triceps,
+            type: .compound,
+            equipment: .machine
+        )
+        let pushdown = Exercise(
+            name: "Cable Pushdown",
+            primaryMuscle: .triceps,
+            type: .isolation,
+            equipment: .cable
+        )
+        (
+            [beltSquat, stiffLegDeadlift, reverseHyper, gluteHamRaise, inclinePress, machinePress]
+                + [assistedDips, pushdown]
+        ).forEach(context.insert)
+        try context.save()
+
+        XCTAssertEqual(
+            try AdaptiveExerciseSelectionPreferenceService.ensureRequestedDefaults(modelContext: context),
+            MuscleGroup.allCases.count
+        )
+        let preferences = try context.fetch(FetchDescriptor<AdaptiveExerciseSelectionPreference>())
+        let chest = try XCTUnwrap(preferences.first { $0.muscle == .chest })
+        XCTAssertEqual(chest.mode, .rotateRecent)
+        XCTAssertTrue(chest.eligibleExerciseIds.contains(inclinePress.id))
+        XCTAssertTrue(chest.eligibleExerciseIds.contains(machinePress.id))
+
+        let quads = try XCTUnwrap(preferences.first { $0.muscle == .quads })
+        XCTAssertEqual(quads.mode, .pinned)
+        XCTAssertEqual(quads.pinnedExerciseId, beltSquat.id)
+        let hamstrings = try XCTUnwrap(preferences.first { $0.muscle == .hamstrings })
+        XCTAssertEqual(hamstrings.mode, .pinned)
+        XCTAssertEqual(hamstrings.pinnedExerciseId, stiffLegDeadlift.id)
+        XCTAssertTrue(hamstrings.eligibleExerciseIds.contains(stiffLegDeadlift.id))
+        XCTAssertTrue(hamstrings.eligibleExerciseIds.contains(reverseHyper.id))
+        XCTAssertFalse(hamstrings.eligibleExerciseIds.contains(gluteHamRaise.id))
+        XCTAssertEqual(preferences.first { $0.muscle == .back }?.mode, .rotateRecent)
+        let triceps = try XCTUnwrap(preferences.first { $0.muscle == .triceps })
+        XCTAssertFalse(triceps.eligibleExerciseIds.contains(assistedDips.id))
+        XCTAssertTrue(triceps.eligibleExerciseIds.contains(pushdown.id))
+        XCTAssertEqual(preferences.first { $0.muscle == .glutes }?.mode, .repeatLast)
+        XCTAssertEqual(
+            try AdaptiveExerciseSelectionPreferenceService.ensureRequestedDefaults(modelContext: context),
+            0
+        )
+    }
+
+    func testOpenPlanCategoriesNormalizeWithoutRewritingCompletedHistory() throws {
+        let (context, _) = makeContext()
+        let press = Exercise(
+            name: "Incline Dumbbell Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        context.insert(press)
+
+        func plan(status: AdaptivePlanStatus) -> GeneratedWorkoutPlan {
+            GeneratedWorkoutPlan(
+                localDateKey: UUID().uuidString,
+                timeZoneIdentifier: "America/Los_Angeles",
+                status: status,
+                adaptiveProgramId: UUID(),
+                adaptiveProgramVersion: 1,
+                readinessCheckId: UUID(),
+                plannerVersion: 3,
+                reasonCodes: [],
+                complexes: [
+                    PlannedComplexSnapshot(
+                        sourceDefinitionId: UUID(),
+                        sourceVersion: 1,
+                        position: 0,
+                        name: "Chest",
+                        primaryMuscle: .chest,
+                        reasonCodes: [],
+                        exercises: [
+                            PlannedExerciseSnapshot(
+                                position: 0,
+                                exerciseId: press.id,
+                                exerciseName: press.name,
+                                primaryMuscle: .chest,
+                                difficulty: .easy,
+                                prescribedSetCount: 1
+                            )
+                        ]
+                    )
+                ]
+            )
+        }
+
+        let proposed = plan(status: .proposed)
+        let completed = plan(status: .completed)
+        context.insert(proposed)
+        context.insert(completed)
+        try context.save()
+
+        XCTAssertEqual(
+            try AdaptiveProgramService.normalizeOpenPlanExerciseCategories(modelContext: context),
+            1
+        )
+        XCTAssertEqual(proposed.complexes.first?.exercises.first?.difficulty, .hard)
+        XCTAssertEqual(completed.complexes.first?.exercises.first?.difficulty, .easy)
+    }
+
     private func makeContext() -> (ModelContext, ModelContainer) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV3.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (ModelContext(container), container)
     }

@@ -156,10 +156,26 @@ enum ComplexFeedbackRating: String, Codable, CaseIterable, Hashable {
 enum AdaptiveOverrideKind: String, Codable, CaseIterable, Hashable {
     case addExercise
     case removeExercise
+    case reorderExercise
     case skipComplex
     case skipExercise
+    case unskipExercise
     case substituteExercise
     case painBlock
+}
+
+enum AdaptiveExerciseSelectionMode: String, Codable, CaseIterable, Hashable {
+    case repeatLast
+    case rotateRecent
+    case pinned
+
+    var displayName: String {
+        switch self {
+        case .repeatLast: return "Repeat latest"
+        case .rotateRecent: return "Alternate recent"
+        case .pinned: return "Pinned exercise"
+        }
+    }
 }
 
 @Model
@@ -173,6 +189,32 @@ final class TrainingPreference {
     ) {
         self.key = key
         self.modeRawValue = modeRawValue
+    }
+}
+
+@Model
+final class AdaptiveExerciseSelectionPreference {
+    @Attribute(.unique) var key: String
+    var muscle: MuscleGroup
+    var mode: AdaptiveExerciseSelectionMode
+    var pinnedExerciseId: UUID?
+    var eligibleExerciseIds: [UUID]
+
+    init(
+        muscle: MuscleGroup,
+        mode: AdaptiveExerciseSelectionMode,
+        pinnedExerciseId: UUID? = nil,
+        eligibleExerciseIds: [UUID] = []
+    ) {
+        self.key = Self.key(for: muscle)
+        self.muscle = muscle
+        self.mode = mode
+        self.pinnedExerciseId = pinnedExerciseId
+        self.eligibleExerciseIds = eligibleExerciseIds
+    }
+
+    static func key(for muscle: MuscleGroup) -> String {
+        "adaptive.exercise-selection.\(muscle.rawValue)"
     }
 }
 

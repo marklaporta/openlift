@@ -226,9 +226,55 @@ enum AdaptiveProgramService {
         return changed
     }
 
+    @discardableResult
+    static func normalizeLegacyDemoLabels(modelContext: ModelContext) throws -> Int {
+        let programs = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
+        let plans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        var changed = 0
+
+        for program in programs {
+            if program.name == "Adaptive Demo — Review Required" {
+                program.name = "Adaptive Program"
+                changed += 1
+            }
+            for complex in program.complexes where complex.name == "\(complex.primaryMuscle.displayName) Demo" {
+                complex.name = complex.primaryMuscle.displayName
+                changed += 1
+            }
+        }
+        for complex in plans.flatMap(\.complexes)
+            where complex.name == "\(complex.primaryMuscle.displayName) Demo" {
+            complex.name = complex.primaryMuscle.displayName
+            changed += 1
+        }
+
+        if changed > 0 { try modelContext.save() }
+        return changed
+    }
+
+    @discardableResult
+    static func normalizeOpenPlanExerciseCategories(modelContext: ModelContext) throws -> Int {
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let exercisesById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
+        let plans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        var changed = 0
+        for plan in plans where plan.status != .completed {
+            for snapshot in plan.complexes.flatMap(\.exercises) {
+                guard let exercise = exercisesById[snapshot.exerciseId] else { continue }
+                let difficulty = AdaptiveExerciseRoleService.difficulty(for: exercise)
+                if snapshot.difficulty != difficulty {
+                    snapshot.difficulty = difficulty
+                    changed += 1
+                }
+            }
+        }
+        if changed > 0 { try modelContext.save() }
+        return changed
+    }
+
     static func demoDraft(exercises: [Exercise]) -> AdaptiveProgramDraft {
         var draft = AdaptiveProgramDraft.blank
-        draft.name = "Adaptive Demo — Review Required"
+        draft.name = "Adaptive Starter — Review Required"
         draft.muscleRules = draft.muscleRules.map { rule in
             var copy = rule
             copy.rollingSetFloor = copy.isEnabled ? 1 : 0
@@ -246,7 +292,7 @@ enum AdaptiveProgramService {
                 id: UUID(),
                 definitionId: UUID(),
                 sourceVersion: 0,
-                name: "\(muscle.displayName) Demo",
+                name: muscle.displayName,
                 primaryMuscle: muscle,
                 qualifiesForPrimaryFloor: true,
                 isEnabled: true,
@@ -257,7 +303,7 @@ enum AdaptiveProgramService {
                         prescribedSetCount: 2,
                         primaryMuscle: exercise.primaryMuscle,
                         secondaryMuscle: nil,
-                        difficulty: exercise.type == .compound ? .moderate : .easy
+                        difficulty: AdaptiveExerciseRoleService.difficulty(for: exercise)
                     )
                 ]
             )
@@ -333,6 +379,7 @@ enum AdaptiveProgramService {
         now: Date = .now
     ) throws -> AdaptiveProgram {
         try validate(draft, exercises: exercises)
+        let exercisesById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
 
         let programVersion = (current?.version ?? 0) + 1
         let program = AdaptiveProgram(
@@ -372,7 +419,9 @@ enum AdaptiveProgramService {
                             prescribedSetCount: component.prescribedSetCount,
                             primaryMuscle: component.primaryMuscle,
                             secondaryMuscle: component.secondaryMuscle,
-                            difficulty: component.difficulty
+                            difficulty: exercisesById[component.exerciseId].map {
+                                AdaptiveExerciseRoleService.difficulty(for: $0)
+                            } ?? component.difficulty
                         )
                     }
                 )
@@ -487,5 +536,90 @@ enum AdaptiveProgramService {
                 muscle: complex.primaryMuscle
             )
         }
+    }
+}
+
+enum AdaptiveExerciseSelectionPreferenceService {
+    @discardableResult
+    static func ensureRequestedDefaults(modelContext: ModelContext) throws -> Int {
+        let existing = try modelContext.fetch(FetchDescriptor<AdaptiveExerciseSelectionPreference>())
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let existingMuscles = Set(existing.map(\.muscle))
+        var inserted = 0
+
+        for muscle in MuscleGroup.allCases where !existingMuscles.contains(muscle) {
+            let mode: AdaptiveExerciseSelectionMode
+            let pinnedExerciseId: UUID?
+            let activeForMuscle = exercises
+                .filter { $0.isActive && $0.primaryMuscle == muscle }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            let generallyAvailable = activeForMuscle
+                .filter { $0.equipment != .machine }
+                .map(\.id)
+            let broadUpperBodyPool = activeForMuscle
+                .filter {
+                    switch muscle {
+                    case .triceps, .biceps, .sideDelts, .forearms:
+                        return $0.type == .isolation
+                    default:
+                        return true
+                    }
+                }
+                .map(\.id)
+            switch muscle {
+            case .chest, .back, .triceps, .biceps, .sideDelts, .forearms:
+                mode = .rotateRecent
+                pinnedExerciseId = nil
+            case .quads:
+                let beltSquat = exercises.first {
+                    $0.isActive && $0.primaryMuscle == .quads && $0.name == "Belt Squat"
+                }
+                mode = beltSquat == nil ? .repeatLast : .pinned
+                pinnedExerciseId = beltSquat?.id
+            case .hamstrings:
+                let stiffLegDeadlift = exercises.first {
+                    $0.isActive
+                        && $0.primaryMuscle == .hamstrings
+                        && $0.name == "Stiff-Leg Deadlift"
+                }
+                mode = stiffLegDeadlift == nil ? .repeatLast : .pinned
+                pinnedExerciseId = stiffLegDeadlift?.id
+            default:
+                mode = .repeatLast
+                pinnedExerciseId = nil
+            }
+            var eligibleExerciseIds: [UUID]
+            switch muscle {
+            case .chest, .back, .triceps, .biceps, .sideDelts, .forearms:
+                eligibleExerciseIds = broadUpperBodyPool
+            default:
+                eligibleExerciseIds = pinnedExerciseId.map { [$0] } ?? generallyAvailable
+            }
+            if muscle == .hamstrings,
+               let reverseHyper = exercises.first(where: {
+                   $0.isActive && $0.primaryMuscle == .hamstrings && $0.name == "Reverse Hyper"
+               }),
+               !eligibleExerciseIds.contains(reverseHyper.id) {
+                eligibleExerciseIds.append(reverseHyper.id)
+            }
+            modelContext.insert(
+                AdaptiveExerciseSelectionPreference(
+                    muscle: muscle,
+                    mode: mode,
+                    pinnedExerciseId: pinnedExerciseId,
+                    eligibleExerciseIds: eligibleExerciseIds
+                )
+            )
+            inserted += 1
+        }
+        if inserted > 0 { try modelContext.save() }
+        return inserted
+    }
+
+    static func resolved(
+        muscle: MuscleGroup,
+        preferences: [AdaptiveExerciseSelectionPreference]
+    ) -> AdaptiveExerciseSelectionPreference? {
+        preferences.first { $0.muscle == muscle }
     }
 }

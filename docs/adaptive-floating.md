@@ -73,9 +73,42 @@ sets means the muscle was trained, regardless of set count. Set prescriptions
 are adjusted separately from volume feedback and repeat performance. A muscle
 with no qualifying exposure in its window is due and receives protection from
 starvation without turning the missing history into an invented set quota.
-The proposed slate remains editable: movements may be added, removed, or swapped
-before it is accepted, including beyond the automatic target.
-Saving an edit creates a new immutable profile and complex version. The demo is
+The proposed slate remains editable: movements may be added, removed, swapped,
+or reordered before it is accepted, including beyond the automatic target.
+Exercises may also be added to a specific complex before or after the workout is
+frozen. Explicit post-freeze additions create editable, prefilled set rows without
+changing existing or locked work, and explicit reordering remains available until
+the workout is completed. A skipped exercise can be restored before completion;
+skip and restore actions remain in the immutable override audit trail.
+
+Exercise continuity is configured per muscle rather than by a workout-wide
+rotation rule. `Pinned exercise` always proposes one foundation movement;
+`Repeat latest` preserves the most recently completed available movement; and
+`Alternate recent` proposes the prior distinct available movement; when only one
+movement has history, it chooses a different available movement to start the
+rotation. A two-item pool then alternates across exposures and returns to each
+exercise for progressive overload. Compound and isolation continuity are independent: a compound
+recommendation targets the core slot and an isolation recommendation targets the
+accessory slot, so a fly cannot replace a press. Rotation is restricted to the user's current-equipment availability
+pool. The requested initial policy pins Belt Squat as the only currently available
+heavy quad foundation; Safety Squat Bar Squat, Leg Press, and Hack Squat remain
+unavailable heavy candidates, and Leg Extension remains an unavailable light
+accessory. Stiff-Leg Deadlift is the currently available pinned heavy hamstring
+foundation. Reverse Hyper starts as an available light hamstring accessory.
+Glute-Ham Raise remains a candidate heavy foundation movement but starts unavailable
+until the user is ready to perform it. Chest, back, triceps, biceps, shoulders, and forearms
+alternate available recent movements. Glutes and calves repeat the latest
+available movement until explicitly changed.
+Exercise category is the single source of truth for recovery role: compounds are
+hard/core movements and isolations are light/accessory movements. This applies to
+automatic proposals, manual additions, and substitutions; a stored complex cannot
+override the category with a different difficulty. Presses and rows are compound,
+while flyes, curls, lateral raises, and analogous single-joint work are isolation.
+Automatic plans include at most one compound for any muscle in a workout. A
+compound-plus-isolation complex (for example, Incline Press plus Chest Fly) is
+valid and remains atomic; two compounds for the same muscle are not proposed.
+Manual slate editing remains an explicit escape hatch.
+Saving an edit creates a new immutable profile and complex version. The starter is
 labelled as requiring review and cannot invent catalog exercises for a missing
 muscle.
 

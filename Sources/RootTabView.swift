@@ -43,7 +43,15 @@ struct RootTabView: View {
                 .tag(Tab.import)
         }
         .task {
+            _ = try? BootstrapDataService.ensureExerciseCatalog(modelContext: modelContext)
             _ = try? AdaptiveProgramService.normalizeBinaryExposureRequirements(modelContext: modelContext)
+            _ = try? AdaptiveProgramService.normalizeLegacyDemoLabels(modelContext: modelContext)
+            _ = try? AdaptiveProgramService.normalizeOpenPlanExerciseCategories(
+                modelContext: modelContext
+            )
+            _ = try? AdaptiveExerciseSelectionPreferenceService.ensureRequestedDefaults(
+                modelContext: modelContext
+            )
             retryPendingExports()
             importAvailableWorkoutExportsIfRequested()
         }

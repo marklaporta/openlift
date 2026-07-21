@@ -77,13 +77,13 @@ final class MigrationSafetyTests: XCTestCase {
         )
         let legacyCounts = try legacyEntityCounts(in: legacyContainer)
 
-        let v3Schema = Schema(versionedSchema: OpenLiftSchemaV3.self)
+        let v4Schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
         let startup = OpenLiftModelContainerFactory.makePersistent(
-            schema: v3Schema,
+            schema: v4Schema,
             migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configuration: ModelConfiguration(
-                "CopiedDeviceV3Readback",
-                schema: v3Schema,
+                "CopiedDeviceV4Readback",
+                schema: v4Schema,
                 url: fixture.working.appendingPathComponent("default.store"),
                 cloudKitDatabase: .none
             )
@@ -99,7 +99,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try persistentStoreManifest(in: suppliedBackup), suppliedManifestBefore)
     }
 
-    func testUnversionedV1FixtureMigratesToV3AndRollsBack() throws {
+    func testUnversionedV1FixtureMigratesToV4AndRollsBack() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
@@ -110,7 +110,7 @@ final class MigrationSafetyTests: XCTestCase {
         let sourceManifestBefore = try persistentStoreManifest(in: fixture.source)
         XCTAssertFalse(sourceManifestBefore.isEmpty)
 
-        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV3.self)
+        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV4.self)
         let workingStoreURL = fixture.working.appendingPathComponent("default.store")
         let workingConfiguration = ModelConfiguration(
             "MigrationFixture",
@@ -208,6 +208,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ComplexFeedback>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdHocExerciseFeedback>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveOverrideEvent>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveExerciseSelectionPreference>()), 0)
     }
 
     private func createUnversionedV1Fixture(at storeURL: URL) throws {

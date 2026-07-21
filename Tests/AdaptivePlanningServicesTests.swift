@@ -2,6 +2,87 @@ import XCTest
 @testable import OpenLift
 
 final class AdaptivePlanningServicesTests: XCTestCase {
+    func testKnownLowerBodyRolesDistinguishHeavyFoundationsFromLightAccessories() {
+        for name in ["Belt Squat", "Safety Squat Bar Squat", "Leg Press", "Hack Squat"] {
+            XCTAssertEqual(
+                AdaptiveExerciseRoleService.difficulty(for: exercise(name, muscle: .quads)),
+                .hard
+            )
+        }
+        XCTAssertEqual(
+            AdaptiveExerciseRoleService.difficulty(
+                for: exercise("Leg Extension", muscle: .quads, type: .isolation)
+            ),
+            .easy
+        )
+        for name in ["Stiff-Leg Deadlift", "GHD", "Glute-Ham Raise"] {
+            XCTAssertEqual(
+                AdaptiveExerciseRoleService.difficulty(for: exercise(name, muscle: .hamstrings)),
+                .hard
+            )
+        }
+        for name in ["Leg Curl", "Reverse Hyper"] {
+            XCTAssertEqual(
+                AdaptiveExerciseRoleService.difficulty(
+                    for: exercise(name, muscle: .hamstrings, type: .isolation)
+                ),
+                .easy
+            )
+        }
+    }
+
+    func testPinnedHeavySelectionsParticipateInQuadHamstringCompositionRule() {
+        let configuredQuad = exercise("Configured Quad", muscle: .quads)
+        let configuredHamstring = exercise("Configured Hamstring", muscle: .hamstrings, type: .isolation)
+        let beltSquat = exercise("Belt Squat", muscle: .quads)
+        let stiffLegDeadlift = exercise("Stiff-Leg Deadlift", muscle: .hamstrings)
+        let program = makeProgram(
+            movements: 2,
+            difficulty: 60,
+            enabled: [.quads, .hamstrings],
+            complexes: [
+                makeComplex(
+                    id: uuid(800),
+                    position: 0,
+                    primary: .quads,
+                    components: [component(configuredQuad)]
+                ),
+                makeComplex(
+                    id: uuid(801),
+                    position: 1,
+                    primary: .hamstrings,
+                    components: [component(configuredHamstring)]
+                )
+            ]
+        )
+
+        let result = AdaptivePlanService.generate(
+            program: program,
+            exercises: [configuredQuad, configuredHamstring, beltSquat, stiffLegDeadlift],
+            readiness: [
+                .quads: .init(soreness: .none, connectiveTissuePain: .none, eagerness: .neutral),
+                .hamstrings: .init(soreness: .none, connectiveTissuePain: .none, eagerness: .neutral)
+            ],
+            ledger: recentLedger([.quads, .hamstrings]),
+            exerciseSelections: [
+                .init(muscle: .quads, type: .compound): .init(
+                    exercise: beltSquat,
+                    reasonCodeSuffix: "exercise_pinned"
+                ),
+                .init(muscle: .hamstrings, type: .compound): .init(
+                    exercise: stiffLegDeadlift,
+                    reasonCodeSuffix: "exercise_pinned"
+                )
+            ],
+            now: now,
+            calendar: utcCalendar
+        )
+
+        let proposal = unwrapProposal(result)
+        XCTAssertEqual(proposal.complexes.flatMap(\.components).map(\.exerciseName), ["Belt Squat"])
+        XCTAssertTrue(proposal.rejections.contains { $0.code == "hard_quad_hamstring_pair" })
+    }
+
     func testDisabledMusclesDoNotRequireReadiness() {
         let chest = exercise("Chest", muscle: .chest)
         let program = makeProgram(
@@ -131,10 +212,81 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(proposal.totalMovements, 2)
         XCTAssertEqual(proposal.muscleSetDose[.chest], 4)
         let trace = AdaptivePlanService.trace(for: result)
-        XCTAssertEqual(trace.plannerVersion, 3)
+        XCTAssertEqual(trace.plannerVersion, 4)
         XCTAssertEqual(trace.outcomeCode, "proposal")
         XCTAssertEqual(trace.selectedComplexDefinitionIds, [uuid(1)])
         XCTAssertNil(trace.conflictCode)
+    }
+
+    func testCompoundSelectionReplacesCoreSlotWithoutReplacingIsolationSlot() {
+        let inclinePress = exercise("Incline Press", muscle: .chest)
+        let flatPress = exercise("Flat Dumbbell Press", muscle: .chest)
+        let fly = exercise("Chest Fly", muscle: .chest, type: .isolation)
+        let program = makeProgram(
+            movements: 2,
+            difficulty: 60,
+            enabled: [.chest],
+            complexes: [
+                makeComplex(
+                    id: uuid(15),
+                    position: 0,
+                    primary: .chest,
+                    components: [component(inclinePress), component(fly, position: 1)]
+                )
+            ]
+        )
+
+        let proposal = unwrapProposal(
+            AdaptivePlanService.generate(
+                program: program,
+                exercises: [inclinePress, flatPress, fly],
+                readiness: readyInputs,
+                ledger: recentLedger([.chest]),
+                exerciseSelections: [
+                    .init(muscle: .chest, type: .compound): .init(
+                        exercise: flatPress,
+                        reasonCodeSuffix: "exercise_rotation"
+                    )
+                ],
+                now: now,
+                calendar: utcCalendar
+            )
+        )
+
+        XCTAssertEqual(proposal.complexes.first?.components.map(\.exerciseName), [
+            "Flat Dumbbell Press", "Chest Fly"
+        ])
+        XCTAssertEqual(proposal.complexes.first?.components.map(\.difficulty), [.hard, .easy])
+    }
+
+    func testAutomaticPlanRejectsSecondCompoundForSameMuscle() {
+        let inclinePress = exercise("Incline Press", muscle: .chest)
+        let flatPress = exercise("Flat Dumbbell Press", muscle: .chest)
+        let program = makeProgram(
+            movements: 2,
+            difficulty: 60,
+            enabled: [.chest],
+            complexes: [
+                makeComplex(id: uuid(16), position: 0, primary: .chest, components: [component(inclinePress)]),
+                makeComplex(id: uuid(17), position: 1, primary: .chest, components: [component(flatPress)])
+            ]
+        )
+
+        let proposal = unwrapProposal(
+            AdaptivePlanService.generate(
+                program: program,
+                exercises: [inclinePress, flatPress],
+                readiness: readyInputs,
+                ledger: recentLedger([.chest]),
+                now: now,
+                calendar: utcCalendar
+            )
+        )
+
+        XCTAssertEqual(proposal.complexes.count, 1)
+        XCTAssertTrue(proposal.rejections.contains {
+            $0.complexDefinitionId == uuid(17) && $0.code == "multiple_compounds_same_muscle"
+        })
     }
 
     func testRecoveredLowerPriorityFloorWinsBeforeHigherPriorityFill() {
@@ -550,6 +702,183 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         current = previous
         current.isSubstitution = true
         XCTAssertEqual(RepeatPerformanceService.compare(previous: previous, current: current).label, .notComparable)
+    }
+
+    func testPerMuscleSelectionAlternatesApprovedChestButPinsQuadAndHamstringFoundations() {
+        let incline = Exercise(
+            name: "Incline Dumbbell Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        let cambered = Exercise(
+            name: "Cambered Bar Bench Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .barbell
+        )
+        let unavailableMachine = Exercise(
+            name: "Machine Chest Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .machine
+        )
+        let fly = Exercise(
+            name: "Cable Fly",
+            primaryMuscle: .chest,
+            type: .isolation,
+            equipment: .cable
+        )
+        let beltSquat = Exercise(
+            name: "Belt Squat",
+            primaryMuscle: .quads,
+            type: .compound,
+            equipment: .machine
+        )
+        let stiffLegDeadlift = Exercise(
+            name: "Stiff-Leg Deadlift",
+            primaryMuscle: .hamstrings,
+            type: .compound,
+            equipment: .barbell
+        )
+
+        func completedSession(_ date: Date) -> Session {
+            Session(
+                cycleInstanceId: UUID(),
+                cycleDayIndex: 0,
+                cycleNameSnapshot: "History",
+                dayLabelSnapshot: "History",
+                createdAt: date,
+                finishedAt: date,
+                status: .completed
+            )
+        }
+        func row(session: Session, exercise: Exercise) -> SetEntry {
+            SetEntry(
+                sessionId: session.id,
+                exerciseId: exercise.id,
+                setIndex: 1,
+                weight: 1,
+                reps: 8,
+                isLocked: true
+            )
+        }
+
+        let older = completedSession(Date(timeIntervalSince1970: 100))
+        let yesterday = completedSession(Date(timeIntervalSince1970: 200))
+        let unavailableLatest = completedSession(Date(timeIntervalSince1970: 300))
+        let isolationLatest = completedSession(Date(timeIntervalSince1970: 350))
+        let preferences = [
+            AdaptiveExerciseSelectionPreference(
+                muscle: .chest,
+                mode: .rotateRecent,
+                eligibleExerciseIds: [incline.id, cambered.id, fly.id]
+            ),
+            AdaptiveExerciseSelectionPreference(
+                muscle: .quads,
+                mode: .pinned,
+                pinnedExerciseId: beltSquat.id,
+                eligibleExerciseIds: [beltSquat.id]
+            ),
+            AdaptiveExerciseSelectionPreference(
+                muscle: .hamstrings,
+                mode: .pinned,
+                pinnedExerciseId: stiffLegDeadlift.id,
+                eligibleExerciseIds: [stiffLegDeadlift.id]
+            )
+        ]
+        let exercises = [incline, cambered, unavailableMachine, fly, beltSquat, stiffLegDeadlift]
+        let first = AdaptiveExerciseSelectionService.recommendations(
+            exercises: exercises,
+            preferences: preferences,
+            rotationSessions: [older, yesterday, unavailableLatest, isolationLatest],
+            rotationSetEntries: [
+                row(session: older, exercise: cambered),
+                row(session: yesterday, exercise: incline),
+                row(session: unavailableLatest, exercise: unavailableMachine),
+                row(session: isolationLatest, exercise: fly)
+            ],
+            adaptiveSessions: [],
+            adaptiveSetEntries: []
+        )
+        XCTAssertEqual(first[.init(muscle: .chest, type: .compound)]?.exercise.id, cambered.id)
+        XCTAssertEqual(first[.init(muscle: .chest, type: .isolation)]?.exercise.id, fly.id)
+        XCTAssertEqual(first[.init(muscle: .quads, type: .compound)]?.exercise.id, beltSquat.id)
+        XCTAssertEqual(
+            first[.init(muscle: .hamstrings, type: .compound)]?.exercise.id,
+            stiffLegDeadlift.id
+        )
+
+        let today = completedSession(Date(timeIntervalSince1970: 400))
+        let second = AdaptiveExerciseSelectionService.recommendations(
+            exercises: exercises,
+            preferences: preferences,
+            rotationSessions: [older, yesterday, unavailableLatest, isolationLatest, today],
+            rotationSetEntries: [
+                row(session: older, exercise: cambered),
+                row(session: yesterday, exercise: incline),
+                row(session: unavailableLatest, exercise: unavailableMachine),
+                row(session: isolationLatest, exercise: fly),
+                row(session: today, exercise: cambered)
+            ],
+            adaptiveSessions: [],
+            adaptiveSetEntries: []
+        )
+        XCTAssertEqual(second[.init(muscle: .chest, type: .compound)]?.exercise.id, incline.id)
+    }
+
+    func testAlternateRecentChoosesAvailableDifferentExerciseAfterOnlyOneExposure() {
+        let incline = Exercise(
+            name: "Incline Dumbbell Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        let flat = Exercise(
+            name: "Flat Dumbbell Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        let unavailable = Exercise(
+            name: "Barbell Bench Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .barbell
+        )
+        let session = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            cycleNameSnapshot: "History",
+            dayLabelSnapshot: "History",
+            createdAt: Date(timeIntervalSince1970: 100),
+            finishedAt: Date(timeIntervalSince1970: 100),
+            status: .completed
+        )
+        let row = SetEntry(
+            sessionId: session.id,
+            exerciseId: incline.id,
+            setIndex: 1,
+            weight: 60,
+            reps: 9,
+            isLocked: true
+        )
+        let preference = AdaptiveExerciseSelectionPreference(
+            muscle: .chest,
+            mode: .rotateRecent,
+            eligibleExerciseIds: [incline.id, flat.id]
+        )
+
+        let result = AdaptiveExerciseSelectionService.recommendations(
+            exercises: [incline, flat, unavailable],
+            preferences: [preference],
+            rotationSessions: [session],
+            rotationSetEntries: [row],
+            adaptiveSessions: [],
+            adaptiveSetEntries: []
+        )
+
+        XCTAssertEqual(result[.init(muscle: .chest, type: .compound)]?.exercise.id, flat.id)
     }
 
     func testDoseChangesAreBoundedAndOneTooLittleTapDoesNotIncrease() {

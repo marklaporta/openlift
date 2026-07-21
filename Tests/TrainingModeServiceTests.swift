@@ -11,7 +11,7 @@ final class TrainingModeServiceTests: XCTestCase {
     }
 
     func testModeRoundTripDoesNotMutateFixedCycleState() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV3.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
 
