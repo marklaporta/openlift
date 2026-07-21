@@ -40,15 +40,29 @@ enum BootstrapDataService {
     static func ensureExerciseCatalog(modelContext: ModelContext) throws -> [Exercise] {
         var currentExercises = try modelContext.fetch(FetchDescriptor<Exercise>())
         let currentNames = Set(currentExercises.map { $0.name.lowercased() })
+        let defaultsByName = Dictionary(
+            uniqueKeysWithValues: defaultExerciseCatalog.map { ($0.0.lowercased(), $0) }
+        )
 
-        var inserted = false
+        var changed = false
+        for exercise in currentExercises {
+            guard let canonical = defaultsByName[exercise.name.lowercased()] else { continue }
+            if exercise.primaryMuscle != canonical.1 {
+                exercise.primaryMuscle = canonical.1
+                changed = true
+            }
+            if exercise.type != canonical.2 {
+                exercise.type = canonical.2
+                changed = true
+            }
+        }
         for entry in defaultExerciseCatalog where !currentNames.contains(entry.0.lowercased()) {
             let exercise = Exercise(name: entry.0, primaryMuscle: entry.1, type: entry.2, equipment: entry.3)
             modelContext.insert(exercise)
-            inserted = true
+            changed = true
         }
 
-        if inserted {
+        if changed {
             try modelContext.save()
             currentExercises = try modelContext.fetch(FetchDescriptor<Exercise>())
         }
