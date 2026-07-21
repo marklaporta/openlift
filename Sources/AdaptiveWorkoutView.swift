@@ -975,7 +975,7 @@ struct AdaptiveWorkoutView: View {
                 copy.priorityRank = fixtureExercises.firstIndex(where: {
                     $0.primaryMuscle == rule.muscle
                 }).map { $0 + 1 } ?? 0
-                copy.rollingSetFloor = 0
+                copy.rollingSetFloor = AppRuntime.isAdaptiveHistoryUITesting ? 4 : 0
                 return copy
             }
             draft.complexes = fixtureExercises.map { exercise in

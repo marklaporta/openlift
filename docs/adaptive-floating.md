@@ -68,6 +68,10 @@ priorities, rolling floor/window and recovered-gap policy, per-exposure and
 per-exercise caps, and an automatic component-movement target (four by default).
 Complexes are ordered atomic units with ordered component exercises, set counts,
 primary plus optional major-secondary attribution, and easy/moderate/hard recovery context.
+Rolling floors are multi-day targets rather than same-day quotas. A muscle with
+no recent baseline is due and receives floor priority, but the planner carries
+any dose that cannot safely fit today into future recovered exposures instead
+of rejecting the entire workout.
 The proposed slate remains editable: movements may be added, removed, or swapped
 before it is accepted, including beyond the automatic target.
 Saving an edit creates a new immutable profile and complex version. The demo is

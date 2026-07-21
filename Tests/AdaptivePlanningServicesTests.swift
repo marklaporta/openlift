@@ -168,7 +168,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["back_floor_due"])
     }
 
-    func testImpossibleFloorReturnsExactCapacityConflict() {
+    func testRollingFloorDeficitCarriesForwardWhenTodaysQualifyingDoseIsExhausted() {
         let back = exercise("Back", muscle: .back)
         let program = makeProgram(
             movements: 1,
@@ -180,25 +180,59 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             ]
         )
 
-        let result = AdaptivePlanService.generate(
-            program: program,
-            exercises: [back],
-            readiness: readyInputs,
-            ledger: TrainingLoadLedger(byMuscle: [:]),
-            now: now,
-            calendar: utcCalendar
-        )
-
-        XCTAssertEqual(
-            result,
-            .infeasible(
-                AdaptivePlanConflict(
-                    muscle: .back,
-                    requiredAdditionalSets: 2,
-                    code: "insufficient_floor_qualifying_dose"
-                )
+        let proposal = unwrapProposal(
+            AdaptivePlanService.generate(
+                program: program,
+                exercises: [back],
+                readiness: readyInputs,
+                ledger: TrainingLoadLedger(byMuscle: [:]),
+                now: now,
+                calendar: utcCalendar
             )
         )
+
+        XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.back])
+        XCTAssertEqual(proposal.muscleSetDose[.back], 2)
+        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["back_floor_due"])
+    }
+
+    func testColdStartAcrossAllEnabledMusclesBuildsPrioritySlateInsteadOfRequiringFullFloors() {
+        let muscles = MuscleGroup.initialAdaptiveRankOrder
+        let exercises = muscles.enumerated().map { index, muscle in
+            exercise("Cold Start \(index)", muscle: muscle)
+        }
+        let floors = Dictionary(uniqueKeysWithValues: muscles.map { ($0, 4) })
+        let complexes = zip(muscles.indices, zip(muscles, exercises)).map { index, pair in
+            makeComplex(
+                id: uuid(index + 1),
+                position: index,
+                primary: pair.0,
+                components: [component(pair.1, sets: 2)]
+            )
+        }
+        let program = makeProgram(
+            movements: 4,
+            difficulty: 60,
+            enabled: muscles,
+            floors: floors,
+            complexes: complexes
+        )
+
+        let proposal = unwrapProposal(
+            AdaptivePlanService.generate(
+                program: program,
+                exercises: exercises,
+                readiness: readyInputs,
+                ledger: TrainingLoadLedger(byMuscle: [:]),
+                now: now,
+                calendar: utcCalendar
+            )
+        )
+
+        XCTAssertEqual(proposal.totalMovements, 4)
+        XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), Array(muscles.prefix(4)))
+        XCTAssertEqual(proposal.complexes.flatMap(\.components).map(\.prescribedSetCount), [2, 2, 2, 2])
+        XCTAssertFalse(proposal.rejections.contains { $0.code == "insufficient_floor_qualifying_dose" })
     }
 
     func testHamstringSetCapBeatsGlobalCapacity() {
