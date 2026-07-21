@@ -222,7 +222,7 @@ enum AdaptiveProgramService {
         draft.name = "Adaptive Demo — Review Required"
         draft.muscleRules = draft.muscleRules.map { rule in
             var copy = rule
-            copy.rollingSetFloor = 4
+            copy.rollingSetFloor = copy.isEnabled ? 4 : 0
             return copy
         }
         draft.complexes = draft.muscleRules.filter(\.isEnabled).compactMap { rule in

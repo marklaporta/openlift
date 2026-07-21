@@ -529,6 +529,11 @@ final class BootstrapDataServiceTests: XCTestCase {
             program.muscleRules.filter(\.isEnabled).sorted { $0.priorityRank < $1.priorityRank }.map(\.muscle),
             MuscleGroup.initialAdaptiveRankOrder
         )
+        XCTAssertTrue(
+            program.muscleRules
+                .filter { !$0.isEnabled }
+                .allSatisfy { $0.rollingSetFloor == 0 }
+        )
         XCTAssertEqual(Set(program.complexes.filter(\.isEnabled).map(\.primaryMuscle)), Set(MuscleGroup.initialAdaptiveRankOrder))
 
         _ = try BootstrapDataService.prepareAdaptiveRollout(
