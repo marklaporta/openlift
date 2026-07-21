@@ -154,6 +154,8 @@ enum ComplexFeedbackRating: String, Codable, CaseIterable, Hashable {
 }
 
 enum AdaptiveOverrideKind: String, Codable, CaseIterable, Hashable {
+    case addExercise
+    case removeExercise
     case skipComplex
     case skipExercise
     case substituteExercise

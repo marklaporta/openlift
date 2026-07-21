@@ -116,9 +116,10 @@ pointer, rotation indices, and draft remain persisted but cannot resolve into
 the active Workout UI.
 
 Adaptive planning evaluates observed muscle readiness before difficulty.
-Difficulty balances the proposed same-day workload and can serve as a
-recovery-prediction hint, but it cannot route an easier exercise to a muscle
-that the morning check says is unrecovered.
+Difficulty is retained as recovery context but is not a global point budget.
+The planner blocks a hard quad plus hard hamstring pairing, and it cannot route
+an easier exercise to a muscle that readiness or the post-exposure DOMS
+observation window says is unrecovered.
 
 ## Cycle Flow
 

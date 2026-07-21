@@ -75,15 +75,16 @@ struct AdaptiveProgramEditorView: View {
             TextField("Profile Name", text: $draft.name)
                 .accessibilityIdentifier("adaptive.profileName")
             Stepper(
-                "Daily component movements: \(draft.globalMaxMovements)",
+                "Planner movement target: \(draft.globalMaxMovements)",
                 value: $draft.globalMaxMovements,
                 in: 1...20
             )
-            Stepper(
-                "Daily difficulty budget: \(draft.maxDifficultyCost)",
-                value: $draft.maxDifficultyCost,
-                in: 1...60
-            )
+            Text("This limits the automatic proposal. You can add or remove movements before accepting a workout.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("OpenLift will not pair a hard quad movement with a hard hamstring movement. Difficulty remains recorded as recovery context, not a daily point budget.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Toggle("Reviewed for real use", isOn: $draft.isReviewedForUse)
             Text("Review means you have checked every rank, floor, cap, difficulty, exercise, and set count. Saving always creates a new immutable version.")
                 .font(.caption)
@@ -279,7 +280,7 @@ struct AdaptiveProgramEditorView: View {
 
             Picker("Difficulty", selection: $draft.complexes[complexIndex].components[componentIndex].difficulty) {
                 ForEach(MovementDifficulty.allCases, id: \.self) { difficulty in
-                    Text("\(difficulty.displayName) (\(difficulty.cost))").tag(difficulty)
+                    Text(difficulty.displayName).tag(difficulty)
                 }
             }
 

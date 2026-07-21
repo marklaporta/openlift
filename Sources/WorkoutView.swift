@@ -1134,30 +1134,36 @@ struct ExerciseSwapSheet: View {
     }
 
     private var candidates: [Exercise] {
-        guard let currentExercise else { return [] }
-        return ExerciseSwapService.swapCandidates(
-            exercises: exercises,
-            selectedMuscle: selectedMuscle,
-            currentExerciseId: currentExercise.id
-        )
+        if let currentExercise {
+            return ExerciseSwapService.swapCandidates(
+                exercises: exercises,
+                selectedMuscle: selectedMuscle,
+                currentExerciseId: currentExercise.id
+            )
+        }
+        return exercises
+            .filter { $0.isActive && $0.primaryMuscle == selectedMuscle }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Current") {
-                    Text(currentExercise?.name ?? "Unknown Exercise")
-                        .foregroundStyle(.secondary)
-
-                    HStack {
-                        Text("Slot Muscle")
+                if let currentExercise {
+                    Section("Current") {
+                        Text(currentExercise.name)
                             .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(slotMuscle.displayName)
+
+                        HStack {
+                            Text("Slot Muscle")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(slotMuscle.displayName)
+                        }
                     }
                 }
 
-                Section("Swap To") {
+                Section(currentExercise == nil ? "Add" : "Swap To") {
                     Picker("Muscle", selection: $selectedMuscle) {
                         ForEach(MuscleGroup.allCases, id: \.self) { muscle in
                             Text(muscle.displayName).tag(muscle)
@@ -1167,7 +1173,7 @@ struct ExerciseSwapSheet: View {
                     .accessibilityIdentifier("swap.musclePicker")
 
                     if candidates.isEmpty {
-                        Text("No alternate exercises available for \(selectedMuscle.displayName).")
+                        Text("No exercises available for \(selectedMuscle.displayName).")
                             .foregroundStyle(.secondary)
                     }
 
@@ -1204,14 +1210,14 @@ struct ExerciseSwapSheet: View {
                         }
                     }
 
-                    Button("Create & Swap") {
+                    Button(currentExercise == nil ? "Create & Add" : "Create & Swap") {
                         onCreate(newExerciseName, selectedMuscle, newExerciseType, newExerciseEquipment)
                         dismiss()
                     }
                     .disabled(newExerciseName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-            .navigationTitle("Swap Exercise")
+            .navigationTitle(currentExercise == nil ? "Add Movement" : "Swap Exercise")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }

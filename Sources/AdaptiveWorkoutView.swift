@@ -22,6 +22,7 @@ struct AdaptiveWorkoutView: View {
     )
     @State private var errorMessage: String?
     @State private var swapContext: AdaptiveSwapContext?
+    @State private var isAddingMovement = false
 
     private var activeProgram: AdaptiveProgram? {
         AdaptiveProgramService.activeProgram(from: adaptivePrograms)
@@ -98,6 +99,26 @@ struct AdaptiveWorkoutView: View {
                 }
             )
         }
+        .sheet(isPresented: $isAddingMovement) {
+            ExerciseSwapSheet(
+                currentExercise: nil,
+                exercises: exercises,
+                slotMuscle: .chest,
+                onSelect: { exercise in
+                    addMovement(exercise)
+                    isAddingMovement = false
+                },
+                onCreate: { name, muscle, type, equipment in
+                    createExerciseAndAddMovement(
+                        name: name,
+                        muscle: muscle,
+                        type: type,
+                        equipment: equipment
+                    )
+                    isAddingMovement = false
+                }
+            )
+        }
         .alert(
             "Adaptive Workout Error",
             isPresented: Binding(
@@ -133,6 +154,9 @@ struct AdaptiveWorkoutView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text("Soreness, connective-tissue pain, and eagerness are stored as raw choices; OpenLift derives eligibility locally.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Most directly trained muscles stay in a one-day DOMS observation window. Shoulders may repeat when readiness is clear; chest does not start a triceps timer, and back does not start a biceps timer.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -232,6 +256,9 @@ struct AdaptiveWorkoutView: View {
             let movementCount = complexes.reduce(0) { $0 + $1.exercises.count }
             Text("\(movementCount) component movement(s) · planner v\(plan.plannerVersion)")
                 .font(.headline)
+            Text("Four is the automatic planner target. Add or remove movements here before accepting the workout.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
 
         ForEach(plan.complexes.sorted(by: { $0.position < $1.position })) { complex in
@@ -266,6 +293,15 @@ struct AdaptiveWorkoutView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .accessibilityLabel("Substitute \(exercise.exerciseName)")
+                        Button(role: .destructive) {
+                            removeMovement(exercise, from: plan)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("Remove \(exercise.exerciseName)")
+                        .accessibilityIdentifier("adaptive.removeMovement.\(exercise.occurrenceId.uuidString)")
                     }
                 }
             } header: {
@@ -277,8 +313,15 @@ struct AdaptiveWorkoutView: View {
         }
 
         Section {
+            Button {
+                isAddingMovement = true
+            } label: {
+                Label("Add Movement", systemImage: "plus.circle")
+            }
+            .accessibilityIdentifier("adaptive.addMovement")
             Button("Use Workout") { freeze(plan: plan) }
                 .buttonStyle(.borderedProminent)
+                .disabled(plan.complexes.flatMap(\.exercises).isEmpty)
                 .accessibilityIdentifier("adaptive.useWorkout")
             Button("Regenerate Explicitly") { regenerate(plan: plan) }
                 .accessibilityIdentifier("adaptive.regeneratePlan")
@@ -785,6 +828,7 @@ struct AdaptiveWorkoutView: View {
                     plan: plan,
                     occurrenceId: context.occurrenceId,
                     to: exercise,
+                    difficulty: proposedDifficulty(for: exercise),
                     modelContext: modelContext
                 )
             } else {
@@ -820,6 +864,69 @@ struct AdaptiveWorkoutView: View {
             try modelContext.save()
             substitute(context: context, with: exercise)
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func addMovement(_ exercise: Exercise) {
+        guard let plan = currentPlan else { return }
+        do {
+            try AdaptiveWorkoutService.addProposedMovement(
+                plan: plan,
+                exercise: exercise,
+                difficulty: proposedDifficulty(for: exercise),
+                prescribedSetCount: proposedSetCount(for: exercise),
+                modelContext: modelContext
+            )
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func createExerciseAndAddMovement(
+        name: String,
+        muscle: MuscleGroup,
+        type: ExerciseType,
+        equipment: EquipmentType
+    ) {
+        do {
+            let exercise = try ExerciseCatalogService.makeExercise(
+                name: name,
+                primaryMuscle: muscle,
+                type: type,
+                equipment: equipment,
+                existingExercises: exercises
+            )
+            modelContext.insert(exercise)
+            try modelContext.save()
+            addMovement(exercise)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func removeMovement(_ exercise: PlannedExerciseSnapshot, from plan: GeneratedWorkoutPlan) {
+        do {
+            try AdaptiveWorkoutService.removeProposedMovement(
+                plan: plan,
+                occurrenceId: exercise.occurrenceId,
+                modelContext: modelContext
+            )
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func proposedDifficulty(for exercise: Exercise) -> MovementDifficulty {
+        let configured = activeProgram?.complexes
+            .flatMap(\.components)
+            .filter { $0.exerciseId == exercise.id }
+            .map(\.difficulty)
+            .max { $0.cost < $1.cost }
+        return configured ?? (exercise.type == .compound ? .moderate : .easy)
+    }
+
+    private func proposedSetCount(for exercise: Exercise) -> Int {
+        let configured = activeProgram?.complexes
+            .flatMap(\.components)
+            .filter { $0.exerciseId == exercise.id }
+            .map(\.prescribedSetCount)
+            .max() ?? 2
+        let cap = activeProgram?.muscleRules.first(where: { $0.muscle == exercise.primaryMuscle })?
+            .maxSetsPerExercise ?? configured
+        return max(1, min(configured, cap))
     }
 
     private func humanizedReason(_ code: String) -> String {

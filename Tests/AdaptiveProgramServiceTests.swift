@@ -12,6 +12,8 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(enabled.map(\.muscle), MuscleGroup.initialAdaptiveRankOrder)
         XCTAssertEqual(enabled.map(\.priorityRank), Array(1...10))
         XCTAssertEqual(enabled[4].muscle, .sideDelts)
+        XCTAssertEqual(draft.globalMaxMovements, 4)
+        XCTAssertEqual(draft.maxDifficultyCost, 60)
 
         for muscle in [MuscleGroup.abs, .traps] {
             let rule = draft.muscleRules.first { $0.muscle == muscle }

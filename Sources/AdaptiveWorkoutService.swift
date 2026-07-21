@@ -9,6 +9,8 @@ enum AdaptiveWorkoutServiceError: LocalizedError, Equatable {
     case planAlreadyStarted
     case adaptiveSessionNotFound
     case plannedExerciseNotFound
+    case emptyProposedPlan
+    case hardQuadHamstringPair
     case noLockedSets
 
     var errorDescription: String? {
@@ -27,6 +29,10 @@ enum AdaptiveWorkoutServiceError: LocalizedError, Equatable {
             return "The Adaptive workout session could not be found."
         case .plannedExerciseNotFound:
             return "The planned exercise could not be found."
+        case .emptyProposedPlan:
+            return "Add at least one movement before using this workout."
+        case .hardQuadHamstringPair:
+            return "A hard quad movement and a hard hamstring movement cannot be scheduled in the same workout."
         case .noLockedSets:
             return "Lock at least one completed set before finishing the workout."
         }
@@ -43,6 +49,7 @@ enum AdaptiveWorkoutService {
         plan: GeneratedWorkoutPlan,
         occurrenceId: UUID,
         to exercise: Exercise,
+        difficulty: MovementDifficulty? = nil,
         modelContext: ModelContext,
         now: Date = .now
     ) throws {
@@ -52,12 +59,22 @@ enum AdaptiveWorkoutService {
             .first(where: { $0.occurrenceId == occurrenceId }) else {
             throw AdaptiveWorkoutServiceError.plannedExerciseNotFound
         }
+        let replacementDifficulty = difficulty ?? snapshot.difficulty
+        guard !wouldCreateHardLowerBodyPair(
+            plan: plan,
+            replacingOccurrenceId: occurrenceId,
+            withMuscle: exercise.primaryMuscle,
+            difficulty: replacementDifficulty
+        ) else {
+            throw AdaptiveWorkoutServiceError.hardQuadHamstringPair
+        }
 
         let originalExerciseId = snapshot.exerciseId
         snapshot.exerciseId = exercise.id
         snapshot.exerciseName = exercise.name
         snapshot.primaryMuscle = exercise.primaryMuscle
         snapshot.secondaryMuscle = nil
+        snapshot.difficulty = replacementDifficulty
         modelContext.insert(
             AdaptiveOverrideEvent(
                 generatedPlanId: plan.id,
@@ -70,6 +87,115 @@ enum AdaptiveWorkoutService {
             )
         )
         try modelContext.save()
+    }
+
+    static func addProposedMovement(
+        plan: GeneratedWorkoutPlan,
+        exercise: Exercise,
+        difficulty: MovementDifficulty,
+        prescribedSetCount: Int,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        guard plan.status == .proposed else { throw AdaptiveWorkoutServiceError.planAlreadyStarted }
+        guard !wouldCreateHardLowerBodyPair(
+            plan: plan,
+            withMuscle: exercise.primaryMuscle,
+            difficulty: difficulty
+        ) else {
+            throw AdaptiveWorkoutServiceError.hardQuadHamstringPair
+        }
+
+        let snapshot = PlannedExerciseSnapshot(
+            position: 0,
+            exerciseId: exercise.id,
+            exerciseName: exercise.name,
+            primaryMuscle: exercise.primaryMuscle,
+            difficulty: difficulty,
+            prescribedSetCount: max(1, prescribedSetCount)
+        )
+        let complex = PlannedComplexSnapshot(
+            sourceDefinitionId: UUID(),
+            sourceVersion: 0,
+            position: (plan.complexes.map(\.position).max() ?? -1) + 1,
+            name: exercise.name,
+            primaryMuscle: exercise.primaryMuscle,
+            reasonCodes: ["user_added"],
+            exercises: [snapshot]
+        )
+        plan.complexes.append(complex)
+        modelContext.insert(
+            AdaptiveOverrideEvent(
+                generatedPlanId: plan.id,
+                plannedComplexId: complex.id,
+                occurrenceId: snapshot.occurrenceId,
+                kind: .addExercise,
+                muscle: exercise.primaryMuscle,
+                replacementExerciseId: exercise.id,
+                reasonCode: "user_added_before_freeze",
+                createdAt: now
+            )
+        )
+        try modelContext.save()
+    }
+
+    static func removeProposedMovement(
+        plan: GeneratedWorkoutPlan,
+        occurrenceId: UUID,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        guard plan.status == .proposed else { throw AdaptiveWorkoutServiceError.planAlreadyStarted }
+        guard let complex = plan.complexes.first(where: {
+            $0.exercises.contains { $0.occurrenceId == occurrenceId }
+        }), let snapshot = complex.exercises.first(where: { $0.occurrenceId == occurrenceId }) else {
+            throw AdaptiveWorkoutServiceError.plannedExerciseNotFound
+        }
+
+        modelContext.insert(
+            AdaptiveOverrideEvent(
+                generatedPlanId: plan.id,
+                plannedComplexId: complex.id,
+                occurrenceId: occurrenceId,
+                kind: .removeExercise,
+                muscle: snapshot.primaryMuscle,
+                originalExerciseId: snapshot.exerciseId,
+                reasonCode: "user_removed_before_freeze",
+                createdAt: now
+            )
+        )
+        if complex.exercises.count == 1 {
+            plan.complexes.removeAll { $0.id == complex.id }
+            modelContext.delete(complex)
+        } else {
+            complex.exercises.removeAll { $0.occurrenceId == occurrenceId }
+            modelContext.delete(snapshot)
+            for (position, exercise) in complex.exercises.sorted(by: { $0.position < $1.position }).enumerated() {
+                exercise.position = position
+            }
+        }
+        for (position, item) in plan.complexes.sorted(by: { $0.position < $1.position }).enumerated() {
+            item.position = position
+        }
+        try modelContext.save()
+    }
+
+    static func wouldCreateHardLowerBodyPair(
+        plan: GeneratedWorkoutPlan,
+        replacingOccurrenceId: UUID? = nil,
+        withMuscle muscle: MuscleGroup,
+        difficulty: MovementDifficulty
+    ) -> Bool {
+        let snapshots = plan.complexes.flatMap(\.exercises).filter {
+            $0.occurrenceId != replacingOccurrenceId
+        }
+        let hasHardQuads = (muscle == .quads && difficulty == .hard) || snapshots.contains {
+            $0.difficulty == .hard && ($0.primaryMuscle == .quads || $0.secondaryMuscle == .quads)
+        }
+        let hasHardHamstrings = (muscle == .hamstrings && difficulty == .hard) || snapshots.contains {
+            $0.difficulty == .hard && ($0.primaryMuscle == .hamstrings || $0.secondaryMuscle == .hamstrings)
+        }
+        return hasHardQuads && hasHardHamstrings
     }
 
     static func recordFeedback(
@@ -242,6 +368,9 @@ enum AdaptiveWorkoutService {
         now: Date = .now
     ) throws -> AdaptiveWorkoutSession {
         guard plan.status == .proposed else { throw AdaptiveWorkoutServiceError.planNotProposed }
+        guard plan.complexes.contains(where: { !$0.exercises.isEmpty }) else {
+            throw AdaptiveWorkoutServiceError.emptyProposedPlan
+        }
         let session = AdaptiveWorkoutSession(generatedPlanId: plan.id, createdAt: now)
         modelContext.insert(session)
         for complex in plan.complexes.sorted(by: { $0.position < $1.position }) {

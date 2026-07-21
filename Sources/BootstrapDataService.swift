@@ -378,7 +378,13 @@ enum BootstrapDataService {
         let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
         let programs = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
 
-        if AdaptiveProgramService.activeProgram(from: programs) == nil {
+        if let activeProgram = AdaptiveProgramService.activeProgram(from: programs) {
+            // This explicit rollout preference correction preserves the original
+            // profile identity and start date while updating planner semantics.
+            activeProgram.globalMaxMovements = 4
+            activeProgram.maxDifficultyCost = 60
+            try modelContext.save()
+        } else {
             var draft = AdaptiveProgramService.demoDraft(exercises: exercises)
             draft.name = "Adaptive Floating — Initial"
             draft.isReviewedForUse = true

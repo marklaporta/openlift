@@ -65,9 +65,11 @@ exercise variants may use the same bucket.
 
 Cycle contains the one Adaptive profile editor. A profile stores strict muscle
 priorities, rolling floor/window and recovered-gap policy, per-exposure and
-per-exercise caps, a daily component-movement cap, and a difficulty budget.
+per-exercise caps, and an automatic component-movement target (four by default).
 Complexes are ordered atomic units with ordered component exercises, set counts,
-primary plus optional major-secondary attribution, and easy/moderate/hard cost.
+primary plus optional major-secondary attribution, and easy/moderate/hard recovery context.
+The proposed slate remains editable: movements may be added, removed, or swapped
+before it is accepted, including beyond the automatic target.
 Saving an edit creates a new immutable profile and complex version. The demo is
 labelled as requiring review and cannot invent catalog exercises for a missing
 muscle.
@@ -79,9 +81,24 @@ production profile and complex library are explicitly reviewed.
 ## Readiness before difficulty
 
 Observed muscle readiness is authoritative for future scheduling. Difficulty
-is a coarse same-day session-cost and recovery-prediction hint only; it never
+is recovery context and a recovery-prediction hint only; it never
 makes work eligible for an unrecovered muscle. An easy hamstring curl is held
 when hamstrings are unrecovered after an SLDL exposure.
+
+There is no global difficulty-point budget. The hard composition rule is
+specific: a hard quad movement and a hard hamstring movement are not placed in
+the same workout. Other hard combinations remain eligible when their muscles
+are recovered and their configured caps fit.
+
+The first morning after a productive exposure is treated as a DOMS observation
+window, not proof of recovery: even a low-soreness answer cannot schedule that
+muscle again. Readiness is tested again beginning on the second calendar day,
+when delayed soreness commonly becomes more informative. A high-soreness or
+stop-pain answer continues to hold the muscle for as long as it is reported.
+This observation window is based on direct work only: secondary loading from
+chest does not bar triceps the next day, and secondary loading from back does
+not bar biceps. Shoulders are explicitly eligible on consecutive days when
+their current readiness is clear; soreness and pain answers still override.
 
 Completed Rotation and ad hoc sets contribute to the muscle load/recovery
 ledger. Ad hoc volume feedback is retained and may contribute conservatively to

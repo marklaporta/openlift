@@ -5,6 +5,16 @@ final class SwapExerciseUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testAppOpensOnWorkoutTab() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["OPENLIFT_UI_TESTING"]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Workout"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Log Workout"].exists)
+    }
+
     func testSwapExerciseCanSwitchToDifferentMuscleGroup() throws {
         let app = XCUIApplication()
         app.launchArguments += ["OPENLIFT_UI_TESTING"]
@@ -41,10 +51,11 @@ final class SwapExerciseUITests: XCTestCase {
         app.launchArguments += ["OPENLIFT_UI_TESTING"]
         app.launch()
 
+        app.tabBars.buttons["Log"].tap()
         XCTAssertTrue(app.navigationBars["Log Workout"].waitForExistence(timeout: 5))
 
         let createButton = app.buttons["Create New Exercise"].firstMatch
-        XCTAssertTrue(createButton.waitForExistence(timeout: 5))
+        scrollToElement(createButton, in: app)
         createButton.tap()
 
         XCTAssertTrue(app.navigationBars["New Exercise"].waitForExistence(timeout: 5))
@@ -166,6 +177,24 @@ final class SwapExerciseUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Proposed Plan"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["UI Test Chest"].waitForExistence(timeout: 5))
+        let addMovement = app.buttons["adaptive.addMovement"]
+        scrollToElement(addMovement, in: app)
+        addMovement.tap()
+        XCTAssertTrue(app.navigationBars["Add Movement"].waitForExistence(timeout: 5))
+        let addMusclePicker = app.buttons["swap.musclePicker"].firstMatch
+        addMusclePicker.tap()
+        let addBiceps = app.buttons["Biceps"].firstMatch
+        XCTAssertTrue(addBiceps.waitForExistence(timeout: 5))
+        addBiceps.tap()
+        let addedMovement = app.buttons["Incline Curl"].firstMatch
+        XCTAssertTrue(addedMovement.waitForExistence(timeout: 5))
+        addedMovement.tap()
+        XCTAssertTrue(app.staticTexts["Incline Curl"].waitForExistence(timeout: 5))
+        let removeAdded = app.buttons["Remove Incline Curl"].firstMatch
+        scrollToElement(removeAdded, in: app)
+        removeAdded.tap()
+        XCTAssertFalse(app.buttons["Remove Incline Curl"].exists)
+
         let proposedSwap = app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH %@", "Substitute ")
         ).firstMatch
@@ -233,6 +262,7 @@ final class SwapExerciseUITests: XCTestCase {
         app.launchArguments += ["OPENLIFT_UI_TESTING"]
         app.launch()
 
+        app.tabBars.buttons["Log"].tap()
         XCTAssertTrue(app.navigationBars["Log Workout"].waitForExistence(timeout: 10))
 
         let weightField = app.textFields["Weight"].firstMatch
