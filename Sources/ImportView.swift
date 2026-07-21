@@ -6,9 +6,8 @@ struct ImportView: View {
     @Query private var exercises: [Exercise]
     @Query private var activeCycles: [ActiveCycleInstance]
     @Query private var templates: [CycleTemplate]
-    @Query private var sessions: [Session]
 
-    @State private var importResult: ImportResult?
+    @State private var importResult: BootstrapDataService.WorkoutImportResult?
     @State private var importError: String?
     @State private var showingManualWorkout = false
 
@@ -187,68 +186,15 @@ struct ImportView: View {
         }
     }
 
-    private func importMissingWorkoutExports() throws -> ImportResult {
+    private func importMissingWorkoutExports() throws -> BootstrapDataService.WorkoutImportResult {
         guard let cycle = activeCycles.first else {
             throw ImportError.noActiveCycle
         }
-
-        let exports = BootstrapDataService.allExportSummaries()
-        var existingSessionIds = Set(sessions.map { $0.id.uuidString.uppercased() })
-        let exercisesByName = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name.lowercased(), $0) })
-        var result = ImportResult()
-
-        for export in exports {
-            let exportSessionId = export.session_id.uppercased()
-            guard !existingSessionIds.contains(exportSessionId) else {
-                result.skippedExisting += 1
-                continue
-            }
-            guard let sessionUUID = UUID(uuidString: export.session_id),
-                  let finishedAt = SessionExportService.parseExportDate(export.date) else {
-                continue
-            }
-
-            let imported = Session(
-                id: sessionUUID,
-                cycleInstanceId: cycle.id,
-                cycleDayIndex: export.cycle_day_index,
-                cycleNameSnapshot: export.cycle_name,
-                dayLabelSnapshot: export.cycle_name == "Off-Schedule" ? "Off-Schedule" : "Day \(export.cycle_day_index + 1)",
-                createdAt: finishedAt.addingTimeInterval(-60),
-                finishedAt: finishedAt,
-                status: .completed,
-                exportStatus: .success
-            )
-            try imported.validate()
-            modelContext.insert(imported)
-
-            for exportExercise in export.exercises {
-                guard let exercise = exercisesByName[exportExercise.exercise_name.lowercased()] else {
-                    result.skippedUnknownExercises += 1
-                    continue
-                }
-                for set in exportExercise.sets where set.reps > 0 {
-                    let entry = SetEntry(
-                        sessionId: imported.id,
-                        exerciseId: exercise.id,
-                        setIndex: set.set_index,
-                        weight: set.weight,
-                        reps: set.reps,
-                        isLocked: true
-                    )
-                    try entry.validate()
-                    modelContext.insert(entry)
-                }
-            }
-
-            existingSessionIds.insert(exportSessionId)
-            result.imported += 1
-        }
-
-        if modelContext.hasChanges {
-            try modelContext.save()
-        }
-        return result
+        return try BootstrapDataService.reconcileWorkoutExports(
+            BootstrapDataService.allExportSummaries(),
+            cycle: cycle,
+            modelContext: modelContext
+        )
     }
 }
 
@@ -385,12 +331,6 @@ private struct ManualSetDraft: Identifiable {
     let id = UUID()
     var weight: Double = 0
     var reps: Int = 0
-}
-
-private struct ImportResult {
-    var imported = 0
-    var skippedExisting = 0
-    var skippedUnknownExercises = 0
 }
 
 private enum ImportError: LocalizedError {

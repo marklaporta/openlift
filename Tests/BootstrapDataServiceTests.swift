@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import OpenLift
 
 final class BootstrapDataServiceTests: XCTestCase {
@@ -385,6 +386,158 @@ final class BootstrapDataServiceTests: XCTestCase {
                 "Leg Curl",
             ]
         )
+    }
+
+    func testWorkoutExportReconciliationCompletesPartialAdHocImportAndIsIdempotent() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV3.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let inclinePress = try XCTUnwrap(catalog.first { $0.name == "Incline Dumbbell Press" })
+        let sessionId = UUID(uuidString: "8DC5D239-F5FB-4E0F-B181-DF1F8EA5B52B")!
+        let cycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 2)
+        let partialSession = Session(
+            id: sessionId,
+            cycleInstanceId: cycle.id,
+            cycleDayIndex: 0,
+            cycleNameSnapshot: "Return Session",
+            dayLabelSnapshot: "Day 1",
+            createdAt: Date(timeIntervalSince1970: 1_774_228_340),
+            finishedAt: Date(timeIntervalSince1970: 1_774_228_400),
+            status: .completed,
+            exportStatus: .success
+        )
+        context.insert(cycle)
+        context.insert(partialSession)
+        context.insert(SetEntry(
+            sessionId: sessionId,
+            exerciseId: inclinePress.id,
+            setIndex: 1,
+            weight: 60,
+            reps: 9,
+            isLocked: true
+        ))
+        try context.save()
+
+        let payload = SessionExportService.ExportPayload(
+            session_id: sessionId.uuidString,
+            cycle_name: "Return Session",
+            cycle_day_index: 0,
+            date: "2026-07-20T12:00:00-07:00",
+            exercises: [
+                .init(exercise_name: "Belt Squat", muscle: "quads", sets: [.init(set_index: 1, weight: 185, reps: 9)], volume_feedback: "tooLittle"),
+                .init(exercise_name: "Incline Dumbbell Press", muscle: "chest", sets: [.init(set_index: 1, weight: 60, reps: 9)], volume_feedback: "tooLittle"),
+                .init(exercise_name: "Bayesian Curl", muscle: "biceps", sets: [.init(set_index: 1, weight: 24, reps: 9)], volume_feedback: "tooLittle"),
+                .init(exercise_name: "Cable Lateral Raise", muscle: "sideDelts", sets: [.init(set_index: 1, weight: 12, reps: 12)], volume_feedback: "tooLittle")
+            ],
+            workout_kind: "ad_hoc"
+        )
+
+        let result = try BootstrapDataService.reconcileWorkoutExports(
+            [payload],
+            cycle: cycle,
+            modelContext: context
+        )
+        XCTAssertEqual(result.imported, 0)
+        XCTAssertEqual(result.skippedExisting, 1)
+        XCTAssertEqual(result.skippedUnknownExercises, 0)
+        XCTAssertEqual(cycle.currentDayIndex, 2)
+        XCTAssertEqual(partialSession.dayLabelSnapshot, "Off-Schedule")
+
+        let exercises = try context.fetch(FetchDescriptor<Exercise>())
+        let exercisesById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0.name) })
+        let importedSets = try context.fetch(FetchDescriptor<SetEntry>())
+            .filter { $0.sessionId == sessionId }
+        let valuesByName = Dictionary(uniqueKeysWithValues: importedSets.compactMap { entry in
+            exercisesById[entry.exerciseId].map { ($0, (entry.weight, entry.reps, entry.isLocked)) }
+        })
+        XCTAssertEqual(importedSets.count, 4)
+        XCTAssertEqual(valuesByName["Belt Squat"]?.0, 185)
+        XCTAssertEqual(valuesByName["Belt Squat"]?.1, 9)
+        XCTAssertEqual(valuesByName["Incline Dumbbell Press"]?.0, 60)
+        XCTAssertEqual(valuesByName["Incline Dumbbell Press"]?.1, 9)
+        XCTAssertEqual(valuesByName["Bayesian Curl"]?.0, 24)
+        XCTAssertEqual(valuesByName["Bayesian Curl"]?.1, 9)
+        XCTAssertEqual(valuesByName["Cable Lateral Raise"]?.0, 12)
+        XCTAssertEqual(valuesByName["Cable Lateral Raise"]?.1, 12)
+        XCTAssertTrue(valuesByName.values.allSatisfy(\.2))
+
+        let feedback = try context.fetch(FetchDescriptor<AdHocExerciseFeedback>())
+            .filter { $0.sessionId == sessionId }
+        XCTAssertEqual(feedback.count, 4)
+        XCTAssertTrue(feedback.allSatisfy { $0.rating == .tooLittle })
+
+        _ = try BootstrapDataService.reconcileWorkoutExports(
+            [payload],
+            cycle: cycle,
+            modelContext: context
+        )
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).filter { $0.id == sessionId }.count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<SetEntry>()).filter { $0.sessionId == sessionId }.count, 4)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<AdHocExerciseFeedback>()).filter { $0.sessionId == sessionId }.count, 4)
+        XCTAssertEqual(cycle.currentDayIndex, 2)
+    }
+
+    func testAdaptiveRolloutImportsWorkoutAndStartsReviewedAdaptiveProgramOnWorkoutDate() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV3.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let cycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 2)
+        context.insert(cycle)
+        try context.save()
+
+        let sessionId = UUID(uuidString: "8DC5D239-F5FB-4E0F-B181-DF1F8EA5B52B")!
+        let payload = SessionExportService.ExportPayload(
+            session_id: sessionId.uuidString,
+            cycle_name: "Return Session",
+            cycle_day_index: 0,
+            date: "2026-07-20T12:00:00-07:00",
+            exercises: [
+                .init(
+                    exercise_name: "Belt Squat",
+                    muscle: "quads",
+                    sets: [.init(set_index: 1, weight: 185, reps: 9)],
+                    volume_feedback: "tooLittle"
+                )
+            ],
+            workout_kind: "ad_hoc"
+        )
+
+        let result = try BootstrapDataService.prepareAdaptiveRollout(
+            exports: [payload],
+            cycle: cycle,
+            modelContext: context
+        )
+
+        XCTAssertEqual(result.imported, 1)
+        XCTAssertEqual(cycle.currentDayIndex, 2)
+        XCTAssertEqual(
+            TrainingModeService.resolvedMode(
+                preferences: try context.fetch(FetchDescriptor<TrainingPreference>())
+            ),
+            .adaptive
+        )
+        let program = try XCTUnwrap(
+            AdaptiveProgramService.activeProgram(
+                from: try context.fetch(FetchDescriptor<AdaptiveProgram>())
+            )
+        )
+        XCTAssertEqual(program.name, "Adaptive Floating — Initial")
+        XCTAssertTrue(program.isReviewedForUse)
+        XCTAssertEqual(program.createdAt, try XCTUnwrap(SessionExportService.parseExportDate(payload.date)))
+        XCTAssertEqual(
+            program.muscleRules.filter(\.isEnabled).sorted { $0.priorityRank < $1.priorityRank }.map(\.muscle),
+            MuscleGroup.initialAdaptiveRankOrder
+        )
+        XCTAssertEqual(Set(program.complexes.filter(\.isEnabled).map(\.primaryMuscle)), Set(MuscleGroup.initialAdaptiveRankOrder))
+
+        _ = try BootstrapDataService.prepareAdaptiveRollout(
+            exports: [payload],
+            cycle: cycle,
+            modelContext: context
+        )
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveProgram>()), 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).filter { $0.id == sessionId }.count, 1)
     }
 
     private func starterExercises() -> [Exercise] {

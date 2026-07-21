@@ -336,63 +336,11 @@ struct WorkoutView: View {
     }
 
     private func hydrateMissingCompletedSessionsFromExports(cycle: ActiveCycleInstance) throws {
-        let exports = BootstrapDataService.allExportSummaries()
-        guard !exports.isEmpty else { return }
-
-        var existingSessionIds = Set(sessions.map { $0.id.uuidString.uppercased() })
-        let exercisesByName = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name.lowercased(), $0) })
-
-        for export in exports {
-            let exportSessionId = export.session_id.uppercased()
-            guard !existingSessionIds.contains(exportSessionId) else { continue }
-            guard let sessionUUID = UUID(uuidString: export.session_id),
-                  let finishedAt = SessionExportService.parseExportDate(export.date) else { continue }
-
-            let recovered = Session(
-                id: sessionUUID,
-                cycleInstanceId: cycle.id,
-                cycleDayIndex: export.cycle_day_index,
-                cycleNameSnapshot: export.cycle_name,
-                dayLabelSnapshot: export.workout_kind == "ad_hoc"
-                    ? "Off-Schedule"
-                    : "Day \(export.cycle_day_index + 1)",
-                createdAt: finishedAt.addingTimeInterval(-60),
-                finishedAt: finishedAt,
-                status: .completed,
-                exportStatus: .success
-            )
-            try recovered.validate()
-            modelContext.insert(recovered)
-
-            for exportExercise in export.exercises {
-                guard let exercise = exercisesByName[exportExercise.exercise_name.lowercased()] else { continue }
-                for set in exportExercise.sets where set.reps > 0 {
-                    let entry = SetEntry(
-                        sessionId: recovered.id,
-                        exerciseId: exercise.id,
-                        setIndex: set.set_index,
-                        weight: set.weight,
-                        reps: set.reps,
-                        isLocked: true
-                    )
-                    try entry.validate()
-                    modelContext.insert(entry)
-                }
-                if let raw = exportExercise.volume_feedback,
-                   let rating = ComplexFeedbackRating(rawValue: raw) {
-                    modelContext.insert(
-                        AdHocExerciseFeedback(
-                            sessionId: recovered.id,
-                            exerciseId: exercise.id,
-                            rating: rating,
-                            createdAt: finishedAt
-                        )
-                    )
-                }
-            }
-
-            existingSessionIds.insert(exportSessionId)
-        }
+        try BootstrapDataService.reconcileWorkoutExports(
+            BootstrapDataService.allExportSummaries(),
+            cycle: cycle,
+            modelContext: modelContext
+        )
     }
 
     private func ensureDraftSession() throws {
@@ -461,7 +409,7 @@ struct WorkoutView: View {
                     cycleName: template.name,
                     exercises: exercises,
                     setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
-                    requireICloudMirror: true
+                    requireICloudMirror: !AppRuntime.isUITesting
                 )
                 session.exportStatus = .success
                 SessionExportService.deleteDraftSnapshot(sessionId: session.id)

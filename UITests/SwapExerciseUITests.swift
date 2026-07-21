@@ -74,7 +74,10 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(finishButton.waitForExistence(timeout: 5))
         finishButton.tap()
 
-        XCTAssertTrue(app.staticTexts["Lower A · Draft session"].waitForExistence(timeout: 10))
+        // The list intentionally preserves its scroll position after the next
+        // draft replaces the completed workout, so assert on a visible Lower A
+        // exercise instead of an off-screen section header.
+        XCTAssertTrue(app.staticTexts["Leg Press"].waitForExistence(timeout: 10))
     }
 
     func testTrainingModeSwitchPreservesRotationDraft() throws {
@@ -160,6 +163,22 @@ final class SwapExerciseUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Proposed Plan"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["UI Test Chest"].waitForExistence(timeout: 5))
+        let proposedSwap = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Substitute ")
+        ).firstMatch
+        XCTAssertTrue(proposedSwap.waitForExistence(timeout: 5))
+        proposedSwap.tap()
+        XCTAssertTrue(app.navigationBars["Swap Exercise"].waitForExistence(timeout: 5))
+        let musclePicker = app.buttons["swap.musclePicker"].firstMatch
+        XCTAssertTrue(musclePicker.waitForExistence(timeout: 5))
+        musclePicker.tap()
+        let biceps = app.buttons["Biceps"].firstMatch
+        XCTAssertTrue(biceps.waitForExistence(timeout: 5))
+        biceps.tap()
+        let proposedReplacement = app.buttons["Incline Curl"].firstMatch
+        XCTAssertTrue(proposedReplacement.waitForExistence(timeout: 5))
+        proposedReplacement.tap()
+        XCTAssertTrue(app.staticTexts["Incline Curl"].waitForExistence(timeout: 5))
         let useWorkout = app.buttons["adaptive.useWorkout"]
         scrollToElement(useWorkout, in: app)
         useWorkout.tap()

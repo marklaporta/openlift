@@ -25,6 +25,58 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(proposal.status, .proposed)
     }
 
+    func testAnyProposedExerciseCanBeSubstitutedBeforeFreeze() throws {
+        let (context, _) = makeContext()
+        let (program, exercise) = makeProgram()
+        let replacement = Exercise(
+            name: "Replacement Row",
+            primaryMuscle: .back,
+            type: .compound,
+            equipment: .cable
+        )
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: readyInputs,
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: exercise, check: check)
+        context.insert(check)
+        context.insert(plan)
+        context.insert(replacement)
+        try context.save()
+
+        let snapshot = try XCTUnwrap(plan.complexes.first?.exercises.first)
+        let originalExerciseId = snapshot.exerciseId
+        try AdaptiveWorkoutService.substituteProposedExercise(
+            plan: plan,
+            occurrenceId: snapshot.occurrenceId,
+            to: replacement,
+            modelContext: context
+        )
+
+        XCTAssertEqual(plan.status, .proposed)
+        XCTAssertNil(plan.sessionId)
+        XCTAssertEqual(snapshot.exerciseId, replacement.id)
+        XCTAssertEqual(snapshot.exerciseName, replacement.name)
+        XCTAssertEqual(snapshot.primaryMuscle, .back)
+        XCTAssertNil(snapshot.secondaryMuscle)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutSession>()), 0)
+
+        let override = try XCTUnwrap(context.fetch(FetchDescriptor<AdaptiveOverrideEvent>()).first)
+        XCTAssertEqual(override.kind, .substituteExercise)
+        XCTAssertEqual(override.occurrenceId, snapshot.occurrenceId)
+        XCTAssertEqual(override.originalExerciseId, originalExerciseId)
+        XCTAssertEqual(override.replacementExerciseId, replacement.id)
+
+        let session = try AdaptiveWorkoutService.freeze(plan: plan, modelContext: context)
+        let entries = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+            .filter { $0.adaptiveSessionId == session.id }
+        XCTAssertFalse(entries.isEmpty)
+        XCTAssertTrue(entries.allSatisfy { $0.exerciseId == replacement.id })
+    }
+
     func testFreezeSnapshotsPlanAndDefinitionEditsCannotRewriteIt() throws {
         let (context, container) = makeContext()
         let (program, exercise) = makeProgram()
