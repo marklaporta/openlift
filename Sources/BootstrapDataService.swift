@@ -222,7 +222,7 @@ enum BootstrapDataService {
         let fileManager = FileManager.default
         var directories: [URL] = []
 
-        if let iCloudDir = fileManager.url(forUbiquityContainerIdentifier: nil)?
+        if let iCloudDir = SessionExportService.iCloudContainerURL()?
             .appendingPathComponent("Documents", isDirectory: true)
             .appendingPathComponent("OpenLift/exports", isDirectory: true) {
             directories.append(iCloudDir)
@@ -311,7 +311,9 @@ enum BootstrapDataService {
                     createdAt: finishedAt.addingTimeInterval(-60),
                     finishedAt: finishedAt,
                     status: .completed,
-                    exportStatus: .success
+                    // The import may have come from the local recovery mirror.
+                    // Upload success is established only by the ubiquitous item metadata.
+                    exportStatus: .pending
                 )
                 try session.validate()
                 modelContext.insert(session)

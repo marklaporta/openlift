@@ -68,12 +68,22 @@ enum OpenLiftSchemaV4: VersionedSchema {
     ]
 }
 
+/// Adds durable iCloud export diagnostics without changing workout entities.
+enum OpenLiftSchemaV5: VersionedSchema {
+    static let versionIdentifier = Schema.Version(5, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV4.models + [
+        ExportDiagnostic.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
         OpenLiftSchemaV2.self,
         OpenLiftSchemaV3.self,
-        OpenLiftSchemaV4.self
+        OpenLiftSchemaV4.self,
+        OpenLiftSchemaV5.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -88,6 +98,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV3.self,
             toVersion: OpenLiftSchemaV4.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV4.self,
+            toVersion: OpenLiftSchemaV5.self
         )
     ]
 }

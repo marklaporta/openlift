@@ -298,7 +298,7 @@ struct WorkoutView: View {
             createdAt: finishedAt.addingTimeInterval(-60),
             finishedAt: finishedAt,
             status: .completed,
-            exportStatus: .success
+            exportStatus: .pending
         )
         try completed.validate()
         modelContext.insert(completed)
@@ -404,18 +404,19 @@ struct WorkoutView: View {
             }
 
             do {
-                try SessionExportService.export(
+                let exportOutcome = try SessionExportService.exportAndTrack(
                     session: session,
                     cycleName: template.name,
                     exercises: exercises,
                     setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
-                    requireICloudMirror: !AppRuntime.isUITesting
+                    requireICloudMirror: !AppRuntime.isUITesting,
+                    modelContext: modelContext
                 )
-                session.exportStatus = .success
-                SessionExportService.deleteDraftSnapshot(sessionId: session.id)
+                if exportOutcome.status == .success {
+                    SessionExportService.deleteDraftSnapshot(sessionId: session.id)
+                }
             } catch {
                 session.exportStatus = .failed
-                SessionExportService.scheduleBackgroundExportRetry()
                 errorMessage = error.localizedDescription
             }
 
@@ -766,7 +767,7 @@ struct WorkoutView: View {
         let fileManager = FileManager.default
         var directories: [URL] = []
 
-        if let iCloudRoot = fileManager.url(forUbiquityContainerIdentifier: nil)?
+        if let iCloudRoot = SessionExportService.iCloudContainerURL()?
             .appendingPathComponent("Documents", isDirectory: true)
             .appendingPathComponent("OpenLift/exports", isDirectory: true) {
             directories.append(iCloudRoot)

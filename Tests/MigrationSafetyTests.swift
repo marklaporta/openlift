@@ -40,6 +40,55 @@ private enum UnsupportedMigrationPlan: SchemaMigrationPlan {
 }
 
 final class MigrationSafetyTests: XCTestCase {
+    func testV4StoreMigratesToV5WithoutChangingWorkoutData() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let storeURL = fixture.working.appendingPathComponent("default.store")
+        let sessionId = UUID()
+
+        do {
+            let v4Schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
+            let v4Container = try ModelContainer(
+                for: v4Schema,
+                configurations: [
+                    ModelConfiguration(
+                        "V4ExportDiagnosticFixture",
+                        schema: v4Schema,
+                        url: storeURL,
+                        cloudKitDatabase: .none
+                    )
+                ]
+            )
+            let v4Context = ModelContext(v4Container)
+            v4Context.insert(Session(
+                id: sessionId,
+                cycleInstanceId: UUID(),
+                cycleDayIndex: 0,
+                finishedAt: Date(timeIntervalSince1970: 1_774_228_400),
+                status: .completed,
+                exportStatus: .success
+            ))
+            try v4Context.save()
+        }
+
+        let v5Schema = Schema(versionedSchema: OpenLiftSchemaV5.self)
+        let startup = OpenLiftModelContainerFactory.makePersistent(
+            schema: v5Schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: ModelConfiguration(
+                "V5ExportDiagnosticFixture",
+                schema: v5Schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+        )
+
+        XCTAssertNil(startup.issue)
+        let v5Context = ModelContext(startup.container)
+        XCTAssertEqual(try v5Context.fetch(FetchDescriptor<Session>()).map(\.id), [sessionId])
+        XCTAssertEqual(try v5Context.fetchCount(FetchDescriptor<ExportDiagnostic>()), 0)
+    }
+
     func testBackedUpDeviceStoreMigratesOnWorkingCopyWhenOptedIn() throws {
         let documentsDirectory = try XCTUnwrap(
             FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
@@ -77,13 +126,13 @@ final class MigrationSafetyTests: XCTestCase {
         )
         let legacyCounts = try legacyEntityCounts(in: legacyContainer)
 
-        let v4Schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
+        let v5Schema = Schema(versionedSchema: OpenLiftSchemaV5.self)
         let startup = OpenLiftModelContainerFactory.makePersistent(
-            schema: v4Schema,
+            schema: v5Schema,
             migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configuration: ModelConfiguration(
-                "CopiedDeviceV4Readback",
-                schema: v4Schema,
+                "CopiedDeviceV5Readback",
+                schema: v5Schema,
                 url: fixture.working.appendingPathComponent("default.store"),
                 cloudKitDatabase: .none
             )
@@ -99,7 +148,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try persistentStoreManifest(in: suppliedBackup), suppliedManifestBefore)
     }
 
-    func testUnversionedV1FixtureMigratesToV4AndRollsBack() throws {
+    func testUnversionedV1FixtureMigratesToV5AndRollsBack() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
@@ -110,7 +159,7 @@ final class MigrationSafetyTests: XCTestCase {
         let sourceManifestBefore = try persistentStoreManifest(in: fixture.source)
         XCTAssertFalse(sourceManifestBefore.isEmpty)
 
-        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV4.self)
+        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV5.self)
         let workingStoreURL = fixture.working.appendingPathComponent("default.store")
         let workingConfiguration = ModelConfiguration(
             "MigrationFixture",
@@ -209,6 +258,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdHocExerciseFeedback>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveOverrideEvent>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveExerciseSelectionPreference>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ExportDiagnostic>()), 0)
     }
 
     private func createUnversionedV1Fixture(at storeURL: URL) throws {

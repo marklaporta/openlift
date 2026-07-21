@@ -36,7 +36,8 @@
 	<true/>
 	<key>NSUbiquitousContainers</key>
 	<dict>
-		<key>$(OPENLIFT_ICLOUD_CONTAINER)</key>
+		<!-- Build settings are not expanded in property-list dictionary keys. -->
+		<key>iCloud.com.mark.openlift</key>
 		<dict>
 			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
 			<true/>

@@ -94,6 +94,274 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(payload.exercises.first?.sets.count, 2)
     }
 
+    func testConfiguredICloudIdentifierRequiresExpandedValue() {
+        XCTAssertEqual(
+            SessionExportService.configuredContainerIdentifier(
+                infoDictionary: ["OpenLiftICloudContainerIdentifier": "iCloud.com.mark.openlift"]
+            ),
+            "iCloud.com.mark.openlift"
+        )
+        XCTAssertNil(
+            SessionExportService.configuredContainerIdentifier(
+                infoDictionary: ["OpenLiftICloudContainerIdentifier": "$(OPENLIFT_ICLOUD_CONTAINER)"]
+            )
+        )
+    }
+
+    func testBuiltInfoPlistRegistersTheConfiguredPublicContainer() throws {
+        let containers = try XCTUnwrap(
+            Bundle.main.object(forInfoDictionaryKey: "NSUbiquitousContainers") as? [String: Any]
+        )
+        XCTAssertNotNil(containers["iCloud.com.mark.openlift"])
+        XCTAssertNil(containers["$(OPENLIFT_ICLOUD_CONTAINER)"])
+    }
+
+    func testICloudExportDirectoryUsesPublicDocumentsScope() {
+        let container = URL(fileURLWithPath: "/ubiquity/iCloud.com.mark.openlift", isDirectory: true)
+        XCTAssertEqual(
+            SessionExportService.exportDirectory(
+                containerURL: container,
+                relativeSubdirectory: "exports"
+            ).path,
+            "/ubiquity/iCloud.com.mark.openlift/Documents/OpenLift/exports"
+        )
+    }
+
+    func testUploadedUbiquitousWriteIsIdempotentAndSuccessful() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openlift-export-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var coordinatedWriteCount = 0
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: "iCloud.com.mark.openlift",
+            iCloudContainerURL: root.appendingPathComponent("iCloud", isDirectory: true),
+            localDocumentsURL: root.appendingPathComponent("Local", isDirectory: true),
+            coordinatedWrite: { data, url in
+                coordinatedWriteCount += 1
+                try data.write(to: url, options: [.atomic])
+            },
+            ubiquityMetadata: { _ in
+                .init(
+                    isUbiquitousItem: true,
+                    isUploaded: true,
+                    isUploading: false,
+                    uploadingErrorDescription: nil
+                )
+            }
+        )
+        let data = Data("payload".utf8)
+
+        let first = try SessionExportService.writeExportData(
+            data: data,
+            relativeSubdirectory: "exports",
+            filename: "workout-idempotent.json",
+            requireICloudMirror: true,
+            environment: environment
+        )
+        let second = try SessionExportService.writeExportData(
+            data: data,
+            relativeSubdirectory: "exports",
+            filename: "workout-idempotent.json",
+            requireICloudMirror: true,
+            environment: environment
+        )
+
+        XCTAssertEqual(first.status, .success)
+        XCTAssertEqual(second.status, .success)
+        XCTAssertEqual(coordinatedWriteCount, 1)
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(first.iCloudDestinationURL)), data)
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(first.localMirrorURL)), data)
+    }
+
+    func testLocalRecoveryMirrorCannotReportICloudSuccess() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openlift-fallback-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: "iCloud.com.mark.openlift",
+            iCloudContainerURL: nil,
+            localDocumentsURL: root,
+            coordinatedWrite: { _, _ in XCTFail("No iCloud write should be attempted") },
+            ubiquityMetadata: { _ in
+                XCTFail("No ubiquitous metadata should be requested")
+                return .init(
+                    isUbiquitousItem: false,
+                    isUploaded: false,
+                    isUploading: false,
+                    uploadingErrorDescription: nil
+                )
+            }
+        )
+
+        let outcome = try SessionExportService.writeExportData(
+            data: Data("recovery".utf8),
+            relativeSubdirectory: "exports",
+            filename: "workout-pending.json",
+            requireICloudMirror: true,
+            environment: environment
+        )
+
+        XCTAssertEqual(outcome.status, .pending)
+        XCTAssertNotNil(outcome.localMirrorURL)
+        XCTAssertNil(outcome.iCloudDestinationURL)
+        XCTAssertTrue(outcome.detail.contains("container unavailable"))
+    }
+
+    func testWriteFailsWhenNeitherICloudNorLocalDestinationIsWritable() {
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: "iCloud.com.mark.openlift",
+            iCloudContainerURL: nil,
+            localDocumentsURL: nil,
+            coordinatedWrite: { _, _ in },
+            ubiquityMetadata: { _ in
+                .init(isUbiquitousItem: false, isUploaded: false, isUploading: false, uploadingErrorDescription: nil)
+            }
+        )
+
+        XCTAssertThrowsError(
+            try SessionExportService.writeExportData(
+                data: Data("unwritable".utf8),
+                relativeSubdirectory: "exports",
+                filename: "workout-unwritable.json",
+                requireICloudMirror: true,
+                environment: environment
+            )
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Could not write export"))
+        }
+    }
+
+    func testNonUbiquitousDestinationAndUploadErrorAreFailures() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openlift-invalid-cloud-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func environment(metadata: SessionExportService.UbiquityMetadata) -> SessionExportService.ExportEnvironment {
+            SessionExportService.ExportEnvironment(
+                containerIdentifier: "iCloud.com.mark.openlift",
+                iCloudContainerURL: root.appendingPathComponent(UUID().uuidString, isDirectory: true),
+                localDocumentsURL: root.appendingPathComponent("Local", isDirectory: true),
+                coordinatedWrite: { data, url in try data.write(to: url, options: [.atomic]) },
+                ubiquityMetadata: { _ in metadata }
+            )
+        }
+
+        let notUbiquitous = try SessionExportService.writeExportData(
+            data: Data("one".utf8),
+            relativeSubdirectory: "exports",
+            filename: "not-ubiquitous.json",
+            requireICloudMirror: true,
+            environment: environment(metadata: .init(
+                isUbiquitousItem: false,
+                isUploaded: false,
+                isUploading: false,
+                uploadingErrorDescription: nil
+            ))
+        )
+        let uploadError = try SessionExportService.writeExportData(
+            data: Data("two".utf8),
+            relativeSubdirectory: "exports",
+            filename: "upload-error.json",
+            requireICloudMirror: true,
+            environment: environment(metadata: .init(
+                isUbiquitousItem: true,
+                isUploaded: false,
+                isUploading: false,
+                uploadingErrorDescription: "Network unavailable"
+            ))
+        )
+
+        XCTAssertEqual(notUbiquitous.status, .failed)
+        XCTAssertTrue(notUbiquitous.detail.contains("not an iCloud ubiquitous item"))
+        XCTAssertEqual(uploadError.status, .failed)
+        XCTAssertTrue(uploadError.detail.contains("Network unavailable"))
+    }
+
+    @MainActor
+    func testPendingCompletedExportRetriesToVerifiedSuccessWithoutDuplicateWrite() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV5.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let exercise = Exercise(name: "Retry Row", primaryMuscle: .back, type: .compound, equipment: .cable)
+        let session = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            finishedAt: Date(timeIntervalSince1970: 1_774_228_400),
+            status: .completed,
+            exportStatus: .pending
+        )
+        context.insert(exercise)
+        context.insert(session)
+        context.insert(SetEntry(
+            sessionId: session.id,
+            exerciseId: exercise.id,
+            setIndex: 1,
+            weight: 100,
+            reps: 8,
+            isLocked: true
+        ))
+        try context.save()
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openlift-retry-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var coordinatedWriteCount = 0
+        var metadataReadCount = 0
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: "iCloud.com.mark.openlift",
+            iCloudContainerURL: root.appendingPathComponent("iCloud", isDirectory: true),
+            localDocumentsURL: root.appendingPathComponent("Local", isDirectory: true),
+            coordinatedWrite: { data, url in
+                coordinatedWriteCount += 1
+                try data.write(to: url, options: [.atomic])
+            },
+            ubiquityMetadata: { _ in
+                metadataReadCount += 1
+                return .init(
+                    isUbiquitousItem: true,
+                    isUploaded: metadataReadCount > 1,
+                    isUploading: metadataReadCount == 1,
+                    uploadingErrorDescription: nil
+                )
+            }
+        )
+
+        XCTAssertEqual(
+            try SessionExportService.retryPendingCompletedSessionExports(
+                modelContext: context,
+                environment: environment
+            ),
+            0
+        )
+        XCTAssertEqual(session.exportStatus, .pending)
+        var diagnostic = try XCTUnwrap(context.fetch(FetchDescriptor<ExportDiagnostic>()).first)
+        XCTAssertEqual(diagnostic.status, .pending)
+        XCTAssertEqual(diagnostic.detail, "Uploading to iCloud Drive.")
+        XCTAssertEqual(coordinatedWriteCount, 1)
+
+        XCTAssertEqual(
+            try SessionExportService.retryPendingCompletedSessionExports(
+                modelContext: context,
+                environment: environment
+            ),
+            1
+        )
+        XCTAssertEqual(session.exportStatus, .success)
+        diagnostic = try XCTUnwrap(context.fetch(FetchDescriptor<ExportDiagnostic>()).first)
+        XCTAssertEqual(diagnostic.status, .success)
+        XCTAssertEqual(diagnostic.sessionId, session.id)
+        XCTAssertEqual(diagnostic.detail, "Uploaded to iCloud Drive.")
+        XCTAssertEqual(coordinatedWriteCount, 1)
+
+        XCTAssertEqual(
+            try SessionExportService.retryPendingCompletedSessionExports(
+                modelContext: context,
+                environment: environment
+            ),
+            0
+        )
+        XCTAssertEqual(coordinatedWriteCount, 1)
+    }
+
     func testParseExportDateAcceptsFractionalSeconds() throws {
         let parsed = try XCTUnwrap(SessionExportService.parseExportDate("2026-05-03T21:22:07.763664Z"))
         XCTAssertEqual(Int(parsed.timeIntervalSince1970), 1_777_843_327)

@@ -329,9 +329,6 @@ struct CycleView: View {
                         Text(program.name)
                             .font(.headline)
                         Spacer()
-                        Text("v\(program.version)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
                     }
                     Text("Planner target: \(program.globalMaxMovements) movements · hard quad/hamstring pairing blocked")
                         .font(.caption)
@@ -349,7 +346,7 @@ struct CycleView: View {
                 }
                 .accessibilityIdentifier("adaptive.editProfile")
             } else {
-                Text("No Adaptive profile has been saved. Create one or load the explicit starter proposal in the editor; no values are activated silently.")
+                Text("Create an Adaptive profile to generate workouts from readiness.")
                     .foregroundStyle(.secondary)
                 Button("Create Adaptive Profile") {
                     presentingNewAdaptiveProgram = true
@@ -359,16 +356,8 @@ struct CycleView: View {
             }
         }
 
-        Section("Muscle Scope") {
-            Text("Initial rank: Chest, Back, Triceps, Biceps, Shoulders, Quads, Hamstrings, Forearms, Glutes, Calves.")
-            Text("Your current shoulder exercise library is side-delt focused; future shoulder exercises use the same programming bucket.")
-            Text("Abs and Traps remain supported candidates but start disabled with no training-window requirement.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-
         Section("Exercise Selection") {
-            Text("Selection is configured per muscle. Alternate only uses exercises marked available; pinned muscles always use their selected foundation movement.")
+            Text("Choose how each muscle reuses exercises and which equipment is available.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             ForEach([MuscleGroup.chest, .quads, .hamstrings], id: \.self) { muscle in
@@ -571,7 +560,7 @@ private struct AdaptiveExerciseSelectionEditorView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Repeat latest keeps the most recently completed available movement. Alternate recent chooses a different available movement after the first exposure, then alternates recent choices within the same compound or isolation category. Pinned always uses one compound foundation exercise.")
+                    Text("Configure one muscle at a time.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -583,6 +572,9 @@ private struct AdaptiveExerciseSelectionEditorView: View {
                                 Text(mode.displayName).tag(mode)
                             }
                         }
+                        Text(selectionModeHelp(preference(for: muscle)?.mode ?? .repeatLast))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
                         if preference(for: muscle)?.mode == .pinned {
                             Picker("Foundation exercise", selection: pinnedBinding(for: muscle)) {
@@ -636,6 +628,14 @@ private struct AdaptiveExerciseSelectionEditorView: View {
 
     private func preference(for muscle: MuscleGroup) -> AdaptiveExerciseSelectionPreference? {
         preferences.first { $0.muscle == muscle }
+    }
+
+    private func selectionModeHelp(_ mode: AdaptiveExerciseSelectionMode) -> String {
+        switch mode {
+        case .repeatLast: "Reuse the latest available exercise."
+        case .rotateRecent: "Choose a different available exercise than last time."
+        case .pinned: "Always use the selected foundation exercise."
+        }
     }
 
     private func activeExercises(for muscle: MuscleGroup) -> [Exercise] {

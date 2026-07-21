@@ -220,14 +220,14 @@ struct HistoryView: View {
         }
 
         do {
-            try SessionExportService.export(
+            _ = try SessionExportService.exportAndTrack(
                 session: session,
                 cycleName: cycleName,
                 exercises: exercises,
                 setEntries: insertedEntries,
-                requireICloudMirror: true
+                requireICloudMirror: true,
+                modelContext: modelContext
             )
-            session.exportStatus = .success
             try modelContext.save()
             reloadExportedSessions()
         } catch {
@@ -418,7 +418,7 @@ private struct SessionRowView: View {
             VStack(alignment: .trailing, spacing: 4) {
                 Text("\(exerciseCount) exercises")
                     .font(.caption)
-                Text(session.exportStatus.rawValue)
+                Text(session.exportStatus.displayName)
                     .font(.caption2)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -441,7 +441,8 @@ private struct AdaptiveSessionRowView: View {
                 Text("Adaptive Floating")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text("\(plan?.complexes.reduce(0, { $0 + $1.exercises.count }) ?? 0) component movements")
+                let exerciseCount = plan?.complexes.reduce(0, { $0 + $1.exercises.count }) ?? 0
+                Text("\(exerciseCount) exercise\(exerciseCount == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("Adaptive")
@@ -452,7 +453,7 @@ private struct AdaptiveSessionRowView: View {
                     .clipShape(Capsule())
             }
             Spacer()
-            Text(session.exportStatus.rawValue)
+            Text(session.exportStatus.displayName)
                 .font(.caption2)
         }
     }
@@ -465,6 +466,7 @@ private struct AdaptiveSessionDetailView: View {
     @Query private var exercises: [Exercise]
     @Query private var feedback: [ComplexFeedback]
     @Query private var overrides: [AdaptiveOverrideEvent]
+    @Query private var exportDiagnostics: [ExportDiagnostic]
 
     let session: AdaptiveWorkoutSession
 
@@ -472,13 +474,22 @@ private struct AdaptiveSessionDetailView: View {
         plans.first(where: { $0.id == session.generatedPlanId })
     }
 
+    private var exportDiagnostic: ExportDiagnostic? {
+        exportDiagnostics.first { $0.sessionId == session.id && $0.sessionKind == .adaptive }
+    }
+
     var body: some View {
         List {
             Section("Summary") {
                 LabeledContent("Date") { Text(session.finishedAt ?? session.createdAt, style: .date) }
                 LabeledContent("Workout kind", value: "Adaptive")
-                LabeledContent("Export status", value: session.exportStatus.rawValue)
-                if let plan { LabeledContent("Planner", value: "v\(plan.plannerVersion)") }
+                LabeledContent("Export status", value: session.exportStatus.displayName)
+                if let exportDiagnostic {
+                    Text(exportDiagnostic.detail)
+                        .font(.caption)
+                        .foregroundStyle(exportDiagnostic.status == .failed ? .red : .secondary)
+                    LabeledContent("File", value: exportDiagnostic.filename)
+                }
             }
 
             if let plan {
@@ -593,6 +604,7 @@ private struct SessionDetailView: View {
     @Query private var templates: [CycleTemplate]
     @Query private var setEntries: [SetEntry]
     @Query private var adHocFeedback: [AdHocExerciseFeedback]
+    @Query private var exportDiagnostics: [ExportDiagnostic]
 
     let session: Session
     @State private var exportError: String?
@@ -610,7 +622,13 @@ private struct SessionDetailView: View {
                     Text(dayLabel)
                 }
                 LabeledContent("Export Status") {
-                    Text(session.exportStatus.rawValue)
+                    Text(session.exportStatus.displayName)
+                }
+                if let exportDiagnostic {
+                    Text(exportDiagnostic.detail)
+                        .font(.caption)
+                        .foregroundStyle(exportDiagnostic.status == .failed ? .red : .secondary)
+                    LabeledContent("File", value: exportDiagnostic.filename)
                 }
             }
 
@@ -630,7 +648,7 @@ private struct SessionDetailView: View {
                 }
             }
 
-            if session.exportStatus == .failed {
+            if session.exportStatus != .success {
                 Section {
                     Button("Retry Export") {
                         retryExport()
@@ -652,6 +670,10 @@ private struct SessionDetailView: View {
             activeCycles: activeCycles,
             templates: templates
         )
+    }
+
+    private var exportDiagnostic: ExportDiagnostic? {
+        exportDiagnostics.first { $0.sessionId == session.id && $0.sessionKind == .fixed }
     }
 
     private var dayLabel: String {
@@ -681,18 +703,17 @@ private struct SessionDetailView: View {
 
     private func retryExport() {
         do {
-            try SessionExportService.export(
+            _ = try SessionExportService.exportAndTrack(
                 session: session,
                 cycleName: cycleName,
                 exercises: exercises,
                 setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
-                requireICloudMirror: true
+                requireICloudMirror: true,
+                modelContext: modelContext
             )
-            session.exportStatus = .success
             try modelContext.save()
         } catch {
             session.exportStatus = .failed
-            SessionExportService.scheduleBackgroundExportRetry()
             exportError = error.localizedDescription
         }
     }
@@ -718,7 +739,7 @@ private struct ExportedSessionSummary: Identifiable {
         let fileManager = FileManager.default
         var directories: [URL] = []
 
-        if let iCloudRoot = fileManager.url(forUbiquityContainerIdentifier: nil)?
+        if let iCloudRoot = SessionExportService.iCloudContainerURL()?
             .appendingPathComponent("Documents", isDirectory: true)
             .appendingPathComponent("OpenLift/exports", isDirectory: true) {
             directories.append(iCloudRoot)

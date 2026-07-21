@@ -184,7 +184,7 @@ final class SwapExerciseUITests: XCTestCase {
         generatePlan.tap()
 
         XCTAssertTrue(app.staticTexts["Proposed Plan"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["UI Test Chest"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Chest"].waitForExistence(timeout: 5))
         let addMovement = app.buttons["adaptive.addMovement"]
         scrollToElement(addMovement, in: app)
         addMovement.tap()
@@ -229,7 +229,7 @@ final class SwapExerciseUITests: XCTestCase {
         scrollToElement(useWorkout, in: app)
         useWorkout.tap()
 
-        let frozenStatus = app.staticTexts["Frozen plan"]
+        let frozenStatus = app.staticTexts["Ready"]
         scrollToElement(frozenStatus, in: app)
         let weight = app.textFields["Weight"].firstMatch
         scrollToElement(weight, in: app)
@@ -245,7 +245,7 @@ final class SwapExerciseUITests: XCTestCase {
         let lock = app.buttons["adaptive.lockSet.1"].firstMatch
         scrollToElement(lock, in: app)
         lock.tap()
-        let inProgressStatus = app.staticTexts["In progress · frozen plan"]
+        let inProgressStatus = app.staticTexts["In Progress"]
         scrollToElement(inProgressStatus, in: app)
         XCTAssertFalse(app.buttons["Regenerate Before First Locked Set"].exists)
 
@@ -318,13 +318,13 @@ final class SwapExerciseUITests: XCTestCase {
             app.swipeDown()
         }
         XCTAssertTrue(proposedPlan.waitForExistence(timeout: 5))
-        let proposalSummary = app.staticTexts["4 component movement(s) · planner v4"]
+        let proposalSummary = app.staticTexts["4 exercises"]
         XCTAssertTrue(proposalSummary.waitForExistence(timeout: 5))
         for exercise in ["Flat Dumbbell Press", "Cable Row", "Bayesian Curl", "Cable Lateral Raise"] {
             XCTAssertTrue((proposalSummary.value as? String)?.contains(exercise) == true)
         }
 
-        let increasedDose = app.staticTexts["2 set(s) · Hard"]
+        let increasedDose = app.staticTexts["2 sets"]
         scrollToElement(increasedDose, in: app)
         XCTAssertTrue(increasedDose.exists)
         let priorPerformance = app.staticTexts["adaptive.previous.Flat Dumbbell Press"]
