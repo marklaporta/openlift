@@ -255,6 +255,12 @@ enum AdaptivePlannerResult: Equatable {
     case infeasible(AdaptivePlanConflict)
 }
 
+enum AdaptiveExerciseRoleService {
+    static func difficulty(for exercise: Exercise) -> MovementDifficulty {
+        exercise.type == .compound ? .hard : .easy
+    }
+}
+
 struct AdaptivePlanDecisionTrace: Equatable {
     var plannerVersion: Int
     var outcomeCode: String
@@ -266,7 +272,7 @@ struct AdaptivePlanDecisionTrace: Equatable {
 }
 
 enum AdaptivePlanService {
-    static let plannerVersion = 3
+    static let plannerVersion = 4
 
     static func generate(
         program: AdaptiveProgram,
@@ -274,6 +280,7 @@ enum AdaptivePlanService {
         readiness: [MuscleGroup: MuscleReadinessInput],
         ledger: TrainingLoadLedger,
         doseRecommendations: [UUID: [Int: DoseRecommendation]] = [:],
+        exerciseSelections: [AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation] = [:],
         now: Date,
         calendar: Calendar = .current
     ) -> AdaptivePlannerResult {
@@ -301,6 +308,11 @@ enum AdaptivePlanService {
                 }
                 var planned: [AdaptivePlannedComponent] = []
                 var attributedMuscles = Set<MuscleGroup>()
+                var appliedSelectionKeys = Set<AdaptiveExerciseSelectionKey>()
+                var selectionReasonCodes: [String] = []
+                let componentTypes = Dictionary(uniqueKeysWithValues: components.compactMap { component in
+                    exercisesById[component.exerciseId].map { (component.position, $0.type) }
+                })
                 for component in components {
                     guard let exercise = exercisesById[component.exerciseId], exercise.isActive else {
                         rejections.append(.init(complexDefinitionId: complex.definitionId, code: "inactive_exercise"))
@@ -310,16 +322,49 @@ enum AdaptivePlanService {
                         rejections.append(.init(complexDefinitionId: complex.definitionId, code: "pain_block"))
                         return nil
                     }
+                    let componentKey = AdaptiveExerciseSelectionKey(
+                        muscle: component.primaryMuscle,
+                        type: componentTypes[component.position] ?? exercise.type
+                    )
+                    let coreFallbackKey = AdaptiveExerciseSelectionKey(
+                        muscle: component.primaryMuscle,
+                        type: .compound
+                    )
+                    let selectedKey: AdaptiveExerciseSelectionKey? = {
+                        if exerciseSelections[componentKey] != nil { return componentKey }
+                        let isSinglePrimaryComponent = components.filter {
+                            $0.primaryMuscle == component.primaryMuscle
+                        }.count == 1
+                        if isSinglePrimaryComponent,
+                           Self.prefersCompoundContinuity(component.primaryMuscle),
+                           exerciseSelections[coreFallbackKey] != nil {
+                            return coreFallbackKey
+                        }
+                        return nil
+                    }()
+                    let selection = selectedKey.flatMap { key in
+                        appliedSelectionKeys.contains(key) ? nil : exerciseSelections[key]
+                    }
+                    let selectedExercise = selection?.exercise ?? exercise
+                    if let selection, let selectedKey {
+                        appliedSelectionKeys.insert(selectedKey)
+                        selectionReasonCodes.append(
+                            "\(component.primaryMuscle.rawValue)_\(selectedKey.type.rawValue)_\(selection.reasonCodeSuffix)"
+                        )
+                    }
+                    let changedExercise = selectedExercise.id != component.exerciseId
                     attributedMuscles.insert(component.primaryMuscle)
-                    if let secondary = component.secondaryMuscle { attributedMuscles.insert(secondary) }
+                    if !changedExercise, let secondary = component.secondaryMuscle {
+                        attributedMuscles.insert(secondary)
+                    }
                     planned.append(
                         AdaptivePlannedComponent(
-                            exerciseId: exercise.id,
-                            exerciseName: exercise.name,
+                            exerciseId: selectedExercise.id,
+                            exerciseName: selectedExercise.name,
                             position: component.position,
                             primaryMuscle: component.primaryMuscle,
-                            secondaryMuscle: component.secondaryMuscle,
-                            difficulty: component.difficulty,
+                            secondaryMuscle: changedExercise ? nil : component.secondaryMuscle,
+                            difficulty: AdaptiveExerciseRoleService.difficulty(for: selectedExercise),
                             prescribedSetCount: doseRecommendations[complex.definitionId]?[component.position]?
                                 .prescribedSetCount ?? component.prescribedSetCount
                         )
@@ -352,7 +397,7 @@ enum AdaptivePlanService {
                     name: complex.name,
                     sourcePosition: complex.position,
                     primaryMuscle: complex.primaryMuscle,
-                    reasonCodes: [],
+                    reasonCodes: selectionReasonCodes,
                     components: planned
                 )
             }
@@ -374,6 +419,15 @@ enum AdaptivePlanService {
                 $0.difficulty == .hard && ($0.primaryMuscle == .hamstrings || $0.secondaryMuscle == .hamstrings)
             }
             if hasHardQuads && hasHardHamstrings { return "hard_quad_hamstring_pair" }
+
+            var compoundCounts: [MuscleGroup: Int] = [:]
+            for component in combinedComponents
+                where exercisesById[component.exerciseId]?.type == .compound {
+                compoundCounts[component.primaryMuscle, default: 0] += 1
+            }
+            if compoundCounts.values.contains(where: { $0 > 1 }) {
+                return "multiple_compounds_same_muscle"
+            }
 
             var addedExerciseCounts: [MuscleGroup: Int] = [:]
             for component in candidate.components {
@@ -531,6 +585,13 @@ enum AdaptivePlanService {
         return result
     }
 
+    private static func prefersCompoundContinuity(_ muscle: MuscleGroup) -> Bool {
+        switch muscle {
+        case .chest, .back, .quads, .hamstrings: return true
+        default: return false
+        }
+    }
+
     private static func stableComplexOrder(_ left: AdaptiveExerciseComplex, _ right: AdaptiveExerciseComplex) -> Bool {
         if left.position != right.position { return left.position < right.position }
         if left.definitionId != right.definitionId { return left.definitionId.uuidString < right.definitionId.uuidString }
@@ -670,6 +731,143 @@ enum AdaptiveDoseEvidenceService {
     }
 }
 
+struct AdaptiveExerciseSelectionRecommendation {
+    var exercise: Exercise
+    var reasonCodeSuffix: String
+}
+
+struct AdaptiveExerciseSelectionKey: Hashable {
+    var muscle: MuscleGroup
+    var type: ExerciseType
+}
+
+enum AdaptiveExerciseSelectionService {
+    private struct Exposure {
+        var completedAt: Date
+        var sessionId: UUID
+        var exerciseId: UUID
+    }
+
+    static func recommendations(
+        exercises: [Exercise],
+        preferences: [AdaptiveExerciseSelectionPreference],
+        rotationSessions: [Session],
+        rotationSetEntries: [SetEntry],
+        adaptiveSessions: [AdaptiveWorkoutSession],
+        adaptiveSetEntries: [AdaptiveSetEntry]
+    ) -> [AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation] {
+        let activeExercises = Dictionary(uniqueKeysWithValues: exercises.filter(\.isActive).map { ($0.id, $0) })
+        let completedRotation: [UUID: Date] = Dictionary(
+            uniqueKeysWithValues: rotationSessions.compactMap { session -> (UUID, Date)? in
+                guard session.status == .completed, let finishedAt = session.finishedAt else { return nil }
+                return (session.id, finishedAt)
+            }
+        )
+        let completedAdaptive: [UUID: Date] = Dictionary(
+            uniqueKeysWithValues: adaptiveSessions.compactMap { session -> (UUID, Date)? in
+                guard session.status == .completed, let finishedAt = session.finishedAt else { return nil }
+                return (session.id, finishedAt)
+            }
+        )
+
+        var exposures: [Exposure] = []
+        var seen = Set<String>()
+        for entry in rotationSetEntries where entry.isLocked && entry.reps > 0 {
+            guard let completedAt = completedRotation[entry.sessionId], activeExercises[entry.exerciseId] != nil else {
+                continue
+            }
+            let key = "rotation:\(entry.sessionId.uuidString):\(entry.exerciseId.uuidString)"
+            if seen.insert(key).inserted {
+                exposures.append(
+                    Exposure(completedAt: completedAt, sessionId: entry.sessionId, exerciseId: entry.exerciseId)
+                )
+            }
+        }
+        for entry in adaptiveSetEntries where entry.isLocked && entry.reps > 0 {
+            guard let completedAt = completedAdaptive[entry.adaptiveSessionId],
+                  activeExercises[entry.exerciseId] != nil else { continue }
+            let key = "adaptive:\(entry.adaptiveSessionId.uuidString):\(entry.exerciseId.uuidString)"
+            if seen.insert(key).inserted {
+                exposures.append(
+                    Exposure(
+                        completedAt: completedAt,
+                        sessionId: entry.adaptiveSessionId,
+                        exerciseId: entry.exerciseId
+                    )
+                )
+            }
+        }
+        exposures.sort {
+            if $0.completedAt != $1.completedAt { return $0.completedAt > $1.completedAt }
+            if $0.sessionId != $1.sessionId { return $0.sessionId.uuidString < $1.sessionId.uuidString }
+            return $0.exerciseId.uuidString < $1.exerciseId.uuidString
+        }
+
+        let preferencesByMuscle = Dictionary(uniqueKeysWithValues: preferences.map { ($0.muscle, $0) })
+        var recentDistinct: [MuscleGroup: [Exercise]] = [:]
+        for exposure in exposures {
+            guard let exercise = activeExercises[exposure.exerciseId] else { continue }
+            if recentDistinct[exercise.primaryMuscle, default: []].contains(where: { $0.id == exercise.id }) {
+                continue
+            }
+            recentDistinct[exercise.primaryMuscle, default: []].append(exercise)
+        }
+
+        var result: [AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation] = [:]
+        for muscle in MuscleGroup.allCases {
+            let preference = preferencesByMuscle[muscle]
+            let eligibleIds = Set(preference?.eligibleExerciseIds ?? [])
+            let recentAvailable = preference == nil
+                ? (recentDistinct[muscle] ?? [])
+                : (recentDistinct[muscle] ?? []).filter { eligibleIds.contains($0.id) }
+            for type in ExerciseType.allCases {
+                let key = AdaptiveExerciseSelectionKey(muscle: muscle, type: type)
+                let recent = recentAvailable.filter { $0.type == type }
+                let eligibleAlternatives = exercises
+                    .filter {
+                        $0.isActive
+                            && $0.primaryMuscle == muscle
+                            && $0.type == type
+                            && (preference == nil || eligibleIds.contains($0.id))
+                    }
+                    .sorted {
+                        let comparison = $0.name.localizedCaseInsensitiveCompare($1.name)
+                        if comparison != .orderedSame { return comparison == .orderedAscending }
+                        return $0.id.uuidString < $1.id.uuidString
+                    }
+                let mode = preference?.mode == .pinned && type == .isolation
+                    ? AdaptiveExerciseSelectionMode.rotateRecent
+                    : (preference?.mode ?? .repeatLast)
+                switch mode {
+                case .repeatLast:
+                    if let exercise = recent.first {
+                        result[key] = .init(exercise: exercise, reasonCodeSuffix: "exercise_repeat")
+                    }
+                case .rotateRecent:
+                    let exercise = recent.dropFirst().first
+                        ?? recent.first.flatMap { latest in
+                            eligibleAlternatives.first { $0.id != latest.id }
+                        }
+                        ?? recent.first
+                    if let exercise {
+                        result[key] = .init(exercise: exercise, reasonCodeSuffix: "exercise_rotation")
+                    }
+                case .pinned:
+                    if let pinnedId = preference?.pinnedExerciseId,
+                       let exercise = activeExercises[pinnedId],
+                       exercise.primaryMuscle == muscle,
+                       exercise.type == type {
+                        result[key] = .init(exercise: exercise, reasonCodeSuffix: "exercise_pinned")
+                    } else if let exercise = recent.first {
+                        result[key] = .init(exercise: exercise, reasonCodeSuffix: "exercise_repeat")
+                    }
+                }
+            }
+        }
+        return result
+    }
+}
+
 enum AdaptivePrefillService {
     static func rows(
         plan: GeneratedWorkoutPlan,
@@ -705,12 +903,39 @@ enum AdaptivePrefillService {
             if !result.isEmpty { return result }
         }
 
+        return latestRows(
+            exerciseId: exercise.exerciseId,
+            excludingPlanId: plan.id,
+            adaptiveSessions: adaptiveSessions,
+            adaptiveSetEntries: adaptiveSetEntries,
+            rotationSessions: rotationSessions,
+            rotationSetEntries: rotationSetEntries,
+            overrides: overrides
+        )
+    }
+
+    static func latestRows(
+        exerciseId: UUID,
+        excludingPlanId: UUID? = nil,
+        adaptiveSessions: [AdaptiveWorkoutSession],
+        adaptiveSetEntries: [AdaptiveSetEntry],
+        rotationSessions: [Session],
+        rotationSetEntries: [SetEntry],
+        overrides: [AdaptiveOverrideEvent]
+    ) -> [ComparableSetRow] {
+        let substituted = Set(overrides.filter { $0.kind == .substituteExercise }.compactMap(\.occurrenceId))
+        let completedAdaptive = adaptiveSessions
+            .filter {
+                $0.status == .completed
+                    && $0.finishedAt != nil
+                    && $0.generatedPlanId != excludingPlanId
+            }
         var fallback: [(Date, [ComparableSetRow])] = []
         for session in completedAdaptive {
             let rows = adaptiveSetEntries
                 .filter {
                     $0.adaptiveSessionId == session.id
-                        && $0.exerciseId == exercise.exerciseId
+                        && $0.exerciseId == exerciseId
                         && $0.isLocked
                         && $0.reps > 0
                         && !substituted.contains($0.occurrenceId)
@@ -723,7 +948,7 @@ enum AdaptivePrefillService {
             let rows = rotationSetEntries
                 .filter {
                     $0.sessionId == session.id
-                        && $0.exerciseId == exercise.exerciseId
+                        && $0.exerciseId == exerciseId
                         && $0.isLocked
                         && $0.reps > 0
                 }

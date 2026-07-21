@@ -389,7 +389,7 @@ final class BootstrapDataServiceTests: XCTestCase {
     }
 
     func testWorkoutExportReconciliationCompletesPartialAdHocImportAndIsIdempotent() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV3.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -479,7 +479,7 @@ final class BootstrapDataServiceTests: XCTestCase {
     }
 
     func testAdaptiveRolloutImportsWorkoutAndStartsReviewedAdaptiveProgramOnWorkoutDate() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV3.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let cycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 2)

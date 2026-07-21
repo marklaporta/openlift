@@ -82,20 +82,20 @@ struct AdaptiveProgramEditorView: View {
             Text("This limits the automatic proposal. You can add or remove movements before accepting a workout.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("OpenLift will not pair a hard quad movement with a hard hamstring movement. Difficulty remains recorded as recovery context, not a daily point budget.")
+            Text("Compound exercises are hard/core; isolation exercises are accessory/light. OpenLift will not pair compound quad and hamstring work.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Toggle("Reviewed for real use", isOn: $draft.isReviewedForUse)
-            Text("Review means you have checked every rank, training window, cap, difficulty, exercise, and set count. Saving always creates a new immutable version.")
+            Text("Review means you have checked every rank, training window, cap, exercise category, exercise, and set count. Saving always creates a new immutable version.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             if existingProgram == nil {
-                Button("Load Demo Proposal") {
+                Button("Load Starter Proposal") {
                     draft = AdaptiveProgramService.demoDraft(exercises: exercises)
                 }
                 .accessibilityIdentifier("adaptive.loadDemo")
-                Text("The demo is only a starting proposal. It does not invent exercises for muscle groups missing from your catalog and cannot save until every enabled group has a qualifying complex.")
+                Text("The starter is only a proposal. It does not invent exercises for muscle groups missing from your catalog and cannot save until every enabled group has a qualifying complex.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -217,6 +217,9 @@ struct AdaptiveProgramEditorView: View {
 
             Button("Add Component") { addComponent(to: complexIndex) }
                 .disabled(activeExercises.isEmpty)
+            Text("A typical complex contains one compound core movement and one isolation accessory. Automatic plans never include two compounds for the same muscle.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             HStack {
                 Button {
@@ -283,10 +286,11 @@ struct AdaptiveProgramEditorView: View {
                 }
             }
 
-            Picker("Difficulty", selection: $draft.complexes[complexIndex].components[componentIndex].difficulty) {
-                ForEach(MovementDifficulty.allCases, id: \.self) { difficulty in
-                    Text(difficulty.displayName).tag(difficulty)
-                }
+            if let exercise = exercises.first(where: { $0.id == component.exerciseId }) {
+                LabeledContent(
+                    "Category",
+                    value: exercise.type == .compound ? "Compound · hard/core" : "Isolation · accessory"
+                )
             }
 
             Stepper(
@@ -392,7 +396,7 @@ struct AdaptiveProgramEditorView: View {
             prescribedSetCount: 2,
             primaryMuscle: exercise.primaryMuscle,
             secondaryMuscle: nil,
-            difficulty: exercise.type == .compound ? .moderate : .easy
+            difficulty: AdaptiveExerciseRoleService.difficulty(for: exercise)
         )
     }
 
@@ -400,6 +404,8 @@ struct AdaptiveProgramEditorView: View {
         guard let exercise = exercises.first(where: { $0.id == exerciseId }) else { return }
         draft.complexes[complexIndex].components[componentIndex].exerciseId = exercise.id
         draft.complexes[complexIndex].components[componentIndex].primaryMuscle = exercise.primaryMuscle
+        draft.complexes[complexIndex].components[componentIndex].difficulty =
+            AdaptiveExerciseRoleService.difficulty(for: exercise)
         if draft.complexes[complexIndex].components[componentIndex].secondaryMuscle == exercise.primaryMuscle {
             draft.complexes[complexIndex].components[componentIndex].secondaryMuscle = nil
         }

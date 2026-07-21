@@ -15,6 +15,7 @@ struct CycleView: View {
     @Query private var setEntries: [SetEntry]
     @Query private var trainingPreferences: [TrainingPreference]
     @Query private var adaptivePrograms: [AdaptiveProgram]
+    @Query private var exerciseSelectionPreferences: [AdaptiveExerciseSelectionPreference]
 
     @State private var presentingNewTemplate = false
     @State private var editingTemplate: CycleTemplate?
@@ -30,6 +31,7 @@ struct CycleView: View {
     @State private var debugSnapshotText: String?
     @State private var presentingNewAdaptiveProgram = false
     @State private var editingAdaptiveProgram: AdaptiveProgram?
+    @State private var presentingExerciseSelection = false
 
     private var activeTemplate: CycleTemplate? {
         OpenLiftStateResolver.activeTemplate(
@@ -246,6 +248,9 @@ struct CycleView: View {
             .sheet(item: $editingAdaptiveProgram) { program in
                 AdaptiveProgramEditorView(existingProgram: program)
             }
+            .sheet(isPresented: $presentingExerciseSelection) {
+                AdaptiveExerciseSelectionEditorView()
+            }
             .alert("Cycle Error", isPresented: .constant(errorMessage != nil), actions: {
                 Button("OK") { errorMessage = nil }
             }, message: {
@@ -344,7 +349,7 @@ struct CycleView: View {
                 }
                 .accessibilityIdentifier("adaptive.editProfile")
             } else {
-                Text("No Adaptive profile has been saved. Create one or load the explicit demo proposal in the editor; no values are activated silently.")
+                Text("No Adaptive profile has been saved. Create one or load the explicit starter proposal in the editor; no values are activated silently.")
                     .foregroundStyle(.secondary)
                 Button("Create Adaptive Profile") {
                     presentingNewAdaptiveProgram = true
@@ -360,6 +365,26 @@ struct CycleView: View {
             Text("Abs and Traps remain supported candidates but start disabled with no training-window requirement.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+
+        Section("Exercise Selection") {
+            Text("Selection is configured per muscle. Alternate only uses exercises marked available; pinned muscles always use their selected foundation movement.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach([MuscleGroup.chest, .quads, .hamstrings], id: \.self) { muscle in
+                if let preference = exerciseSelectionPreferences.first(where: { $0.muscle == muscle }) {
+                    HStack {
+                        Text(muscle.displayName)
+                        Spacer()
+                        Text(preference.mode.displayName)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Button("Exercise Selection & Equipment") {
+                presentingExerciseSelection = true
+            }
+            .accessibilityIdentifier("adaptive.exerciseSelection")
         }
 
         if let program = activeAdaptiveProgram {
@@ -532,6 +557,159 @@ struct CycleView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+private struct AdaptiveExerciseSelectionEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+
+    @Query private var exercises: [Exercise]
+    @Query private var preferences: [AdaptiveExerciseSelectionPreference]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Repeat latest keeps the most recently completed available movement. Alternate recent chooses a different available movement after the first exposure, then alternates recent choices within the same compound or isolation category. Pinned always uses one compound foundation exercise.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(MuscleGroup.allCases, id: \.self) { muscle in
+                    DisclosureGroup {
+                        Picker("Selection policy", selection: modeBinding(for: muscle)) {
+                            ForEach(AdaptiveExerciseSelectionMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+
+                        if preference(for: muscle)?.mode == .pinned {
+                            Picker("Foundation exercise", selection: pinnedBinding(for: muscle)) {
+                                Text("Choose exercise").tag(Optional<UUID>.none)
+                                ForEach(compoundExercises(for: muscle), id: \.id) { exercise in
+                                    Text("\(exercise.name) · Compound").tag(Optional(exercise.id))
+                                }
+                            }
+                            Text("Other available exercises")
+                                .font(.subheadline.weight(.semibold))
+                            ForEach(activeExercises(for: muscle), id: \.id) { exercise in
+                                Toggle(isOn: eligibilityBinding(exercise: exercise, muscle: muscle)) {
+                                    exerciseAvailabilityLabel(exercise)
+                                }
+                                .disabled(preference(for: muscle)?.pinnedExerciseId == exercise.id)
+                            }
+                        } else {
+                            Text("Available with current equipment")
+                                .font(.subheadline.weight(.semibold))
+                            ForEach(activeExercises(for: muscle), id: \.id) { exercise in
+                                Toggle(isOn: eligibilityBinding(exercise: exercise, muscle: muscle)) {
+                                    exerciseAvailabilityLabel(exercise)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(muscle.displayName)
+                            Spacer()
+                            Text(preference(for: muscle)?.mode.displayName ?? "Repeat latest")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Exercise Selection")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task {
+                _ = try? AdaptiveExerciseSelectionPreferenceService.ensureRequestedDefaults(
+                    modelContext: modelContext
+                )
+            }
+        }
+    }
+
+    private func preference(for muscle: MuscleGroup) -> AdaptiveExerciseSelectionPreference? {
+        preferences.first { $0.muscle == muscle }
+    }
+
+    private func activeExercises(for muscle: MuscleGroup) -> [Exercise] {
+        exercises
+            .filter { $0.isActive && $0.primaryMuscle == muscle }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func compoundExercises(for muscle: MuscleGroup) -> [Exercise] {
+        activeExercises(for: muscle).filter { $0.type == .compound }
+    }
+
+    private func exerciseAvailabilityLabel(_ exercise: Exercise) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(exercise.name)
+            Text(exercise.type == .compound ? "Compound · hard/core" : "Isolation · accessory")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func ensurePreference(for muscle: MuscleGroup) -> AdaptiveExerciseSelectionPreference {
+        if let existing = preference(for: muscle) { return existing }
+        let created = AdaptiveExerciseSelectionPreference(muscle: muscle, mode: .repeatLast)
+        modelContext.insert(created)
+        return created
+    }
+
+    private func modeBinding(for muscle: MuscleGroup) -> Binding<AdaptiveExerciseSelectionMode> {
+        Binding(
+            get: { preference(for: muscle)?.mode ?? .repeatLast },
+            set: { mode in
+                let preference = ensurePreference(for: muscle)
+                preference.mode = mode
+                if mode == .pinned, preference.pinnedExerciseId == nil {
+                    preference.pinnedExerciseId = compoundExercises(for: muscle).first?.id
+                }
+                try? modelContext.save()
+            }
+        )
+    }
+
+    private func pinnedBinding(for muscle: MuscleGroup) -> Binding<UUID?> {
+        Binding(
+            get: { preference(for: muscle)?.pinnedExerciseId },
+            set: { exerciseId in
+                let preference = ensurePreference(for: muscle)
+                preference.pinnedExerciseId = exerciseId
+                if let exerciseId, !preference.eligibleExerciseIds.contains(exerciseId) {
+                    preference.eligibleExerciseIds.append(exerciseId)
+                }
+                try? modelContext.save()
+            }
+        )
+    }
+
+    private func eligibilityBinding(exercise: Exercise, muscle: MuscleGroup) -> Binding<Bool> {
+        Binding(
+            get: { preference(for: muscle)?.eligibleExerciseIds.contains(exercise.id) == true },
+            set: { isEligible in
+                let preference = ensurePreference(for: muscle)
+                if !isEligible, preference.mode == .pinned, preference.pinnedExerciseId == exercise.id {
+                    return
+                }
+                if isEligible {
+                    if !preference.eligibleExerciseIds.contains(exercise.id) {
+                        preference.eligibleExerciseIds.append(exercise.id)
+                    }
+                } else {
+                    preference.eligibleExerciseIds.removeAll { $0 == exercise.id }
+                }
+                try? modelContext.save()
+            }
+        )
     }
 }
 

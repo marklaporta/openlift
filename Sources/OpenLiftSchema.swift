@@ -58,11 +58,22 @@ enum OpenLiftSchemaV3: VersionedSchema {
     ]
 }
 
+/// Adds per-muscle exercise continuity and rotation preferences without
+/// changing any V3 entity or workout-history record.
+enum OpenLiftSchemaV4: VersionedSchema {
+    static let versionIdentifier = Schema.Version(4, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV3.models + [
+        AdaptiveExerciseSelectionPreference.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
         OpenLiftSchemaV2.self,
-        OpenLiftSchemaV3.self
+        OpenLiftSchemaV3.self,
+        OpenLiftSchemaV4.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -73,6 +84,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV2.self,
             toVersion: OpenLiftSchemaV3.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV3.self,
+            toVersion: OpenLiftSchemaV4.self
         )
     ]
 }
