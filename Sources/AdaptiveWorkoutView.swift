@@ -139,30 +139,56 @@ struct AdaptiveWorkoutView: View {
 
         ForEach(enabledMuscles(in: program), id: \.self) { muscle in
             Section(muscle.displayName) {
-                Picker("Soreness", selection: sorenessBinding(for: muscle)) {
-                    ForEach(SorenessLevel.allCases, id: \.self) { value in
-                        Text(value.displayName).tag(Optional(value))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Muscle soreness")
+                        .font(.subheadline.weight(.semibold))
+                    Text("How sore this muscle feels today")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Muscle soreness", selection: sorenessBinding(for: muscle)) {
+                        ForEach(SorenessLevel.allCases, id: \.self) { value in
+                            Text(value.displayName).tag(Optional(value))
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel("\(muscle.displayName) muscle soreness")
+                    .accessibilityIdentifier("adaptive.readiness.\(muscle.rawValue).soreness")
                 }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("adaptive.readiness.\(muscle.rawValue).soreness")
 
-                Picker("Pain", selection: painBinding(for: muscle)) {
-                    ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
-                        Text(value.displayName).tag(Optional(value))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Connective-tissue pain")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Joint or tendon warning signs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Connective-tissue pain", selection: painBinding(for: muscle)) {
+                        ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
+                            Text(value.displayName).tag(Optional(value))
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel("\(muscle.displayName) connective-tissue pain")
+                    .accessibilityIdentifier("adaptive.readiness.\(muscle.rawValue).pain")
                 }
-                .pickerStyle(.segmented)
-                .accessibilityLabel("\(muscle.displayName) connective tissue pain")
-                .accessibilityIdentifier("adaptive.readiness.\(muscle.rawValue).pain")
 
-                Picker("Eagerness", selection: eagernessBinding(for: muscle)) {
-                    ForEach(EagernessLevel.allCases, id: \.self) { value in
-                        Text(value.displayName).tag(Optional(value))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Eagerness to train")
+                        .font(.subheadline.weight(.semibold))
+                    Text("How willing this muscle feels to work today")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Eagerness to train", selection: eagernessBinding(for: muscle)) {
+                        ForEach(EagernessLevel.allCases, id: \.self) { value in
+                            Text(value.displayName).tag(Optional(value))
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel("\(muscle.displayName) eagerness to train")
+                    .accessibilityIdentifier("adaptive.readiness.\(muscle.rawValue).eagerness")
                 }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("adaptive.readiness.\(muscle.rawValue).eagerness")
             }
         }
 
