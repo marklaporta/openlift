@@ -16,6 +16,7 @@ struct CycleView: View {
     @Query private var trainingPreferences: [TrainingPreference]
     @Query private var adaptivePrograms: [AdaptiveProgram]
     @Query private var exerciseSelectionPreferences: [AdaptiveExerciseSelectionPreference]
+    @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
 
     @State private var presentingNewTemplate = false
     @State private var editingTemplate: CycleTemplate?
@@ -330,7 +331,9 @@ struct CycleView: View {
                             .font(.headline)
                         Spacer()
                     }
-                    Text("Planner target: \(program.globalMaxMovements) movements · hard quad/hamstring pairing blocked")
+                    Text(
+                        "Default workout: \(AdaptiveProgramService.defaultComplexCount(for: program, preferences: workoutSizePreferences)) muscle groups"
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Label(

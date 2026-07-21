@@ -65,7 +65,7 @@ exercise variants may use the same bucket.
 
 Cycle contains the one Adaptive profile editor. A profile stores strict muscle
 priorities, a binary training-window and recovered-gap policy, per-exposure and
-per-exercise caps, and an automatic component-movement target (four by default).
+per-exercise caps, and a default muscle-group exposure target (four by default).
 Complexes are ordered atomic units with ordered component exercises, set counts,
 primary plus optional major-secondary attribution, and easy/moderate/hard recovery context.
 The training-window requirement is binary: one or more qualifying locked working
@@ -79,7 +79,15 @@ Exercises may also be added to a specific complex before or after the workout is
 frozen. Explicit post-freeze additions create editable, prefilled set rows without
 changing existing or locked work, and explicit reordering remains available until
 the workout is completed. A skipped exercise can be restored before completion;
-skip and restore actions remain in the immutable override audit trail.
+skip and restore actions remain in the immutable override audit trail. The
+Workout surface is a linear Readiness, Design, and Execute flow. Readiness starts
+at none / none / eager for every enabled muscle and one submission records all
+defaults plus any edits. Design can reopen readiness, revise today's exposure
+target without changing the profile default, and uses the same canonical planner
+for every regeneration. Execute remains structurally editable until completion,
+including locked-set correction or deletion. Both Design and Execute can append
+an absent muscle through Add Complex; a configured complex is reused when
+available and manual construction remains available when it is not.
 
 Exercise continuity is configured per muscle rather than by a workout-wide
 rotation rule. `Pinned exercise` always proposes one foundation movement;
@@ -123,10 +131,17 @@ is recovery context and a recovery-prediction hint only; it never
 makes work eligible for an unrecovered muscle. An easy hamstring curl is held
 when hamstrings are unrecovered after an SLDL exposure.
 
-There is no global difficulty-point budget. The hard composition rule is
-specific: a hard quad movement and a hard hamstring movement are not placed in
-the same workout. Other hard combinations remain eligible when their muscles
-are recovered and their configured caps fit.
+There is no global difficulty-point budget. Automatic planning strongly avoids
+combining a hard quad movement with a hard hamstring movement when another
+recovered muscle can fill the exposure target. The combination is not an error:
+the planner may use it when no reasonable alternative exists, and manual edits
+can always create it without a warning or confirmation.
+
+Readiness checks are committed to SwiftData before Design appears. A distinct,
+idempotent `adaptive_readiness` snapshot is then mirrored asynchronously under
+`OpenLift/exports/readiness`; it is not a completed-workout payload and cannot be
+hydrated by the completed-workout importer. A local recovery copy remains
+pending rather than being reported as an iCloud success.
 
 The first morning after a productive exposure is treated as a DOMS observation
 window, not proof of recovery: even a low-soreness answer cannot schedule that

@@ -1220,4 +1220,189 @@ final class OpenLiftStateResolverTests: XCTestCase {
 
         XCTAssertEqual(dayLabel, "Day 2")
     }
+
+    func testReadinessSnapshotIsDistinctIdempotentAndHonestAboutFallback() throws {
+        let check = DailyReadinessCheck(
+            id: UUID(),
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 2,
+            adaptiveProgramId: UUID(),
+            adaptiveProgramVersion: 1,
+            responses: [
+                AdaptiveReadinessResponse(
+                    muscle: .chest,
+                    soreness: .none,
+                    connectiveTissuePain: .none,
+                    eagerness: .eager
+                )
+            ]
+        )
+        let payloadData = try AdaptiveReadinessExportService.encode(
+            AdaptiveReadinessExportService.makePayload(check: check)
+        )
+        XCTAssertNil(AdaptiveExportService.decode(payloadData))
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openlift-readiness-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var writes = 0
+        let uploaded = SessionExportService.ExportEnvironment(
+            containerIdentifier: "iCloud.com.mark.openlift",
+            iCloudContainerURL: root.appendingPathComponent("Cloud", isDirectory: true),
+            localDocumentsURL: root.appendingPathComponent("Local", isDirectory: true),
+            coordinatedWrite: { data, url in
+                writes += 1
+                try data.write(to: url, options: .atomic)
+            },
+            ubiquityMetadata: { _ in
+                .init(isUbiquitousItem: true, isUploaded: true, isUploading: false, uploadingErrorDescription: nil)
+            }
+        )
+        let first = try AdaptiveReadinessExportService.export(check: check, environment: uploaded)
+        let second = try AdaptiveReadinessExportService.export(check: check, environment: uploaded)
+        XCTAssertEqual(first.status, .success)
+        XCTAssertEqual(second.status, .success)
+        XCTAssertEqual(writes, 1)
+        XCTAssertTrue(first.iCloudDestinationURL?.path.contains("exports/readiness") == true)
+        XCTAssertEqual(
+            first.filename,
+            AdaptiveReadinessExportService.filename(checkId: check.id, revision: 2)
+        )
+
+        let fallback = SessionExportService.ExportEnvironment(
+            containerIdentifier: "iCloud.com.mark.openlift",
+            iCloudContainerURL: nil,
+            localDocumentsURL: root.appendingPathComponent("Fallback", isDirectory: true),
+            coordinatedWrite: { _, _ in },
+            ubiquityMetadata: { _ in
+                .init(isUbiquitousItem: false, isUploaded: false, isUploading: false, uploadingErrorDescription: nil)
+            }
+        )
+        XCTAssertEqual(
+            try AdaptiveReadinessExportService.export(check: check, environment: fallback).status,
+            .pending
+        )
+    }
+
+    @MainActor
+    func testPendingReadinessMirrorRetriesToUploaded() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let check = DailyReadinessCheck(
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1,
+            adaptiveProgramId: UUID(),
+            adaptiveProgramVersion: 1,
+            responses: [
+                AdaptiveReadinessResponse(
+                    muscle: .back,
+                    soreness: .none,
+                    connectiveTissuePain: .none,
+                    eagerness: .eager
+                )
+            ]
+        )
+        context.insert(check)
+        try SessionExportService.recordPending(
+            sessionId: check.id,
+            sessionKind: .adaptiveReadiness,
+            filename: AdaptiveReadinessExportService.filename(checkId: check.id, revision: 1),
+            detail: "Queued for iCloud Drive upload.",
+            modelContext: context
+        )
+        try context.save()
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openlift-readiness-retry-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: "iCloud.com.mark.openlift",
+            iCloudContainerURL: root.appendingPathComponent("Cloud", isDirectory: true),
+            localDocumentsURL: root.appendingPathComponent("Local", isDirectory: true),
+            coordinatedWrite: { data, url in try data.write(to: url, options: .atomic) },
+            ubiquityMetadata: { _ in
+                .init(isUbiquitousItem: true, isUploaded: true, isUploading: false, uploadingErrorDescription: nil)
+            }
+        )
+
+        XCTAssertEqual(
+            try AdaptiveReadinessExportService.retryPendingExports(
+                modelContext: context,
+                environment: environment
+            ),
+            1
+        )
+        let diagnostic = try XCTUnwrap(context.fetch(FetchDescriptor<ExportDiagnostic>()).first)
+        XCTAssertEqual(diagnostic.status, .success)
+        XCTAssertTrue(diagnostic.iCloudDestinationPath?.contains("exports/readiness") == true)
+    }
+
+    @MainActor
+    func testReadinessEnqueueCommitsPendingBeforeCloudWriteCompletes() async throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let check = DailyReadinessCheck(
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1,
+            adaptiveProgramId: UUID(),
+            adaptiveProgramVersion: 1,
+            responses: [
+                AdaptiveReadinessResponse(
+                    muscle: .chest,
+                    soreness: .none,
+                    connectiveTissuePain: .none,
+                    eagerness: .eager
+                )
+            ]
+        )
+        context.insert(check)
+        try context.save()
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openlift-readiness-async-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let writeStarted = expectation(description: "coordinated readiness write started")
+        let releaseWrite = DispatchSemaphore(value: 0)
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: "iCloud.com.mark.openlift",
+            iCloudContainerURL: root.appendingPathComponent("Cloud", isDirectory: true),
+            localDocumentsURL: root.appendingPathComponent("Local", isDirectory: true),
+            coordinatedWrite: { data, url in
+                writeStarted.fulfill()
+                releaseWrite.wait()
+                try data.write(to: url, options: .atomic)
+            },
+            ubiquityMetadata: { _ in
+                .init(isUbiquitousItem: true, isUploaded: true, isUploading: false, uploadingErrorDescription: nil)
+            }
+        )
+
+        let task = try AdaptiveReadinessExportService.enqueueMirror(
+            check: check,
+            modelContext: context,
+            environment: environment
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(context.fetch(FetchDescriptor<ExportDiagnostic>()).first).status,
+            .pending
+        )
+
+        await fulfillment(of: [writeStarted], timeout: 5)
+        XCTAssertEqual(
+            try XCTUnwrap(context.fetch(FetchDescriptor<ExportDiagnostic>()).first).status,
+            .pending
+        )
+        releaseWrite.signal()
+        await task.value
+
+        XCTAssertEqual(
+            try XCTUnwrap(context.fetch(FetchDescriptor<ExportDiagnostic>()).first).status,
+            .success
+        )
+    }
 }

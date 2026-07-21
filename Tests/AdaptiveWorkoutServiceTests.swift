@@ -360,7 +360,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(Set(rowsAfter.map(\.id)), Set(rowsBefore.map(\.id)))
     }
 
-    func testManualSlateEditsCannotCreateHardQuadHamstringPair() throws {
+    func testManualSlateEditsCanCreateHardQuadHamstringPair() throws {
         let (context, _) = makeContext()
         let (program, exercise) = makeProgram()
         let check = try AdaptiveWorkoutService.makeReadinessCheck(
@@ -386,17 +386,15 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             prescribedSetCount: 2,
             modelContext: context
         )
-        XCTAssertThrowsError(
-            try AdaptiveWorkoutService.addProposedMovement(
-                plan: plan,
-                exercise: hamstring,
-                difficulty: .hard,
-                prescribedSetCount: 2,
-                modelContext: context
-            )
-        ) { error in
-            XCTAssertEqual(error as? AdaptiveWorkoutServiceError, .hardQuadHamstringPair)
-        }
+        try AdaptiveWorkoutService.addProposedMovement(
+            plan: plan,
+            exercise: hamstring,
+            difficulty: .hard,
+            prescribedSetCount: 2,
+            modelContext: context
+        )
+        XCTAssertTrue(plan.complexes.contains { $0.primaryMuscle == .quads })
+        XCTAssertTrue(plan.complexes.contains { $0.primaryMuscle == .hamstrings })
     }
 
     func testEmptyProposedSlateCannotBeFrozen() throws {
@@ -512,9 +510,12 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.exerciseId, fly.id)
         XCTAssertEqual(snapshot.exerciseName, fly.name)
         XCTAssertEqual(snapshot.difficulty, .easy)
-        XCTAssertTrue(rows.allSatisfy {
-            $0.exerciseId == fly.id && !$0.isLocked && $0.weight == 0 && $0.reps == 0
-        })
+        XCTAssertTrue(rows.allSatisfy { $0.exerciseId == fly.id })
+        XCTAssertEqual(rows.first?.weight, 60)
+        XCTAssertEqual(rows.first?.reps, 9)
+        XCTAssertTrue(rows.first?.isLocked == true)
+        XCTAssertEqual(rows.last?.weight, 0)
+        XCTAssertFalse(rows.last?.isLocked == true)
     }
 
     func testRegenerationIsRejectedAfterFirstLockedSet() throws {
@@ -862,6 +863,358 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(try targetContext.fetchCount(FetchDescriptor<ActiveCycleInstance>()), 0)
     }
 
+    func testRecoveredReadinessDefaultsSubmitWithoutPerFieldConfirmation() throws {
+        let (program, _) = makeProgram()
+        var inputs = AdaptiveWorkoutService.defaultReadinessInputs(for: program)
+        XCTAssertEqual(inputs[.chest], AdaptiveWorkoutService.recoveredReadiness)
+        inputs[.chest]?.soreness = .mild
+
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: inputs,
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let response = try XCTUnwrap(check.responses.first)
+        XCTAssertEqual(response.soreness, .mild)
+        XCTAssertEqual(response.connectiveTissuePain, .none)
+        XCTAssertEqual(response.eagerness, .eager)
+    }
+
+    @MainActor
+    func testReadinessRevisionPreservesEquivalentProposalAndReplacesMaterialChange() throws {
+        let (context, _) = makeV6Context()
+        let (program, exercise) = makeProgram()
+        let firstCheck = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: AdaptiveWorkoutService.defaultReadinessInputs(for: program),
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let firstPlan = try makeProposal(program: program, exercise: exercise, check: firstCheck)
+        let state = AdaptiveWorkoutService.makeDesignState(
+            plan: firstPlan,
+            targetComplexCount: 1,
+            readinessRevision: 1
+        )
+        context.insert(firstCheck)
+        context.insert(firstPlan)
+        context.insert(state)
+        let manualAudit = AdaptiveOverrideEvent(
+            generatedPlanId: firstPlan.id,
+            kind: .addExercise,
+            reasonCode: "test_manual_edit"
+        )
+        context.insert(manualAudit)
+        try context.save()
+
+        firstPlan.complexes.first?.name = "My Manual Label"
+        let equivalentCheck = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: AdaptiveWorkoutService.defaultReadinessInputs(for: program),
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 2
+        )
+        context.insert(equivalentCheck)
+        let equivalent = try makeProposal(program: program, exercise: exercise, check: equivalentCheck)
+        XCTAssertTrue(try AdaptiveWorkoutService.reconcileReadinessRevision(
+            existingPlan: firstPlan,
+            existingState: state,
+            candidatePlan: equivalent,
+            readinessCheck: equivalentCheck,
+            overrides: [manualAudit],
+            modelContext: context
+        ))
+        XCTAssertEqual(firstPlan.complexes.first?.name, "My Manual Label")
+        XCTAssertEqual(state.readinessRevision, 2)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveOverrideEvent>()), 1)
+
+        let replacementExercise = Exercise(
+            name: "Flat Bench",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .barbell
+        )
+        let changed = try makeProposal(
+            program: program,
+            exercise: replacementExercise,
+            check: equivalentCheck
+        )
+        XCTAssertFalse(try AdaptiveWorkoutService.reconcileReadinessRevision(
+            existingPlan: firstPlan,
+            existingState: state,
+            candidatePlan: changed,
+            readinessCheck: equivalentCheck,
+            overrides: [manualAudit],
+            modelContext: context
+        ))
+        let stored = try context.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored.first?.id, changed.id)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveOverrideEvent>()), 0)
+    }
+
+    func testTodayExposureTargetPersistsWithoutChangingProfileDefault() throws {
+        let (context, _) = makeV6Context()
+        let (program, exercise) = makeProgram()
+        let preference = AdaptiveWorkoutSizePreference(
+            adaptiveProgramId: program.id,
+            defaultComplexCount: 4
+        )
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: AdaptiveWorkoutService.defaultReadinessInputs(for: program),
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: exercise, check: check)
+        let state = AdaptiveWorkoutService.makeDesignState(
+            plan: plan,
+            targetComplexCount: 2,
+            readinessRevision: 1
+        )
+        context.insert(preference)
+        context.insert(check)
+        context.insert(plan)
+        context.insert(state)
+        try context.save()
+
+        XCTAssertEqual(state.targetComplexCount, 2)
+        XCTAssertEqual(preference.defaultComplexCount, 4)
+        XCTAssertEqual(plan.complexes.count, 1)
+    }
+
+    func testActiveSubstitutionAndRemovalCorrectLockedWorkWithoutOrphans() throws {
+        let (context, _) = makeContext()
+        let (program, exercise) = makeProgram()
+        let replacement = Exercise(
+            name: "Cable Row",
+            primaryMuscle: .back,
+            type: .compound,
+            equipment: .cable
+        )
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: readyInputs,
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: exercise, check: check)
+        context.insert(check)
+        context.insert(plan)
+        context.insert(exercise)
+        context.insert(replacement)
+        try context.save()
+        let session = try AdaptiveWorkoutService.freeze(plan: plan, modelContext: context)
+        var rows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        let firstRow = try XCTUnwrap(rows.first { $0.setIndex == 1 })
+        let secondRow = try XCTUnwrap(rows.first { $0.setIndex == 2 })
+        firstRow.weight = 60
+        firstRow.reps = 9
+        firstRow.isLocked = true
+        secondRow.weight = 55
+        secondRow.reps = 10
+        secondRow.isLocked = true
+        try context.save()
+        let occurrenceId = try XCTUnwrap(plan.complexes.first?.exercises.first?.occurrenceId)
+        let snapshot = try XCTUnwrap(plan.complexes.first?.exercises.first)
+
+        XCTAssertTrue(try AdaptiveWorkoutService.removeLastSet(
+            snapshot: snapshot,
+            existingEntries: rows,
+            modelContext: context
+        ))
+        rows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(snapshot.prescribedSetCount, 1)
+
+        try AdaptiveWorkoutService.substitute(
+            plan: plan,
+            occurrenceId: occurrenceId,
+            fromExerciseId: exercise.id,
+            to: replacement,
+            difficulty: .hard,
+            adaptiveSessions: [session],
+            setEntries: rows,
+            modelContext: context
+        )
+        rows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        let correctedRow = try XCTUnwrap(rows.first { $0.setIndex == 1 })
+        XCTAssertEqual(correctedRow.exerciseId, replacement.id)
+        XCTAssertEqual(correctedRow.weight, 60)
+        XCTAssertEqual(correctedRow.reps, 9)
+        XCTAssertTrue(correctedRow.isLocked)
+        let payload = AdaptiveExportService.makePayload(
+            plan: plan,
+            session: session,
+            readiness: check,
+            setEntries: rows,
+            exercises: [exercise, replacement],
+            overrides: try context.fetch(FetchDescriptor<AdaptiveOverrideEvent>()),
+            feedback: []
+        )
+        XCTAssertEqual(payload.plan.complexes[0].exercises[0].sets[0].exercise_id, replacement.id.uuidString)
+        XCTAssertEqual(payload.plan.complexes[0].exercises[0].sets[0].weight, 60)
+
+        XCTAssertTrue(try AdaptiveWorkoutService.removeLastSet(
+            snapshot: snapshot,
+            existingEntries: rows,
+            modelContext: context
+        ))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveSetEntry>()), 0)
+        XCTAssertEqual(snapshot.prescribedSetCount, 0)
+        _ = try AdaptiveWorkoutService.addSet(
+            snapshot: snapshot,
+            session: session,
+            existingEntries: [],
+            modelContext: context
+        )
+        rows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.exerciseId, replacement.id)
+
+        try AdaptiveWorkoutService.removeMovement(
+            plan: plan,
+            occurrenceId: occurrenceId,
+            adaptiveSessions: [session],
+            setEntries: rows,
+            modelContext: context
+        )
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveSetEntry>()), 0)
+        XCTAssertTrue(plan.complexes.isEmpty)
+    }
+
+    func testAddMissingComplexAppendsWithoutChangingExistingWork() throws {
+        let (context, _) = makeContext()
+        let (program, chest) = makeProgram()
+        let calves = Exercise(
+            name: "Standing Calf Raise",
+            primaryMuscle: .calves,
+            type: .isolation,
+            equipment: .machine
+        )
+        let calfDefinition = AdaptiveExerciseComplex(
+            definitionId: UUID(),
+            version: 1,
+            name: "Calves",
+            position: 1,
+            primaryMuscle: .calves,
+            qualifiesForPrimaryFloor: true,
+            components: [
+                AdaptiveComplexComponent(
+                    position: 0,
+                    exerciseId: calves.id,
+                    prescribedSetCount: 2,
+                    primaryMuscle: .calves,
+                    difficulty: .easy
+                )
+            ]
+        )
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: readyInputs,
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: chest, check: check)
+        context.insert(check)
+        context.insert(plan)
+        context.insert(chest)
+        context.insert(calves)
+        try context.save()
+        let session = try AdaptiveWorkoutService.freeze(plan: plan, modelContext: context)
+        let originalOccurrence = try XCTUnwrap(plan.complexes.first?.exercises.first?.occurrenceId)
+        let originalRows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).filter {
+            $0.occurrenceId == originalOccurrence
+        }
+        originalRows[0].weight = 60
+        originalRows[0].reps = 9
+        originalRows[0].isLocked = true
+        try context.save()
+
+        let appended = try AdaptiveWorkoutService.appendComplex(
+            plan: plan,
+            definition: calfDefinition,
+            exercises: [chest, calves],
+            adaptiveSessions: [session],
+            modelContext: context
+        )
+        XCTAssertEqual(plan.complexes.sorted(by: { $0.position < $1.position }).map(\.primaryMuscle), [.chest, .calves])
+        XCTAssertEqual(appended.exercises.count, 1)
+        let allRows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        let preserved = try XCTUnwrap(allRows.first { $0.id == originalRows[0].id })
+        XCTAssertEqual(preserved.weight, 60)
+        XCTAssertTrue(preserved.isLocked)
+        XCTAssertEqual(allRows.filter { $0.occurrenceId == appended.exercises[0].occurrenceId }.count, 2)
+    }
+
+    func testManualComplexUsesRequestedDoseAndDoesNotMutatePlanWithoutActiveSession() throws {
+        let (context, _) = makeContext()
+        let (program, chest) = makeProgram()
+        let calves = Exercise(
+            name: "Standing Calf Raise",
+            primaryMuscle: .calves,
+            type: .isolation,
+            equipment: .machine
+        )
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: readyInputs,
+            localDateKey: "2026-07-21",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: chest, check: check)
+        context.insert(check)
+        context.insert(plan)
+        context.insert(chest)
+        context.insert(calves)
+        try context.save()
+        let originalComplexCount = plan.complexes.count
+        plan.status = .frozen
+
+        XCTAssertThrowsError(try AdaptiveWorkoutService.appendComplex(
+            plan: plan,
+            definition: nil,
+            manualExercise: calves,
+            manualPrescribedSetCount: 3,
+            exercises: [chest, calves],
+            adaptiveSessions: [],
+            modelContext: context
+        )) { error in
+            XCTAssertEqual(error as? AdaptiveWorkoutServiceError, .adaptiveSessionNotFound)
+        }
+        XCTAssertEqual(plan.complexes.count, originalComplexCount)
+
+        plan.status = .proposed
+        let session = try AdaptiveWorkoutService.freeze(plan: plan, modelContext: context)
+        let appended = try AdaptiveWorkoutService.appendComplex(
+            plan: plan,
+            definition: nil,
+            manualExercise: calves,
+            manualPrescribedSetCount: 3,
+            exercises: [chest, calves],
+            adaptiveSessions: [session],
+            prefillByExerciseId: [
+                calves.id: [1: AdaptiveSetPrefill(weight: 90, reps: 12)]
+            ],
+            modelContext: context
+        )
+        XCTAssertEqual(appended.exercises.first?.prescribedSetCount, 3)
+        let rows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).filter {
+            $0.occurrenceId == appended.exercises.first?.occurrenceId
+        }
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertEqual(rows.first(where: { $0.setIndex == 1 })?.weight, 90)
+        XCTAssertEqual(rows.first(where: { $0.setIndex == 1 })?.reps, 12)
+    }
+
     private var readyInputs: [MuscleGroup: MuscleReadinessInput] {
         Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map {
             ($0, MuscleReadinessInput(soreness: .none, connectiveTissuePain: .none, eagerness: .neutral))
@@ -961,6 +1314,12 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
 
     private func makeContext() -> (ModelContext, ModelContainer) {
         let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        return (ModelContext(container), container)
+    }
+
+    private func makeV6Context() -> (ModelContext, ModelContainer) {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (ModelContext(container), container)
     }

@@ -77,13 +77,25 @@ enum OpenLiftSchemaV5: VersionedSchema {
     ]
 }
 
+/// Adds explicit exposure-count preferences and per-proposal design state as
+/// parallel records. Existing AdaptiveProgram and workout entities are unchanged.
+enum OpenLiftSchemaV6: VersionedSchema {
+    static let versionIdentifier = Schema.Version(6, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV5.models + [
+        AdaptiveWorkoutSizePreference.self,
+        AdaptivePlanDesignState.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
         OpenLiftSchemaV2.self,
         OpenLiftSchemaV3.self,
         OpenLiftSchemaV4.self,
-        OpenLiftSchemaV5.self
+        OpenLiftSchemaV5.self,
+        OpenLiftSchemaV6.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -102,6 +114,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV4.self,
             toVersion: OpenLiftSchemaV5.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV5.self,
+            toVersion: OpenLiftSchemaV6.self
         )
     ]
 }
