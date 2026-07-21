@@ -150,7 +150,7 @@ struct ImportView: View {
         try modelContext.save()
 
         do {
-            try SessionExportService.export(
+            _ = try SessionExportService.exportAndTrack(
                 session: session,
                 cycleName: cycleName,
                 exercises: exercises,
@@ -166,13 +166,12 @@ struct ImportView: View {
                         )
                     }
                 },
-                requireICloudMirror: true
+                requireICloudMirror: true,
+                modelContext: modelContext
             )
-            session.exportStatus = .success
             try modelContext.save()
         } catch {
             session.exportStatus = .failed
-            SessionExportService.scheduleBackgroundExportRetry()
             try? modelContext.save()
             throw error
         }

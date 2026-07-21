@@ -133,7 +133,7 @@ struct LogWorkoutView: View {
                                 Text(rating.displayName).tag(Optional(rating))
                             }
                         }
-                        Text("Ad hoc feedback is stored with this exercise. It informs future dose conservatively but never makes this session comparable to an Adaptive complex.")
+                        Text("Used to adjust future set recommendations for this exercise.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } header: {
@@ -373,18 +373,17 @@ struct LogWorkoutView: View {
             }
 
             do {
-                try SessionExportService.export(
+                _ = try SessionExportService.exportAndTrack(
                     session: session,
                     cycleName: cycleName,
                     exercises: exercises,
                     setEntries: insertedEntries,
                     requireICloudMirror: true,
-                    adHocFeedback: insertedFeedback
+                    adHocFeedback: insertedFeedback,
+                    modelContext: modelContext
                 )
-                session.exportStatus = .success
             } catch {
                 session.exportStatus = .failed
-                SessionExportService.scheduleBackgroundExportRetry()
                 errorMessage = error.localizedDescription
             }
 
@@ -488,7 +487,7 @@ struct LogWorkoutView: View {
         let fileManager = FileManager.default
         var directories: [URL] = []
 
-        if let iCloudRoot = fileManager.url(forUbiquityContainerIdentifier: nil)?
+        if let iCloudRoot = SessionExportService.iCloudContainerURL()?
             .appendingPathComponent("Documents", isDirectory: true)
             .appendingPathComponent("OpenLift/exports", isDirectory: true) {
             directories.append(iCloudRoot)

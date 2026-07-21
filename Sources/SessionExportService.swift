@@ -1,18 +1,55 @@
 import BackgroundTasks
 import Foundation
+import OSLog
 import SwiftData
 
 enum SessionExportService {
     static let backgroundRefreshIdentifier = "com.mark.openlift.export-retry"
+    private static let logger = Logger(subsystem: "com.mark.openlift", category: "iCloudExport")
+
+    struct UbiquityMetadata: Equatable {
+        let isUbiquitousItem: Bool?
+        let isUploaded: Bool
+        let isUploading: Bool
+        let uploadingErrorDescription: String?
+    }
+
+    struct ExportEnvironment {
+        let containerIdentifier: String?
+        let iCloudContainerURL: URL?
+        let localDocumentsURL: URL?
+        let coordinatedWrite: (Data, URL) throws -> Void
+        let ubiquityMetadata: (URL) throws -> UbiquityMetadata
+
+        static func live() -> ExportEnvironment {
+            let identifier = configuredContainerIdentifier()
+            return ExportEnvironment(
+                containerIdentifier: identifier,
+                iCloudContainerURL: identifier.flatMap {
+                    FileManager.default.url(forUbiquityContainerIdentifier: $0)
+                },
+                localDocumentsURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+                coordinatedWrite: SessionExportService.coordinatedWrite,
+                ubiquityMetadata: SessionExportService.liveUbiquityMetadata
+            )
+        }
+    }
+
+    struct ExportWriteOutcome {
+        let status: ExportStatus
+        let filename: String
+        let containerIdentifier: String?
+        let ubiquityContainerURL: URL?
+        let iCloudDestinationURL: URL?
+        let localMirrorURL: URL?
+        let detail: String
+    }
 
     enum ExportWriteError: LocalizedError {
-        case missingICloudMirror(filename: String)
         case noWritableDestination(filename: String, errors: [String])
 
         var errorDescription: String? {
             switch self {
-            case .missingICloudMirror(let filename):
-                return "Saved locally, but the iCloud export mirror was not written: \(filename)"
             case .noWritableDestination(let filename, let errors):
                 let detail = errors.isEmpty ? "No destination was available." : errors.joined(separator: "; ")
                 return "Could not write export \(filename). \(detail)"
@@ -22,7 +59,11 @@ enum SessionExportService {
 
     @MainActor
     @discardableResult
-    static func retryPendingCompletedSessionExports(modelContext: ModelContext) throws -> Int {
+    static func retryPendingCompletedSessionExports(
+        modelContext: ModelContext,
+        environment: ExportEnvironment = .live()
+    ) throws -> Int {
+        try reconcileUnverifiedLocalExports(modelContext: modelContext)
         let sessions = try modelContext.fetch(FetchDescriptor<Session>())
         let retryableSessions = sessions
             .filter { $0.status == .completed && $0.exportStatus != .success }
@@ -40,21 +81,25 @@ enum SessionExportService {
                 templates: templates
             )
             do {
-                try export(
+                _ = try exportAndTrack(
                     session: session,
                     cycleName: cycleName,
                     exercises: exercises,
                     setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
                     requireICloudMirror: true,
-                    adHocFeedback: adHocFeedback.filter { $0.sessionId == session.id }
+                    adHocFeedback: adHocFeedback.filter { $0.sessionId == session.id },
+                    modelContext: modelContext,
+                    environment: environment
                 )
-                session.exportStatus = .success
             } catch {
                 session.exportStatus = .failed
             }
         }
 
-        let adaptiveSuccessCount = try AdaptiveExportService.retryPendingExports(modelContext: modelContext)
+        let adaptiveSuccessCount = try AdaptiveExportService.retryPendingExports(
+            modelContext: modelContext,
+            environment: environment
+        )
         try modelContext.save()
         if (try? hasPendingCompletedSessionExports(modelContext: modelContext)) == true {
             scheduleBackgroundExportRetry()
@@ -73,7 +118,11 @@ enum SessionExportService {
     @MainActor
     static func runBackgroundExportRetry(modelContainer: ModelContainer) async {
         let modelContext = ModelContext(modelContainer)
-        _ = try? retryPendingCompletedSessionExports(modelContext: modelContext)
+        do {
+            _ = try retryPendingCompletedSessionExports(modelContext: modelContext)
+        } catch {
+            logger.error("Background export retry failed: \(error.localizedDescription, privacy: .public)")
+        }
         if (try? hasPendingCompletedSessionExports(modelContext: modelContext)) == true {
             scheduleBackgroundExportRetry()
         }
@@ -83,7 +132,11 @@ enum SessionExportService {
         guard !AppRuntime.isUITesting else { return }
         let request = BGAppRefreshTaskRequest(identifier: backgroundRefreshIdentifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: interval)
-        try? BGTaskScheduler.shared.submit(request)
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            logger.error("Could not schedule export retry: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private static let iso8601Formatter: ISO8601DateFormatter = {
@@ -244,14 +297,16 @@ enum SessionExportService {
         let entries: [SetEntrySnapshot]
     }
 
+    @discardableResult
     static func export(
         session: Session,
         cycleName: String,
         exercises: [Exercise],
         setEntries: [SetEntry],
         requireICloudMirror: Bool = false,
-        adHocFeedback: [AdHocExerciseFeedback] = []
-    ) throws {
+        adHocFeedback: [AdHocExerciseFeedback] = [],
+        environment: ExportEnvironment = .live()
+    ) throws -> ExportWriteOutcome {
         let loggedEntries = setEntries.filter { $0.reps > 0 }
         let grouped = Dictionary(grouping: loggedEntries, by: { $0.exerciseId })
 
@@ -282,13 +337,184 @@ enum SessionExportService {
         )
 
         let data = try JSONEncoder.pretty.encode(payload)
-        let filename = "workout-\(filenameDateFormatter.string(from: session.finishedAt ?? .now)).json"
-        try writeExportData(
+        let filename = existingLocalExportFilename(sessionId: session.id)
+            ?? "workout-\(filenameDateFormatter.string(from: session.finishedAt ?? .now))-\(session.id.uuidString).json"
+        return try writeExportData(
             data: data,
             relativeSubdirectory: "exports",
             filename: filename,
-            requireICloudMirror: requireICloudMirror
+            requireICloudMirror: requireICloudMirror,
+            environment: environment
         )
+    }
+
+    @MainActor
+    @discardableResult
+    static func exportAndTrack(
+        session: Session,
+        cycleName: String,
+        exercises: [Exercise],
+        setEntries: [SetEntry],
+        requireICloudMirror: Bool,
+        adHocFeedback: [AdHocExerciseFeedback] = [],
+        modelContext: ModelContext,
+        environment: ExportEnvironment = .live()
+    ) throws -> ExportWriteOutcome {
+        do {
+            let outcome = try export(
+                session: session,
+                cycleName: cycleName,
+                exercises: exercises,
+                setEntries: setEntries,
+                requireICloudMirror: requireICloudMirror,
+                adHocFeedback: adHocFeedback,
+                environment: environment
+            )
+            session.exportStatus = outcome.status
+            try record(
+                outcome,
+                sessionId: session.id,
+                sessionKind: .fixed,
+                modelContext: modelContext
+            )
+            if outcome.status != .success { scheduleBackgroundExportRetry() }
+            return outcome
+        } catch {
+            session.exportStatus = .failed
+            try recordFailure(
+                error,
+                sessionId: session.id,
+                sessionKind: .fixed,
+                modelContext: modelContext
+            )
+            scheduleBackgroundExportRetry()
+            throw error
+        }
+    }
+
+    @MainActor
+    static func record(
+        _ outcome: ExportWriteOutcome,
+        sessionId: UUID,
+        sessionKind: ExportSessionKind,
+        modelContext: ModelContext
+    ) throws {
+        let diagnostic = try diagnostic(
+            sessionId: sessionId,
+            sessionKind: sessionKind,
+            modelContext: modelContext
+        ) ?? ExportDiagnostic(
+            sessionId: sessionId,
+            sessionKind: sessionKind,
+            status: outcome.status,
+            filename: outcome.filename,
+            detail: outcome.detail
+        )
+        if diagnostic.modelContext == nil { modelContext.insert(diagnostic) }
+        diagnostic.status = outcome.status
+        diagnostic.filename = outcome.filename
+        diagnostic.containerIdentifier = outcome.containerIdentifier
+        diagnostic.ubiquityContainerPath = outcome.ubiquityContainerURL?.path
+        diagnostic.iCloudDestinationPath = outcome.iCloudDestinationURL?.path
+        diagnostic.localMirrorPath = outcome.localMirrorURL?.path
+        diagnostic.detail = outcome.detail
+        diagnostic.updatedAt = .now
+    }
+
+    @MainActor
+    static func recordFailure(
+        _ error: Error,
+        sessionId: UUID,
+        sessionKind: ExportSessionKind,
+        modelContext: ModelContext
+    ) throws {
+        let existing = try diagnostic(
+            sessionId: sessionId,
+            sessionKind: sessionKind,
+            modelContext: modelContext
+        )
+        let diagnostic = existing ?? ExportDiagnostic(
+            sessionId: sessionId,
+            sessionKind: sessionKind,
+            status: .failed,
+            filename: existing?.filename ?? "unknown",
+            detail: error.localizedDescription
+        )
+        if diagnostic.modelContext == nil { modelContext.insert(diagnostic) }
+        diagnostic.status = .failed
+        diagnostic.detail = error.localizedDescription
+        diagnostic.updatedAt = .now
+    }
+
+    @MainActor
+    private static func diagnostic(
+        sessionId: UUID,
+        sessionKind: ExportSessionKind,
+        modelContext: ModelContext
+    ) throws -> ExportDiagnostic? {
+        try modelContext.fetch(FetchDescriptor<ExportDiagnostic>()).first {
+            $0.sessionId == sessionId && $0.sessionKind == sessionKind
+        }
+    }
+
+    @MainActor
+    private static func reconcileUnverifiedLocalExports(modelContext: ModelContext) throws {
+        let diagnostics = try modelContext.fetch(FetchDescriptor<ExportDiagnostic>())
+        let diagnosed = Set(diagnostics.filter { $0.sessionKind == .fixed }.map(\.sessionId))
+        let presence = exportPresenceBySessionID()
+        guard let iCloudPresence = presence.iCloud else { return }
+        for session in try modelContext.fetch(FetchDescriptor<Session>())
+        where session.status == .completed
+            && session.exportStatus == .success
+            && !diagnosed.contains(session.id)
+            && presence.local.contains(session.id)
+            && !iCloudPresence.contains(session.id) {
+            session.exportStatus = .pending
+        }
+    }
+
+    private static func exportPresenceBySessionID() -> (local: Set<UUID>, iCloud: Set<UUID>?) {
+        func sessionIDs(in directory: URL?) -> Set<UUID>? {
+            guard let directory,
+                  let files = try? FileManager.default.contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                  ) else { return nil }
+            return Set(files.compactMap { file -> UUID? in
+                guard file.pathExtension == "json",
+                      file.lastPathComponent.hasPrefix("workout-"),
+                      let data = try? Data(contentsOf: file),
+                      let payload = decodeExportPayload(data: data, fileURL: file) else { return nil }
+                return UUID(uuidString: payload.session_id)
+            })
+        }
+
+        let environment = ExportEnvironment.live()
+        let iCloudDirectory = environment.iCloudContainerURL.map {
+            exportDirectory(containerURL: $0, relativeSubdirectory: "exports")
+        }
+        let localDirectory = environment.localDocumentsURL?
+            .appendingPathComponent("OpenLift/exports", isDirectory: true)
+        return (sessionIDs(in: localDirectory) ?? [], sessionIDs(in: iCloudDirectory))
+    }
+
+    private static func existingLocalExportFilename(sessionId: UUID) -> String? {
+        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("OpenLift/exports", isDirectory: true)
+        guard let directory,
+              let files = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+              ) else { return nil }
+        return files.sorted { $0.lastPathComponent < $1.lastPathComponent }.first { file in
+            guard file.pathExtension == "json",
+                  file.lastPathComponent.hasPrefix("workout-"),
+                  let data = try? Data(contentsOf: file),
+                  let payload = decodeExportPayload(data: data, fileURL: file) else { return false }
+            return payload.session_id.caseInsensitiveCompare(sessionId.uuidString) == .orderedSame
+        }?.lastPathComponent
     }
 
     static func deleteDraftSnapshot(sessionId: UUID) {
@@ -334,7 +560,7 @@ enum SessionExportService {
 
         let data = try JSONEncoder.pretty.encode(payload)
         let filename = "draft-\(snapshot.sessionId.uuidString).json"
-        try writeExportData(
+        _ = try writeExportData(
             data: data,
             relativeSubdirectory: "exports/drafts",
             filename: filename,
@@ -342,30 +568,37 @@ enum SessionExportService {
         )
     }
 
+    @discardableResult
     static func writeExportData(
         data: Data,
         relativeSubdirectory: String,
         filename: String,
-        requireICloudMirror: Bool
-    ) throws {
+        requireICloudMirror: Bool,
+        environment: ExportEnvironment = .live()
+    ) throws -> ExportWriteOutcome {
         var writeErrors: [String] = []
-        var didWriteICloud = false
         var didWriteLocal = false
+        var iCloudDestination: URL?
+        var localDestination: URL?
+        var metadata: UbiquityMetadata?
 
-        if let iCloudURL = iCloudContainerURL() {
+        if let iCloudURL = environment.iCloudContainerURL {
             do {
-                let exportDir = iCloudURL
-                    .appendingPathComponent("Documents", isDirectory: true)
-                    .appendingPathComponent("OpenLift", isDirectory: true)
-                    .appendingPathComponent(relativeSubdirectory, isDirectory: true)
+                let exportDir = exportDirectory(
+                    containerURL: iCloudURL,
+                    relativeSubdirectory: relativeSubdirectory
+                )
                 try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
                 let destination = exportDir.appendingPathComponent(filename)
-                try coordinatedWrite(data: data, to: destination)
+                iCloudDestination = destination
+                if !fileContentsMatch(data, at: destination) {
+                    try environment.coordinatedWrite(data, destination)
+                }
                 guard FileManager.default.fileExists(atPath: destination.path),
                       (try? Data(contentsOf: destination)) == data else {
                     throw CocoaError(.fileNoSuchFile)
                 }
-                didWriteICloud = true
+                metadata = try environment.ubiquityMetadata(destination)
             } catch {
                 writeErrors.append("iCloud: \(error.localizedDescription)")
             }
@@ -373,47 +606,138 @@ enum SessionExportService {
             writeErrors.append("iCloud: container unavailable")
         }
 
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let localDocumentsDir = docs
-            .appendingPathComponent("OpenLift", isDirectory: true)
-            .appendingPathComponent(relativeSubdirectory, isDirectory: true)
+        if let docs = environment.localDocumentsURL {
+            let localDocumentsDir = docs
+                .appendingPathComponent("OpenLift", isDirectory: true)
+                .appendingPathComponent(relativeSubdirectory, isDirectory: true)
 
-        do {
-            try FileManager.default.createDirectory(at: localDocumentsDir, withIntermediateDirectories: true)
-            let destination = localDocumentsDir.appendingPathComponent(filename)
-            try data.write(to: destination, options: [.atomic])
-            guard FileManager.default.fileExists(atPath: destination.path),
-                  (try? Data(contentsOf: destination)) == data else {
-                throw CocoaError(.fileNoSuchFile)
+            do {
+                try FileManager.default.createDirectory(at: localDocumentsDir, withIntermediateDirectories: true)
+                let destination = localDocumentsDir.appendingPathComponent(filename)
+                localDestination = destination
+                if !fileContentsMatch(data, at: destination) {
+                    try data.write(to: destination, options: [.atomic])
+                }
+                guard FileManager.default.fileExists(atPath: destination.path),
+                      (try? Data(contentsOf: destination)) == data else {
+                    throw CocoaError(.fileNoSuchFile)
+                }
+                didWriteLocal = true
+            } catch {
+                writeErrors.append("local documents: \(error.localizedDescription)")
             }
-            didWriteLocal = true
-        } catch {
-            writeErrors.append("local documents: \(error.localizedDescription)")
         }
 
-        if requireICloudMirror && !didWriteICloud {
-            throw ExportWriteError.missingICloudMirror(filename: filename)
+        let outcome: ExportWriteOutcome
+        if let metadata, metadata.isUbiquitousItem == true, metadata.isUploaded {
+            outcome = ExportWriteOutcome(
+                status: .success,
+                filename: filename,
+                containerIdentifier: environment.containerIdentifier,
+                ubiquityContainerURL: environment.iCloudContainerURL,
+                iCloudDestinationURL: iCloudDestination,
+                localMirrorURL: localDestination,
+                detail: "Uploaded to iCloud Drive."
+            )
+        } else if let metadata, let uploadingError = metadata.uploadingErrorDescription {
+            outcome = ExportWriteOutcome(
+                status: .failed,
+                filename: filename,
+                containerIdentifier: environment.containerIdentifier,
+                ubiquityContainerURL: environment.iCloudContainerURL,
+                iCloudDestinationURL: iCloudDestination,
+                localMirrorURL: localDestination,
+                detail: "iCloud upload failed: \(uploadingError)"
+            )
+        } else if let metadata, metadata.isUbiquitousItem == false {
+            outcome = ExportWriteOutcome(
+                status: .failed,
+                filename: filename,
+                containerIdentifier: environment.containerIdentifier,
+                ubiquityContainerURL: environment.iCloudContainerURL,
+                iCloudDestinationURL: iCloudDestination,
+                localMirrorURL: localDestination,
+                detail: "The destination exists but is not an iCloud ubiquitous item. Check the app container configuration."
+            )
+        } else if metadata != nil {
+            outcome = ExportWriteOutcome(
+                status: .pending,
+                filename: filename,
+                containerIdentifier: environment.containerIdentifier,
+                ubiquityContainerURL: environment.iCloudContainerURL,
+                iCloudDestinationURL: iCloudDestination,
+                localMirrorURL: localDestination,
+                detail: metadata?.isUploading == true
+                    ? "Uploading to iCloud Drive."
+                    : "Queued for iCloud Drive upload."
+            )
+        } else {
+            let detail = writeErrors.isEmpty
+                ? "The configured iCloud container is unavailable; the local recovery mirror is pending retry."
+                : writeErrors.joined(separator: "; ")
+            outcome = ExportWriteOutcome(
+                status: .pending,
+                filename: filename,
+                containerIdentifier: environment.containerIdentifier,
+                ubiquityContainerURL: environment.iCloudContainerURL,
+                iCloudDestinationURL: iCloudDestination,
+                localMirrorURL: localDestination,
+                detail: detail
+            )
         }
 
-        if !didWriteICloud && !didWriteLocal {
+        if metadata == nil && !didWriteLocal {
             throw ExportWriteError.noWritableDestination(filename: filename, errors: writeErrors)
         }
+        return outcome
     }
 
-    private static func iCloudContainerURL() -> URL? {
-        if let configuredIdentifier = Bundle.main.object(forInfoDictionaryKey: "OpenLiftICloudContainerIdentifier") as? String,
-           !configuredIdentifier.isEmpty,
-           !configuredIdentifier.contains("$("),
-           let configuredURL = FileManager.default.url(forUbiquityContainerIdentifier: configuredIdentifier) {
-            return configuredURL
-        }
-        return FileManager.default.url(forUbiquityContainerIdentifier: nil)
+    static func configuredContainerIdentifier(
+        infoDictionary: [String: Any] = Bundle.main.infoDictionary ?? [:]
+    ) -> String? {
+        guard let identifier = infoDictionary["OpenLiftICloudContainerIdentifier"] as? String,
+              !identifier.isEmpty,
+              !identifier.contains("$(") else { return nil }
+        return identifier
+    }
+
+    static func exportDirectory(containerURL: URL, relativeSubdirectory: String) -> URL {
+        containerURL
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("OpenLift", isDirectory: true)
+            .appendingPathComponent(relativeSubdirectory, isDirectory: true)
+    }
+
+    static func iCloudContainerURL() -> URL? {
+        ExportEnvironment.live().iCloudContainerURL
+    }
+
+    private static func fileContentsMatch(_ data: Data, at url: URL) -> Bool {
+        (try? Data(contentsOf: url)) == data
+    }
+
+    private static func liveUbiquityMetadata(at url: URL) throws -> UbiquityMetadata {
+        let values = try url.resourceValues(forKeys: [
+            .isUbiquitousItemKey,
+            .ubiquitousItemIsUploadedKey,
+            .ubiquitousItemIsUploadingKey,
+            .ubiquitousItemUploadingErrorKey
+        ])
+        return UbiquityMetadata(
+            isUbiquitousItem: values.isUbiquitousItem,
+            isUploaded: values.ubiquitousItemIsUploaded == true,
+            isUploading: values.ubiquitousItemIsUploading == true,
+            uploadingErrorDescription: values.ubiquitousItemUploadingError?.localizedDescription
+        )
     }
 
     private static func coordinatedWrite(data: Data, to destination: URL) throws {
         var coordinatorError: NSError?
         var writeError: Error?
-        NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: destination, options: .forReplacing, error: &coordinatorError) { coordinatedURL in
+        let options: NSFileCoordinator.WritingOptions = FileManager.default.fileExists(atPath: destination.path)
+            ? .forReplacing
+            : []
+        NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: destination, options: options, error: &coordinatorError) { coordinatedURL in
             do {
                 try data.write(to: coordinatedURL, options: [.atomic])
             } catch {
@@ -684,6 +1008,7 @@ enum AdaptiveExportService {
         return payload
     }
 
+    @discardableResult
     static func export(
         plan: GeneratedWorkoutPlan,
         session: AdaptiveWorkoutSession,
@@ -692,8 +1017,9 @@ enum AdaptiveExportService {
         exercises: [Exercise],
         overrides: [AdaptiveOverrideEvent],
         feedback: [ComplexFeedback],
-        requireICloudMirror: Bool = false
-    ) throws {
+        requireICloudMirror: Bool = false,
+        environment: SessionExportService.ExportEnvironment = .live()
+    ) throws -> SessionExportService.ExportWriteOutcome {
         let payload = makePayload(
             plan: plan,
             session: session,
@@ -705,16 +1031,68 @@ enum AdaptiveExportService {
         )
         let data = try encode(payload)
         let stamp = exportFilenameDateFormatter.string(from: session.finishedAt ?? .now)
-        try SessionExportService.writeExportData(
+        return try SessionExportService.writeExportData(
             data: data,
             relativeSubdirectory: "exports",
             filename: "workout-\(stamp)-\(session.id.uuidString).json",
-            requireICloudMirror: requireICloudMirror
+            requireICloudMirror: requireICloudMirror,
+            environment: environment
         )
     }
 
     @MainActor
-    static func retryPendingExports(modelContext: ModelContext) throws -> Int {
+    @discardableResult
+    static func exportAndTrack(
+        plan: GeneratedWorkoutPlan,
+        session: AdaptiveWorkoutSession,
+        readiness: DailyReadinessCheck,
+        setEntries: [AdaptiveSetEntry],
+        exercises: [Exercise],
+        overrides: [AdaptiveOverrideEvent],
+        feedback: [ComplexFeedback],
+        requireICloudMirror: Bool,
+        modelContext: ModelContext,
+        environment: SessionExportService.ExportEnvironment = .live()
+    ) throws -> SessionExportService.ExportWriteOutcome {
+        do {
+            let outcome = try export(
+                plan: plan,
+                session: session,
+                readiness: readiness,
+                setEntries: setEntries,
+                exercises: exercises,
+                overrides: overrides,
+                feedback: feedback,
+                requireICloudMirror: requireICloudMirror,
+                environment: environment
+            )
+            session.exportStatus = outcome.status
+            try SessionExportService.record(
+                outcome,
+                sessionId: session.id,
+                sessionKind: .adaptive,
+                modelContext: modelContext
+            )
+            if outcome.status != .success { SessionExportService.scheduleBackgroundExportRetry() }
+            return outcome
+        } catch {
+            session.exportStatus = .failed
+            try SessionExportService.recordFailure(
+                error,
+                sessionId: session.id,
+                sessionKind: .adaptive,
+                modelContext: modelContext
+            )
+            SessionExportService.scheduleBackgroundExportRetry()
+            throw error
+        }
+    }
+
+    @MainActor
+    static func retryPendingExports(
+        modelContext: ModelContext,
+        environment: SessionExportService.ExportEnvironment = .live()
+    ) throws -> Int {
         let sessions = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
             .filter { $0.status == .completed && $0.exportStatus != .success }
         guard !sessions.isEmpty else { return 0 }
@@ -731,7 +1109,7 @@ enum AdaptiveExportService {
                 continue
             }
             do {
-                try export(
+                _ = try exportAndTrack(
                     plan: plan,
                     session: session,
                     readiness: check,
@@ -739,9 +1117,10 @@ enum AdaptiveExportService {
                     exercises: exercises,
                     overrides: overrides,
                     feedback: feedback,
-                    requireICloudMirror: true
+                    requireICloudMirror: true,
+                    modelContext: modelContext,
+                    environment: environment
                 )
-                session.exportStatus = .success
             } catch {
                 session.exportStatus = .failed
             }
@@ -752,7 +1131,7 @@ enum AdaptiveExportService {
     static func loadPayloads() -> [PayloadV2] {
         let fileManager = FileManager.default
         var directories: [URL] = []
-        if let iCloud = fileManager.url(forUbiquityContainerIdentifier: nil)?
+        if let iCloud = SessionExportService.iCloudContainerURL()?
             .appendingPathComponent("Documents/OpenLift/exports", isDirectory: true) {
             directories.append(iCloud)
         }
@@ -922,7 +1301,7 @@ enum AdaptiveExportService {
                 createdAt: SessionExportService.parseExportDate(payload.plan.created_at) ?? finishedAt,
                 finishedAt: finishedAt,
                 status: .completed,
-                exportStatus: .success
+                exportStatus: .pending
             )
         )
         recoveredEntries.forEach(modelContext.insert)

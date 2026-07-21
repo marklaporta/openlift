@@ -79,14 +79,8 @@ struct AdaptiveProgramEditorView: View {
                 value: $draft.globalMaxMovements,
                 in: 1...20
             )
-            Text("This limits the automatic proposal. You can add or remove movements before accepting a workout.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text("Compound exercises are hard/core; isolation exercises are accessory/light. OpenLift will not pair compound quad and hamstring work.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             Toggle("Reviewed for real use", isOn: $draft.isReviewedForUse)
-            Text("Review means you have checked every rank, training window, cap, exercise category, exercise, and set count. Saving always creates a new immutable version.")
+            Text("Approve after checking the settings below. Saving creates a new version.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -95,19 +89,12 @@ struct AdaptiveProgramEditorView: View {
                     draft = AdaptiveProgramService.demoDraft(exercises: exercises)
                 }
                 .accessibilityIdentifier("adaptive.loadDemo")
-                Text("The starter is only a proposal. It does not invent exercises for muscle groups missing from your catalog and cannot save until every enabled group has a qualifying complex.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }
 
     private var muscleRulesSection: some View {
         Section("Muscle Rules") {
-            Text("Supported: Chest, Back, Triceps, Biceps, Shoulders, Quads, Hamstrings, Forearms, Glutes, Calves, Abs, and Traps.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             ForEach(Array(draft.muscleRules.indices), id: \.self) { index in
                 let rule = draft.muscleRules[index]
                 DisclosureGroup {
@@ -144,7 +131,7 @@ struct AdaptiveProgramEditorView: View {
                             value: $draft.muscleRules[index].rollingWindowDays,
                             in: 1...60
                         )
-                        Text("Binary exposure rule: qualifying completed work means trained, regardless of how many sets were performed. Sets are adjusted separately from feedback and performance.")
+                        Text("Any qualifying completed work counts as trained.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Stepper(
@@ -181,7 +168,7 @@ struct AdaptiveProgramEditorView: View {
 
     private var complexesSection: some View {
         Section("Ordered Exercise Complexes") {
-            Text("A complex is atomic: all enabled components are selected together, in this order, and each component consumes one daily movement slot.")
+            Text("Exercises in a complex are scheduled together in this order.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -217,7 +204,7 @@ struct AdaptiveProgramEditorView: View {
 
             Button("Add Component") { addComponent(to: complexIndex) }
                 .disabled(activeExercises.isEmpty)
-            Text("A typical complex contains one compound core movement and one isolation accessory. Automatic plans never include two compounds for the same muscle.")
+            Text("Default: one compound plus one isolation. Automatic plans will not pair two compounds.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

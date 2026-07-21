@@ -14,7 +14,6 @@ struct PublishedCycleTemplateDraft {
 }
 
 enum PublishedCycleService {
-    private static let infoPlistContainerKey = "OpenLiftICloudContainerIdentifier"
     enum PublishedCycleError: LocalizedError {
         case folderUnavailable
         case invalidFile(String)
@@ -36,7 +35,7 @@ enum PublishedCycleService {
     }
 
     static func cyclesFolderURL() throws -> URL {
-        if let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: containerIdentifier) {
+        if let iCloudURL = SessionExportService.iCloudContainerURL() {
             let folder = iCloudURL
                 .appendingPathComponent("Documents", isDirectory: true)
                 .appendingPathComponent("OpenLift", isDirectory: true)
@@ -45,14 +44,6 @@ enum PublishedCycleService {
             return folder
         }
         throw PublishedCycleError.folderUnavailable
-    }
-
-    private static var containerIdentifier: String {
-        guard let value = Bundle.main.object(forInfoDictionaryKey: infoPlistContainerKey) as? String,
-              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "iCloud.com.example.openlift"
-        }
-        return value
     }
 
     static func listPublishedCycles() throws -> [PublishedCycleFile] {

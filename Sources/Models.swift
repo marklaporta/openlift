@@ -60,6 +60,62 @@ enum ExportStatus: String, Codable {
     case pending
     case success
     case failed
+
+    var displayName: String {
+        switch self {
+        case .pending: "Pending"
+        case .success: "Uploaded"
+        case .failed: "Needs Attention"
+        }
+    }
+}
+
+enum ExportSessionKind: String, Codable {
+    case fixed
+    case adaptive
+}
+
+/// Persistent evidence for the distinction between a recovery mirror, a file
+/// queued in the ubiquitous container, and an item confirmed uploaded by iCloud.
+@Model
+final class ExportDiagnostic {
+    @Attribute(.unique) var id: UUID
+    var sessionId: UUID
+    var sessionKind: ExportSessionKind
+    var status: ExportStatus
+    var filename: String
+    var containerIdentifier: String?
+    var ubiquityContainerPath: String?
+    var iCloudDestinationPath: String?
+    var localMirrorPath: String?
+    var detail: String
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        sessionKind: ExportSessionKind,
+        status: ExportStatus,
+        filename: String,
+        containerIdentifier: String? = nil,
+        ubiquityContainerPath: String? = nil,
+        iCloudDestinationPath: String? = nil,
+        localMirrorPath: String? = nil,
+        detail: String,
+        updatedAt: Date = .now
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.sessionKind = sessionKind
+        self.status = status
+        self.filename = filename
+        self.containerIdentifier = containerIdentifier
+        self.ubiquityContainerPath = ubiquityContainerPath
+        self.iCloudDestinationPath = iCloudDestinationPath
+        self.localMirrorPath = localMirrorPath
+        self.detail = detail
+        self.updatedAt = updatedAt
+    }
 }
 
 enum RotationPoolKey: String, Codable, CaseIterable {
