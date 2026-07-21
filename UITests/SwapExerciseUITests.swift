@@ -253,6 +253,54 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Adaptive"].waitForExistence(timeout: 5))
     }
 
+    func testAdaptiveProposalUsesHistoryForNextDoseAndPrefill() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "OPENLIFT_UI_TESTING",
+            "OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW",
+            "OPENLIFT_UI_TESTING_ADAPTIVE_HISTORY"
+        ]
+        app.launch()
+
+        app.tabBars.buttons["Cycle"].tap()
+        dismissExpectedICloudCycleAlertIfPresent(in: app)
+        let adaptiveMode = app.buttons["Adaptive Floating"]
+        XCTAssertTrue(adaptiveMode.waitForExistence(timeout: 5))
+        adaptiveMode.tap()
+
+        app.tabBars.buttons["Workout"].tap()
+        let fillReadiness = app.buttons["adaptive.fillTestReadiness"]
+        scrollToElement(fillReadiness, in: app)
+        fillReadiness.tap()
+
+        let generatePlan = app.buttons["adaptive.generatePlan"]
+        scrollToElement(generatePlan, in: app)
+        generatePlan.tap()
+
+        let proposalSummary = app.staticTexts["4 component movement(s) · planner v2"]
+        XCTAssertTrue(proposalSummary.waitForExistence(timeout: 10))
+        for exercise in ["Flat Dumbbell Press", "Cable Row", "Bayesian Curl", "Cable Lateral Raise"] {
+            XCTAssertTrue((proposalSummary.value as? String)?.contains(exercise) == true)
+        }
+
+        let increasedDose = app.staticTexts["2 set(s) · Easy"]
+        scrollToElement(increasedDose, in: app)
+        XCTAssertTrue(increasedDose.exists)
+        let priorPerformance = app.staticTexts["adaptive.previous.Flat Dumbbell Press"]
+        scrollToElement(priorPerformance, in: app)
+        XCTAssertEqual(priorPerformance.label, "Previous: 60.0 x 9")
+
+        let useWorkout = app.buttons["adaptive.useWorkout"]
+        scrollToElement(useWorkout, in: app)
+        useWorkout.tap()
+
+        let firstWeight = app.textFields["adaptive.weight.Flat Dumbbell Press.1"]
+        scrollToElement(firstWeight, in: app)
+        XCTAssertEqual(firstWeight.value as? String, "60")
+        let firstReps = app.textFields["adaptive.reps.Flat Dumbbell Press.1"]
+        XCTAssertEqual(firstReps.value as? String, "9")
+    }
+
     func testLogWorkoutExportsToICloudMirror() throws {
         guard ProcessInfo.processInfo.environment["OPENLIFT_RUN_ICLOUD_E2E"] == "1" else {
             throw XCTSkip("Real-device iCloud export smoke test is opt-in.")

@@ -131,7 +131,9 @@ struct AdaptiveWorkoutView: View {
             Text(errorMessage ?? "Unknown error")
         }
         .task {
-            _ = try? AdaptiveExportService.hydrateAvailableExports(modelContext: modelContext)
+            if !AppRuntime.isUITesting {
+                _ = try? AdaptiveExportService.hydrateAvailableExports(modelContext: modelContext)
+            }
             await seedUITestProfileIfRequested()
         }
     }
@@ -256,6 +258,13 @@ struct AdaptiveWorkoutView: View {
             let movementCount = complexes.reduce(0) { $0 + $1.exercises.count }
             Text("\(movementCount) component movement(s) · planner v\(plan.plannerVersion)")
                 .font(.headline)
+                .accessibilityValue(
+                    complexes
+                        .flatMap(\.exercises)
+                        .sorted { $0.position < $1.position }
+                        .map(\.exerciseName)
+                        .joined(separator: ", ")
+                )
             Text("Four is the automatic planner target. Add or remove movements here before accepting the workout.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -278,6 +287,7 @@ struct AdaptiveWorkoutView: View {
                             )
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("adaptive.previous.\(exercise.exerciseName)")
                         }
                         Spacer()
                         Button {
@@ -940,44 +950,68 @@ struct AdaptiveWorkoutView: View {
         do {
             let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: modelContext)
             guard let chest = catalog.first(where: { $0.primaryMuscle == .chest }) else { return }
+            let fixtureExercises: [Exercise]
+            if AppRuntime.isAdaptiveHistoryUITesting {
+                let names = [
+                    "Flat Dumbbell Press",
+                    "Cable Row",
+                    "Bayesian Curl",
+                    "Cable Lateral Raise"
+                ]
+                fixtureExercises = names.compactMap { name in
+                    catalog.first(where: { $0.name == name })
+                }
+                guard fixtureExercises.count == names.count else { return }
+            } else {
+                fixtureExercises = [chest]
+            }
+            let enabledMuscles = Set(fixtureExercises.map(\.primaryMuscle))
             var draft = AdaptiveProgramDraft.blank
             draft.name = "UI Test Adaptive"
             draft.isReviewedForUse = true
             draft.muscleRules = draft.muscleRules.map { rule in
                 var copy = rule
-                copy.isEnabled = rule.muscle == .chest
-                copy.priorityRank = rule.muscle == .chest ? 1 : 0
+                copy.isEnabled = enabledMuscles.contains(rule.muscle)
+                copy.priorityRank = fixtureExercises.firstIndex(where: {
+                    $0.primaryMuscle == rule.muscle
+                }).map { $0 + 1 } ?? 0
                 copy.rollingSetFloor = 0
                 return copy
             }
-            draft.complexes = [
+            draft.complexes = fixtureExercises.map { exercise in
                 AdaptiveExerciseComplexDraft(
                     id: UUID(),
                     definitionId: UUID(),
                     sourceVersion: 0,
-                    name: "UI Test Chest",
-                    primaryMuscle: .chest,
+                    name: "UI Test \(exercise.primaryMuscle.displayName)",
+                    primaryMuscle: exercise.primaryMuscle,
                     qualifiesForPrimaryFloor: true,
                     isEnabled: true,
                     components: [
                         AdaptiveComplexComponentDraft(
                             id: UUID(),
-                            exerciseId: chest.id,
+                            exerciseId: exercise.id,
                             prescribedSetCount: 1,
-                            primaryMuscle: .chest,
+                            primaryMuscle: exercise.primaryMuscle,
                             secondaryMuscle: nil,
                             difficulty: .easy
                         )
                     ]
                 )
-            ]
-            _ = try AdaptiveProgramService.saveVersion(
+            }
+            let program = try AdaptiveProgramService.saveVersion(
                 draft: draft,
                 replacing: nil,
                 allPrograms: adaptivePrograms,
                 exercises: catalog,
                 modelContext: modelContext
             )
+            if AppRuntime.isAdaptiveHistoryUITesting {
+                guard let plannedChest = fixtureExercises.first(where: {
+                    $0.primaryMuscle == .chest
+                }) else { return }
+                try seedUITestAdaptiveHistory(program: program, exercise: plannedChest)
+            }
             readiness = Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map {
                 (
                     $0,
@@ -993,6 +1027,76 @@ struct AdaptiveWorkoutView: View {
         }
 #endif
     }
+
+#if DEBUG
+    private func seedUITestAdaptiveHistory(program: AdaptiveProgram, exercise: Exercise) throws {
+        guard let definition = program.complexes.first(where: { $0.primaryMuscle == .chest }) else { return }
+        let calendar = Calendar.current
+        for dayOffset in [-6, -3] {
+            guard let workoutDate = calendar.date(byAdding: .day, value: dayOffset, to: .now) else { continue }
+            let occurrenceId = UUID()
+            let exerciseSnapshot = PlannedExerciseSnapshot(
+                occurrenceId: occurrenceId,
+                position: 0,
+                exerciseId: exercise.id,
+                exerciseName: exercise.name,
+                primaryMuscle: .chest,
+                difficulty: .easy,
+                prescribedSetCount: 1
+            )
+            let complexSnapshot = PlannedComplexSnapshot(
+                sourceDefinitionId: definition.definitionId,
+                sourceVersion: definition.version,
+                position: definition.position,
+                name: definition.name,
+                primaryMuscle: .chest,
+                reasonCodes: ["ui_test_prior_workout"],
+                exercises: [exerciseSnapshot]
+            )
+            let plan = GeneratedWorkoutPlan(
+                localDateKey: AdaptiveWorkoutService.localDateKey(for: workoutDate),
+                timeZoneIdentifier: TimeZone.current.identifier,
+                createdAt: workoutDate,
+                frozenAt: workoutDate,
+                status: .completed,
+                adaptiveProgramId: program.id,
+                adaptiveProgramVersion: program.version,
+                readinessCheckId: UUID(),
+                plannerVersion: AdaptivePlanService.plannerVersion,
+                reasonCodes: ["ui_test_prior_workout"],
+                complexes: [complexSnapshot]
+            )
+            let session = AdaptiveWorkoutSession(
+                generatedPlanId: plan.id,
+                createdAt: workoutDate,
+                finishedAt: workoutDate.addingTimeInterval(1_800),
+                status: .completed,
+                exportStatus: .success
+            )
+            plan.sessionId = session.id
+            let setEntry = AdaptiveSetEntry(
+                adaptiveSessionId: session.id,
+                occurrenceId: occurrenceId,
+                exerciseId: exercise.id,
+                setIndex: 1,
+                weight: 60,
+                reps: 9,
+                isLocked: true
+            )
+            let feedback = ComplexFeedback(
+                generatedPlanId: plan.id,
+                plannedComplexId: complexSnapshot.id,
+                rating: .tooLittle,
+                createdAt: workoutDate.addingTimeInterval(1_900)
+            )
+            modelContext.insert(plan)
+            modelContext.insert(session)
+            modelContext.insert(setEntry)
+            modelContext.insert(feedback)
+        }
+        try modelContext.save()
+    }
+#endif
 }
 
 private struct ReadinessSelection {
@@ -1057,6 +1161,7 @@ private struct AdaptiveExerciseSection: View {
                     .disabled(entry.isLocked)
                     .opacity(entry.isLocked ? 1 : 0.55)
                     .focused($focusedField, equals: .weight(entry.id))
+                    .accessibilityIdentifier("adaptive.weight.\(title).\(entry.setIndex)")
 
                     Text("R")
                         .font(.caption2)
@@ -1078,6 +1183,7 @@ private struct AdaptiveExerciseSection: View {
                     .disabled(entry.isLocked)
                     .opacity(entry.isLocked ? 1 : 0.55)
                     .focused($focusedField, equals: .reps(entry.id))
+                    .accessibilityIdentifier("adaptive.reps.\(title).\(entry.setIndex)")
 
                     Button {
                         focusedField = nil

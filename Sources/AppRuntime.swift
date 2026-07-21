@@ -11,6 +11,9 @@ enum AppRuntime {
     static let isAdaptiveWorkflowUITesting = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW"
     )
+    static let isAdaptiveHistoryUITesting = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_UI_TESTING_ADAPTIVE_HISTORY"
+    )
 
     static func prepareForUITesting() {
         guard isUITesting else { return }
