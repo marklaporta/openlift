@@ -142,6 +142,9 @@ struct AdaptiveProgramEditorView: View {
                             value: $draft.muscleRules[index].rollingWindowDays,
                             in: 1...60
                         )
+                        Text("The floor is a rolling multi-day target. A missing baseline makes this muscle due, but does not force the entire deficit into one workout.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Stepper(
                             "Maximum recovered gap: \(rule.maxRecoveredDayGap) days",
                             value: $draft.muscleRules[index].maxRecoveredDayGap,

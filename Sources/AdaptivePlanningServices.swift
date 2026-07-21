@@ -435,13 +435,25 @@ enum AdaptivePlanService {
                     .filter { !selectedDefinitions.contains($0.definitionId) }
                     .sorted(by: floorFitOrder)
                 guard let fitting = options.first(where: { fitFailure(for: $0) == nil }) else {
-                    if !eligibleQualifying.isEmpty {
+                    let failures = options.compactMap(fitFailure(for:))
+                    // A rolling floor is a multi-day target, not a requirement
+                    // to erase the entire deficit in one workout. Once every
+                    // distinct qualifying complex that fits today has been
+                    // used, retain the remaining deficit for future recovered
+                    // exposures. This is especially important at cold start,
+                    // when every enabled muscle may have a zero-set baseline.
+                    //
+                    // A due muscle with no usable dose at all because every
+                    // candidate exceeds its per-exercise set cap remains a
+                    // genuine configuration conflict.
+                    if setDose[rule.muscle, default: 0] == 0,
+                       !options.isEmpty,
+                       failures.allSatisfy({ $0 == "sets_per_exercise_cap" }) {
                         return .infeasible(
                             AdaptivePlanConflict(
                                 muscle: rule.muscle,
                                 requiredAdditionalSets: target - setDose[rule.muscle, default: 0],
-                                code: options.compactMap(fitFailure(for:)).first
-                                    ?? "insufficient_floor_qualifying_dose"
+                                code: "sets_per_exercise_cap"
                             )
                         )
                     }
