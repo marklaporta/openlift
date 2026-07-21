@@ -122,8 +122,8 @@ struct AdaptiveProgramDraft: Equatable {
         AdaptiveProgramDraft(
             name: "New Adaptive Profile",
             isReviewedForUse: false,
-            globalMaxMovements: 6,
-            maxDifficultyCost: 10,
+            globalMaxMovements: 4,
+            maxDifficultyCost: 60,
             muscleRules: MuscleGroup.allCases.map { muscle in
                 let rank = MuscleGroup.initialAdaptiveRankOrder.firstIndex(of: muscle).map { $0 + 1 }
                 return AdaptiveMuscleRuleDraft(
@@ -424,15 +424,6 @@ enum AdaptiveProgramService {
                 name: name,
                 count: complex.components.count,
                 cap: draft.globalMaxMovements
-            )
-        }
-
-        let difficultyCost = complex.components.reduce(0) { $0 + $1.difficulty.cost }
-        if difficultyCost > draft.maxDifficultyCost {
-            throw AdaptiveProgramValidationError.complexExceedsDifficultyBudget(
-                name: name,
-                cost: difficultyCost,
-                budget: draft.maxDifficultyCost
             )
         }
 

@@ -35,6 +35,7 @@ struct TrainingLoadEvidence: Equatable {
 struct MuscleLoadSummary: Equatable {
     var lockedSetCount: Int = 0
     var lastProductiveExposureAt: Date?
+    var lastDirectProductiveExposureAt: Date?
 }
 
 struct TrainingLoadLedger: Equatable {
@@ -62,6 +63,11 @@ enum TrainingLoadLedgerService {
                 var summary = summaries[muscle] ?? MuscleLoadSummary()
                 if summary.lastProductiveExposureAt == nil || item.completedAt > summary.lastProductiveExposureAt! {
                     summary.lastProductiveExposureAt = item.completedAt
+                }
+                if item.muscles.first == muscle,
+                   summary.lastDirectProductiveExposureAt == nil
+                    || item.completedAt > summary.lastDirectProductiveExposureAt! {
+                    summary.lastDirectProductiveExposureAt = item.completedAt
                 }
                 let window = rollingWindowDays[muscle] ?? 7
                 let threshold = calendar.date(byAdding: .day, value: -window, to: asOf) ?? .distantPast
@@ -260,7 +266,7 @@ struct AdaptivePlanDecisionTrace: Equatable {
 }
 
 enum AdaptivePlanService {
-    static let plannerVersion = 1
+    static let plannerVersion = 2
 
     static func generate(
         program: AdaptiveProgram,
@@ -323,6 +329,19 @@ enum AdaptivePlanService {
                     rejections.append(.init(complexDefinitionId: complex.definitionId, code: "held_for_recovery"))
                     return nil
                 }
+                if attributedMuscles.contains(where: {
+                    isWithinDOMSObservationWindow(
+                        muscle: $0,
+                        lastDirectExposureAt: ledger[$0].lastDirectProductiveExposureAt,
+                        now: now,
+                        calendar: calendar
+                    )
+                }) {
+                    rejections.append(
+                        .init(complexDefinitionId: complex.definitionId, code: "doms_observation_window")
+                    )
+                    return nil
+                }
                 guard rules[complex.primaryMuscle] != nil else {
                     rejections.append(.init(complexDefinitionId: complex.definitionId, code: "primary_muscle_disabled"))
                     return nil
@@ -347,8 +366,14 @@ enum AdaptivePlanService {
 
         func fitFailure(for candidate: AdaptivePlannedComplex) -> String? {
             if movements + candidate.components.count > program.globalMaxMovements { return "daily_movement_cap" }
-            let candidateDifficulty = candidate.components.reduce(0) { $0 + $1.difficulty.cost }
-            if difficulty + candidateDifficulty > program.maxDifficultyCost { return "difficulty_budget" }
+            let combinedComponents = selected.flatMap(\.components) + candidate.components
+            let hasHardQuads = combinedComponents.contains {
+                $0.difficulty == .hard && ($0.primaryMuscle == .quads || $0.secondaryMuscle == .quads)
+            }
+            let hasHardHamstrings = combinedComponents.contains {
+                $0.difficulty == .hard && ($0.primaryMuscle == .hamstrings || $0.secondaryMuscle == .hamstrings)
+            }
+            if hasHardQuads && hasHardHamstrings { return "hard_quad_hamstring_pair" }
 
             var addedExerciseCounts: [MuscleGroup: Int] = [:]
             for component in candidate.components {
@@ -512,6 +537,27 @@ enum AdaptivePlanService {
         let rightCost = right.components.reduce(0) { $0 + $1.difficulty.cost }
         if leftCost != rightCost { return leftCost < rightCost }
         return stableComplexOrder(left, right)
+    }
+
+    private static func isWithinDOMSObservationWindow(
+        muscle: MuscleGroup,
+        lastDirectExposureAt: Date?,
+        now: Date,
+        calendar: Calendar
+    ) -> Bool {
+        // Side-delt work is intentionally allowed on consecutive days when
+        // today's observed readiness is clear. Secondary loading never starts
+        // this timer (for example chest -> triceps or back -> biceps).
+        guard muscle != .sideDelts,
+              let lastDirectExposureAt,
+              lastDirectExposureAt <= now else { return false }
+        let exposureDay = calendar.startOfDay(for: lastDirectExposureAt)
+        let currentDay = calendar.startOfDay(for: now)
+        let elapsedDays = calendar.dateComponents([.day], from: exposureDay, to: currentDay).day ?? 0
+        // Soreness can understate recovery on the first morning and commonly
+        // peaks around the second. Do not let a low first-day answer alone
+        // clear the muscle; retest readiness from the second calendar day on.
+        return elapsedDays < 2
     }
 }
 

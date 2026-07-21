@@ -328,7 +328,7 @@ struct CycleView: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
-                    Text("\(program.globalMaxMovements) movements/day · difficulty budget \(program.maxDifficultyCost)")
+                    Text("Planner target: \(program.globalMaxMovements) movements · hard quad/hamstring pairing blocked")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Label(

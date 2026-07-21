@@ -97,6 +97,124 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertTrue(entries.allSatisfy { $0.exerciseId == replacement.id })
     }
 
+    func testProposedSlateCanExceedPlannerTargetAndAuditsAddAndRemove() throws {
+        let (context, _) = makeContext()
+        let (program, exercise) = makeProgram()
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: readyInputs,
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: exercise, check: check)
+        context.insert(check)
+        context.insert(plan)
+
+        let additions = (1...4).map {
+            Exercise(
+                name: "Manual Movement \($0)",
+                primaryMuscle: .biceps,
+                type: .isolation,
+                equipment: .cable
+            )
+        }
+        additions.forEach(context.insert)
+        try context.save()
+
+        for addition in additions {
+            try AdaptiveWorkoutService.addProposedMovement(
+                plan: plan,
+                exercise: addition,
+                difficulty: .easy,
+                prescribedSetCount: 2,
+                modelContext: context
+            )
+        }
+
+        XCTAssertEqual(plan.complexes.flatMap(\.exercises).count, 5)
+        XCTAssertNil(plan.sessionId)
+        let addedOccurrence = try XCTUnwrap(
+            plan.complexes.flatMap(\.exercises).first { $0.exerciseId == additions[0].id }
+        )
+        try AdaptiveWorkoutService.removeProposedMovement(
+            plan: plan,
+            occurrenceId: addedOccurrence.occurrenceId,
+            modelContext: context
+        )
+
+        XCTAssertEqual(plan.complexes.flatMap(\.exercises).count, 4)
+        XCTAssertFalse(plan.complexes.flatMap(\.exercises).contains { $0.occurrenceId == addedOccurrence.occurrenceId })
+        let events = try context.fetch(FetchDescriptor<AdaptiveOverrideEvent>())
+        XCTAssertEqual(events.filter { $0.kind == .addExercise }.count, 4)
+        XCTAssertEqual(events.filter { $0.kind == .removeExercise }.count, 1)
+    }
+
+    func testManualSlateEditsCannotCreateHardQuadHamstringPair() throws {
+        let (context, _) = makeContext()
+        let (program, exercise) = makeProgram()
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: readyInputs,
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: exercise, check: check)
+        context.insert(check)
+        context.insert(plan)
+        let quad = Exercise(name: "Hack Squat", primaryMuscle: .quads, type: .compound, equipment: .machine)
+        let hamstring = Exercise(name: "SLDL", primaryMuscle: .hamstrings, type: .compound, equipment: .barbell)
+        context.insert(quad)
+        context.insert(hamstring)
+        try context.save()
+
+        try AdaptiveWorkoutService.addProposedMovement(
+            plan: plan,
+            exercise: quad,
+            difficulty: .hard,
+            prescribedSetCount: 2,
+            modelContext: context
+        )
+        XCTAssertThrowsError(
+            try AdaptiveWorkoutService.addProposedMovement(
+                plan: plan,
+                exercise: hamstring,
+                difficulty: .hard,
+                prescribedSetCount: 2,
+                modelContext: context
+            )
+        ) { error in
+            XCTAssertEqual(error as? AdaptiveWorkoutServiceError, .hardQuadHamstringPair)
+        }
+    }
+
+    func testEmptyProposedSlateCannotBeFrozen() throws {
+        let (context, _) = makeContext()
+        let (program, exercise) = makeProgram()
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: readyInputs,
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: exercise, check: check)
+        context.insert(check)
+        context.insert(plan)
+        try context.save()
+        let occurrenceId = try XCTUnwrap(plan.complexes.first?.exercises.first?.occurrenceId)
+        try AdaptiveWorkoutService.removeProposedMovement(
+            plan: plan,
+            occurrenceId: occurrenceId,
+            modelContext: context
+        )
+
+        XCTAssertThrowsError(try AdaptiveWorkoutService.freeze(plan: plan, modelContext: context)) { error in
+            XCTAssertEqual(error as? AdaptiveWorkoutServiceError, .emptyProposedPlan)
+        }
+    }
+
     func testFreezeSnapshotsPlanAndDefinitionEditsCannotRewriteIt() throws {
         let (context, container) = makeContext()
         let (program, exercise) = makeProgram()

@@ -524,6 +524,8 @@ final class BootstrapDataServiceTests: XCTestCase {
         )
         XCTAssertEqual(program.name, "Adaptive Floating — Initial")
         XCTAssertTrue(program.isReviewedForUse)
+        XCTAssertEqual(program.globalMaxMovements, 4)
+        XCTAssertEqual(program.maxDifficultyCost, 60)
         XCTAssertEqual(program.createdAt, try XCTUnwrap(SessionExportService.parseExportDate(payload.date)))
         XCTAssertEqual(
             program.muscleRules.filter(\.isEnabled).sorted { $0.priorityRank < $1.priorityRank }.map(\.muscle),
