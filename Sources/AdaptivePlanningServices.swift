@@ -277,9 +277,9 @@ enum AdaptivePlanService {
         let rules = Dictionary(uniqueKeysWithValues: enabledRules.map { ($0.muscle, $0) })
         let exercisesById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
 
-        for muscle in MuscleGroup.allCases where readiness[muscle] == nil {
+        for rule in enabledRules where readiness[rule.muscle] == nil {
             return .infeasible(
-                AdaptivePlanConflict(muscle: muscle, requiredAdditionalSets: 0, code: "missing_readiness")
+                AdaptivePlanConflict(muscle: rule.muscle, requiredAdditionalSets: 0, code: "missing_readiness")
             )
         }
 
