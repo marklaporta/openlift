@@ -86,7 +86,7 @@ struct AdaptiveProgramEditorView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Toggle("Reviewed for real use", isOn: $draft.isReviewedForUse)
-            Text("Review means you have checked every rank, floor, cap, difficulty, exercise, and set count. Saving always creates a new immutable version.")
+            Text("Review means you have checked every rank, training window, cap, difficulty, exercise, and set count. Saving always creates a new immutable version.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -132,17 +132,19 @@ struct AdaptiveProgramEditorView: View {
                             }
                         }
 
-                        Stepper(
-                            "Rolling floor: \(rule.rollingSetFloor) sets",
-                            value: $draft.muscleRules[index].rollingSetFloor,
-                            in: 0...100
+                        Toggle(
+                            "Require training within window",
+                            isOn: Binding(
+                                get: { draft.muscleRules[index].rollingSetFloor > 0 },
+                                set: { draft.muscleRules[index].rollingSetFloor = $0 ? 1 : 0 }
+                            )
                         )
                         Stepper(
-                            "Floor window: \(rule.rollingWindowDays) days",
+                            "Training window: \(rule.rollingWindowDays) days",
                             value: $draft.muscleRules[index].rollingWindowDays,
                             in: 1...60
                         )
-                        Text("The floor is a rolling multi-day target. A missing baseline makes this muscle due, but does not force the entire deficit into one workout.")
+                        Text("Binary exposure rule: qualifying completed work means trained, regardless of how many sets were performed. Sets are adjusted separately from feedback and performance.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Stepper(
@@ -161,7 +163,7 @@ struct AdaptiveProgramEditorView: View {
                             in: 1...10
                         )
                     } else {
-                        Text("Candidate only · no priority or volume floor")
+                        Text("Candidate only · no priority or training-window requirement")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -205,7 +207,7 @@ struct AdaptiveProgramEditorView: View {
                 }
             }
             Toggle(
-                "Qualifies for primary-muscle floor",
+                "Counts as primary-muscle training exposure",
                 isOn: $draft.complexes[complexIndex].qualifiesForPrimaryFloor
             )
 

@@ -43,6 +43,7 @@ struct RootTabView: View {
                 .tag(Tab.import)
         }
         .task {
+            _ = try? AdaptiveProgramService.normalizeBinaryExposureRequirements(modelContext: modelContext)
             retryPendingExports()
             importAvailableWorkoutExportsIfRequested()
         }

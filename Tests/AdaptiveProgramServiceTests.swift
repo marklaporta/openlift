@@ -14,6 +14,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(enabled[4].muscle, .sideDelts)
         XCTAssertEqual(draft.globalMaxMovements, 4)
         XCTAssertEqual(draft.maxDifficultyCost, 60)
+        XCTAssertTrue(enabled.allSatisfy { $0.rollingSetFloor == 1 })
 
         for muscle in [MuscleGroup.abs, .traps] {
             let rule = draft.muscleRules.first { $0.muscle == muscle }
@@ -58,19 +59,20 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(AdaptiveProgramService.activeProgram(from: [saved])?.id, saved.id)
     }
 
-    func testValidationRejectsInfeasibleFloorAndAtomicComplexCaps() {
+    func testValidationRejectsNonBinaryExposureRequirementAndAtomicComplexCaps() {
         let exercises = makeRankedExercises()
         var floorDraft = AdaptiveProgramService.demoDraft(exercises: exercises)
         let chestIndex = floorDraft.muscleRules.firstIndex { $0.muscle == .chest }!
-        floorDraft.muscleRules[chestIndex].rollingSetFloor = 7
-        floorDraft.muscleRules[chestIndex].rollingWindowDays = 1
-        floorDraft.muscleRules[chestIndex].maxExercisesPerExposure = 2
-        floorDraft.muscleRules[chestIndex].maxSetsPerExercise = 3
+        floorDraft.muscleRules[chestIndex].rollingSetFloor = 2
 
         XCTAssertThrowsError(try AdaptiveProgramService.validate(floorDraft, exercises: exercises)) { error in
             XCTAssertEqual(
                 error as? AdaptiveProgramValidationError,
-                .infeasibleFloor(muscle: .chest, floor: 7, maximum: 6)
+                .invalidMuscleLimit(
+                    muscle: .chest,
+                    field: "rolling exposure requirement",
+                    value: 2
+                )
             )
         }
 
@@ -149,6 +151,31 @@ final class AdaptiveProgramServiceTests: XCTestCase {
             primaryMuscle: muscle,
             type: muscle == .quads || muscle == .hamstrings ? .compound : .isolation,
             equipment: .cable
+        )
+    }
+
+    func testLegacySetFloorsNormalizeToBinaryExposureRequirements() throws {
+        let exercises = makeRankedExercises()
+        let (context, _) = makeContext()
+        let program = try AdaptiveProgramService.saveVersion(
+            draft: AdaptiveProgramService.demoDraft(exercises: exercises),
+            replacing: nil,
+            allPrograms: [],
+            exercises: exercises,
+            modelContext: context
+        )
+        let chest = try XCTUnwrap(program.muscleRules.first { $0.muscle == .chest })
+        chest.rollingSetFloor = 4
+        try context.save()
+
+        XCTAssertEqual(
+            try AdaptiveProgramService.normalizeBinaryExposureRequirements(modelContext: context),
+            1
+        )
+        XCTAssertEqual(chest.rollingSetFloor, 1)
+        XCTAssertEqual(
+            try AdaptiveProgramService.normalizeBinaryExposureRequirements(modelContext: context),
+            0
         )
     }
 

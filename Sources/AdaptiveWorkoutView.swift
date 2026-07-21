@@ -144,7 +144,7 @@ struct AdaptiveWorkoutView: View {
             ContentUnavailableView {
                 Label("Profile Review Required", systemImage: "exclamationmark.triangle")
             } description: {
-                Text("\(program.name) is saved but not approved for real use. Review its floors, caps, difficulties, and complexes in Cycle.")
+                Text("\(program.name) is saved but not approved for real use. Review its training windows, caps, difficulties, and complexes in Cycle.")
             }
         }
     }
@@ -940,7 +940,18 @@ struct AdaptiveWorkoutView: View {
     }
 
     private func humanizedReason(_ code: String) -> String {
-        code.replacingOccurrences(of: "_", with: " ").capitalized
+        for (suffix, label) in [
+            ("_exposure_due", "training window due"),
+            ("_floor_due", "training window due"),
+            ("_gap_due", "maximum recovered gap due"),
+            ("_priority", "priority")
+        ] where code.hasSuffix(suffix) {
+            let rawMuscle = String(code.dropLast(suffix.count))
+            if let muscle = MuscleGroup(rawValue: rawMuscle) {
+                return "\(muscle.displayName) \(label)"
+            }
+        }
+        return code.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     @MainActor
@@ -975,7 +986,7 @@ struct AdaptiveWorkoutView: View {
                 copy.priorityRank = fixtureExercises.firstIndex(where: {
                     $0.primaryMuscle == rule.muscle
                 }).map { $0 + 1 } ?? 0
-                copy.rollingSetFloor = AppRuntime.isAdaptiveHistoryUITesting ? 4 : 0
+                copy.rollingSetFloor = AppRuntime.isAdaptiveHistoryUITesting ? 1 : 0
                 return copy
             }
             draft.complexes = fixtureExercises.map { exercise in
