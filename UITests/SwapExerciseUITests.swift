@@ -151,6 +151,9 @@ final class SwapExerciseUITests: XCTestCase {
 
         app.tabBars.buttons["Workout"].tap()
         XCTAssertTrue(app.navigationBars["Workout"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Muscle soreness"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Connective-tissue pain"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Eagerness to train"].firstMatch.exists)
 
         let fillReadiness = app.buttons["adaptive.fillTestReadiness"]
         scrollToElement(fillReadiness, in: app)
