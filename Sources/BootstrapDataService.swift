@@ -2,6 +2,23 @@ import Foundation
 import SwiftData
 
 enum BootstrapDataService {
+    struct WorkoutImportResult {
+        var imported = 0
+        var skippedExisting = 0
+        var skippedUnknownExercises = 0
+    }
+
+    private struct ImportedSetKey: Hashable {
+        let sessionId: UUID
+        let exerciseId: UUID
+        let setIndex: Int
+    }
+
+    private struct ImportedFeedbackKey: Hashable {
+        let sessionId: UUID
+        let exerciseId: UUID
+    }
+
     struct DebugSnapshot {
         let exerciseCount: Int
         let templateCount: Int
@@ -228,6 +245,168 @@ enum BootstrapDataService {
             .map(\.payload)
     }
 
+    @discardableResult
+    static func reconcileWorkoutExports(
+        _ exports: [SessionExportService.ExportPayload],
+        cycle: ActiveCycleInstance,
+        modelContext: ModelContext
+    ) throws -> WorkoutImportResult {
+        let catalog = try ensureExerciseCatalog(modelContext: modelContext)
+        let exercisesByName = Dictionary(uniqueKeysWithValues: catalog.map { ($0.name.lowercased(), $0) })
+        var sessionsById: [UUID: Session] = [:]
+        for session in try modelContext.fetch(FetchDescriptor<Session>()) {
+            sessionsById[session.id] = session
+        }
+        var entriesByKey: [ImportedSetKey: SetEntry] = [:]
+        for entry in try modelContext.fetch(FetchDescriptor<SetEntry>()) {
+            let key = ImportedSetKey(
+                sessionId: entry.sessionId,
+                exerciseId: entry.exerciseId,
+                setIndex: entry.setIndex
+            )
+            entriesByKey[key] = entriesByKey[key] ?? entry
+        }
+        var feedbackByKey: [ImportedFeedbackKey: AdHocExerciseFeedback] = [:]
+        for feedback in try modelContext.fetch(FetchDescriptor<AdHocExerciseFeedback>()) {
+            let key = ImportedFeedbackKey(sessionId: feedback.sessionId, exerciseId: feedback.exerciseId)
+            if feedbackByKey[key] == nil || feedback.createdAt > feedbackByKey[key]!.createdAt {
+                feedbackByKey[key] = feedback
+            }
+        }
+
+        var result = WorkoutImportResult()
+
+        for export in exports {
+            guard let sessionId = UUID(uuidString: export.session_id),
+                  let finishedAt = SessionExportService.parseExportDate(export.date) else { continue }
+
+            let session: Session
+            if let existing = sessionsById[sessionId] {
+                session = existing
+                result.skippedExisting += 1
+                guard export.workout_kind == "ad_hoc" else { continue }
+            } else {
+                session = Session(
+                    id: sessionId,
+                    cycleInstanceId: cycle.id,
+                    cycleDayIndex: export.cycle_day_index,
+                    cycleNameSnapshot: export.cycle_name,
+                    dayLabelSnapshot: export.workout_kind == "ad_hoc"
+                        ? "Off-Schedule"
+                        : "Day \(export.cycle_day_index + 1)",
+                    createdAt: finishedAt.addingTimeInterval(-60),
+                    finishedAt: finishedAt,
+                    status: .completed,
+                    exportStatus: .success
+                )
+                try session.validate()
+                modelContext.insert(session)
+                sessionsById[sessionId] = session
+                result.imported += 1
+            }
+
+            if export.workout_kind == "ad_hoc" {
+                session.cycleNameSnapshot = export.cycle_name
+                session.dayLabelSnapshot = "Off-Schedule"
+            }
+
+            for exportExercise in export.exercises {
+                guard let exercise = exercisesByName[exportExercise.exercise_name.lowercased()] else {
+                    result.skippedUnknownExercises += 1
+                    continue
+                }
+
+                for exportedSet in exportExercise.sets where exportedSet.reps > 0 {
+                    let key = ImportedSetKey(
+                        sessionId: session.id,
+                        exerciseId: exercise.id,
+                        setIndex: exportedSet.set_index
+                    )
+                    if entriesByKey[key] == nil {
+                        let entry = SetEntry(
+                            sessionId: session.id,
+                            exerciseId: exercise.id,
+                            setIndex: exportedSet.set_index,
+                            weight: exportedSet.weight,
+                            reps: exportedSet.reps,
+                            isLocked: true
+                        )
+                        try entry.validate()
+                        modelContext.insert(entry)
+                        entriesByKey[key] = entry
+                    }
+                }
+
+                if let rawFeedback = exportExercise.volume_feedback,
+                   let rating = ComplexFeedbackRating(rawValue: rawFeedback) {
+                    let key = ImportedFeedbackKey(sessionId: session.id, exerciseId: exercise.id)
+                    if let existing = feedbackByKey[key] {
+                        existing.rating = rating
+                        existing.createdAt = finishedAt
+                    } else {
+                        let feedback = AdHocExerciseFeedback(
+                            sessionId: session.id,
+                            exerciseId: exercise.id,
+                            rating: rating,
+                            createdAt: finishedAt
+                        )
+                        modelContext.insert(feedback)
+                        feedbackByKey[key] = feedback
+                    }
+                }
+            }
+        }
+
+        if modelContext.hasChanges {
+            try modelContext.save()
+        }
+        return result
+    }
+
+    /// Performs the one-time, explicit device rollout requested by the user:
+    /// recover available workout exports, create a conservative starting
+    /// Adaptive profile if one does not exist, and select Adaptive mode. The
+    /// newest ad-hoc workout date becomes the profile's start date so restored
+    /// work immediately participates in load/recovery accounting.
+    @discardableResult
+    static func prepareAdaptiveRollout(
+        exports: [SessionExportService.ExportPayload],
+        cycle: ActiveCycleInstance,
+        modelContext: ModelContext
+    ) throws -> WorkoutImportResult {
+        let result = try reconcileWorkoutExports(exports, cycle: cycle, modelContext: modelContext)
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let programs = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
+
+        if AdaptiveProgramService.activeProgram(from: programs) == nil {
+            var draft = AdaptiveProgramService.demoDraft(exercises: exercises)
+            draft.name = "Adaptive Floating — Initial"
+            draft.isReviewedForUse = true
+
+            let startDate = exports
+                .filter { $0.workout_kind == "ad_hoc" }
+                .compactMap { SessionExportService.parseExportDate($0.date) }
+                .max() ?? .now
+
+            _ = try AdaptiveProgramService.saveVersion(
+                draft: draft,
+                replacing: nil,
+                allPrograms: programs,
+                exercises: exercises,
+                modelContext: modelContext,
+                now: startDate
+            )
+        }
+
+        let preferences = try modelContext.fetch(FetchDescriptor<TrainingPreference>())
+        _ = try TrainingModeService.setMode(
+            .adaptive,
+            preferences: preferences,
+            modelContext: modelContext
+        )
+        return result
+    }
+
     static func defaultStarterTemplate(exercises: [Exercise]) throws -> CycleTemplate {
         let exercisesByName = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name.lowercased(), $0) })
 
@@ -394,6 +573,9 @@ enum BootstrapDataService {
         ("Super ROM Dumbbell Lateral Raise", .sideDelts, .isolation, .dumbbell),
         ("Arnold Lateral Raise", .sideDelts, .isolation, .dumbbell),
         ("Dumbbell Lateral Raise", .sideDelts, .isolation, .dumbbell),
-        ("Machine Lateral Raise", .sideDelts, .isolation, .machine)
+        ("Machine Lateral Raise", .sideDelts, .isolation, .machine),
+        ("Reverse Curl", .forearms, .isolation, .barbell),
+        ("Hip Thrust", .glutes, .compound, .barbell),
+        ("Standing Calf Raise", .calves, .isolation, .machine)
     ]
 }

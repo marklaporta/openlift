@@ -34,6 +34,7 @@ struct RootTabView: View {
         }
         .task {
             retryPendingExports()
+            importAvailableWorkoutExportsIfRequested()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -50,6 +51,25 @@ struct RootTabView: View {
             }
         } catch {
             SessionExportService.scheduleBackgroundExportRetry()
+        }
+    }
+
+    private func importAvailableWorkoutExportsIfRequested() {
+        guard AppRuntime.shouldImportAvailableWorkoutExports || AppRuntime.shouldPrepareAdaptiveRollout else { return }
+        guard let cycle = try? modelContext.fetch(FetchDescriptor<ActiveCycleInstance>()).first else { return }
+        let exports = BootstrapDataService.allExportSummaries()
+        if AppRuntime.shouldPrepareAdaptiveRollout {
+            _ = try? BootstrapDataService.prepareAdaptiveRollout(
+                exports: exports,
+                cycle: cycle,
+                modelContext: modelContext
+            )
+        } else {
+            _ = try? BootstrapDataService.reconcileWorkoutExports(
+                exports,
+                cycle: cycle,
+                modelContext: modelContext
+            )
         }
     }
 }

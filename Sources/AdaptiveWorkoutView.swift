@@ -211,19 +211,35 @@ struct AdaptiveWorkoutView: View {
         ForEach(plan.complexes.sorted(by: { $0.position < $1.position })) { complex in
             Section {
                 ForEach(complex.exercises.sorted(by: { $0.position < $1.position })) { exercise in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(exercise.exerciseName)
-                        Text("\(exercise.prescribedSetCount) set(s) · \(exercise.difficulty.displayName)")
-                            .font(.caption)
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(exercise.exerciseName)
+                            Text("\(exercise.prescribedSetCount) set(s) · \(exercise.difficulty.displayName)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            let previous = previousRows(plan: plan, complex: complex, exercise: exercise)
+                            Text(
+                                previous.isEmpty
+                                    ? "No prior completed sets for prefill"
+                                    : "Previous: \(formatRows(previous))"
+                            )
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
-                        let previous = previousRows(plan: plan, complex: complex, exercise: exercise)
-                        Text(
-                            previous.isEmpty
-                                ? "No prior completed sets for prefill"
-                                : "Previous: \(formatRows(previous))"
-                        )
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            swapContext = AdaptiveSwapContext(
+                                planId: plan.id,
+                                occurrenceId: exercise.occurrenceId,
+                                currentExerciseId: exercise.exerciseId,
+                                primaryMuscle: exercise.primaryMuscle
+                            )
+                        } label: {
+                            Image(systemName: "arrow.left.arrow.right")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("Substitute \(exercise.exerciseName)")
                     }
                 }
             } header: {
@@ -575,7 +591,7 @@ struct AdaptiveWorkoutView: View {
                     exercises: exercises,
                     overrides: overrides,
                     feedback: complexFeedback,
-                    requireICloudMirror: true
+                    requireICloudMirror: !AppRuntime.isUITesting
                 )
                 session.exportStatus = .success
             } catch {
@@ -731,15 +747,24 @@ struct AdaptiveWorkoutView: View {
     private func substitute(context: AdaptiveSwapContext, with exercise: Exercise) {
         guard let plan = generatedPlans.first(where: { $0.id == context.planId }) else { return }
         do {
-            try AdaptiveWorkoutService.substitute(
-                plan: plan,
-                occurrenceId: context.occurrenceId,
-                fromExerciseId: context.currentExerciseId,
-                toExerciseId: exercise.id,
-                adaptiveSessions: adaptiveSessions,
-                setEntries: adaptiveSetEntries,
-                modelContext: modelContext
-            )
+            if plan.status == .proposed {
+                try AdaptiveWorkoutService.substituteProposedExercise(
+                    plan: plan,
+                    occurrenceId: context.occurrenceId,
+                    to: exercise,
+                    modelContext: modelContext
+                )
+            } else {
+                try AdaptiveWorkoutService.substitute(
+                    plan: plan,
+                    occurrenceId: context.occurrenceId,
+                    fromExerciseId: context.currentExerciseId,
+                    toExerciseId: exercise.id,
+                    adaptiveSessions: adaptiveSessions,
+                    setEntries: adaptiveSetEntries,
+                    modelContext: modelContext
+                )
+            }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -938,6 +963,7 @@ private struct AdaptiveExerciseSection: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .accessibilityLabel("Substitute \(title)")
+                    .disabled(entries.contains(where: \.isLocked))
                 Button(action: onSkip) { Image(systemName: "forward.end") }
                     .buttonStyle(.bordered)
                     .controlSize(.small)

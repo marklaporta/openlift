@@ -8,6 +8,7 @@ enum AdaptiveWorkoutServiceError: LocalizedError, Equatable {
     case planNotProposed
     case planAlreadyStarted
     case adaptiveSessionNotFound
+    case plannedExerciseNotFound
     case noLockedSets
 
     var errorDescription: String? {
@@ -24,6 +25,8 @@ enum AdaptiveWorkoutServiceError: LocalizedError, Equatable {
             return "The plan cannot be regenerated after its first set is locked."
         case .adaptiveSessionNotFound:
             return "The Adaptive workout session could not be found."
+        case .plannedExerciseNotFound:
+            return "The planned exercise could not be found."
         case .noLockedSets:
             return "Lock at least one completed set before finishing the workout."
         }
@@ -36,6 +39,39 @@ struct AdaptiveSetPrefill: Equatable {
 }
 
 enum AdaptiveWorkoutService {
+    static func substituteProposedExercise(
+        plan: GeneratedWorkoutPlan,
+        occurrenceId: UUID,
+        to exercise: Exercise,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        guard plan.status == .proposed else { throw AdaptiveWorkoutServiceError.planAlreadyStarted }
+        guard let snapshot = plan.complexes
+            .flatMap(\.exercises)
+            .first(where: { $0.occurrenceId == occurrenceId }) else {
+            throw AdaptiveWorkoutServiceError.plannedExerciseNotFound
+        }
+
+        let originalExerciseId = snapshot.exerciseId
+        snapshot.exerciseId = exercise.id
+        snapshot.exerciseName = exercise.name
+        snapshot.primaryMuscle = exercise.primaryMuscle
+        snapshot.secondaryMuscle = nil
+        modelContext.insert(
+            AdaptiveOverrideEvent(
+                generatedPlanId: plan.id,
+                occurrenceId: occurrenceId,
+                kind: .substituteExercise,
+                originalExerciseId: originalExerciseId,
+                replacementExerciseId: exercise.id,
+                reasonCode: "user_substitution_before_freeze",
+                createdAt: now
+            )
+        )
+        try modelContext.save()
+    }
+
     static func recordFeedback(
         plan: GeneratedWorkoutPlan,
         complex: PlannedComplexSnapshot,
