@@ -10,11 +10,16 @@ struct WorkoutView: View {
     @Query(sort: \Session.createdAt, order: .reverse) private var sessions: [Session]
     @Query private var setEntries: [SetEntry]
     @Query private var slotOverrides: [SessionSlotOverride]
+    @Query private var trainingPreferences: [TrainingPreference]
 
     @State private var errorMessage: String?
     @State private var draftExportTask: Task<Void, Never>?
     @State private var swapContext: SwapContext?
     @State private var historyContext: ExerciseHistoryContext?
+
+    private var trainingMode: TrainingMode {
+        TrainingModeService.resolvedMode(preferences: trainingPreferences)
+    }
 
     private var activeCycle: ActiveCycleInstance? {
         OpenLiftStateResolver.activeCycle(
@@ -53,6 +58,60 @@ struct WorkoutView: View {
     }
 
     var body: some View {
+        Group {
+            if trainingMode == .adaptive {
+                AdaptiveWorkoutView()
+            } else {
+                rotationWorkoutContent
+            }
+        }
+        .sheet(item: $swapContext) { context in
+            let currentExercise = exercises.first(where: { $0.id == context.currentExerciseId })
+            ExerciseSwapSheet(
+                currentExercise: currentExercise,
+                exercises: exercises,
+                slotMuscle: context.slot.muscle,
+                onSelect: { selected in
+                    applySwap(
+                        sessionId: context.sessionId,
+                        slot: context.slot,
+                        fromExerciseId: context.currentExerciseId,
+                        toExerciseId: selected.id
+                    )
+                    swapContext = nil
+                },
+                onCreate: { name, muscle, type, equipment in
+                    createExerciseAndSwap(
+                        sessionId: context.sessionId,
+                        slot: context.slot,
+                        fromExerciseId: context.currentExerciseId,
+                        name: name,
+                        muscle: muscle,
+                        type: type,
+                        equipment: equipment
+                    )
+                    swapContext = nil
+                }
+            )
+        }
+        .sheet(item: $historyContext) { context in
+            ExerciseHistorySheet(
+                exerciseName: context.exerciseName,
+                efforts: recentEfforts(exerciseId: context.exerciseId, exerciseName: context.exerciseName)
+            )
+        }
+        .task(id: trainingMode) {
+            guard trainingMode == .rotation else { return }
+            await prepareWorkoutState()
+        }
+        .alert("Validation Error", isPresented: .constant(errorMessage != nil), actions: {
+            Button("OK") { errorMessage = nil }
+        }, message: {
+            Text(errorMessage ?? "Unknown error")
+        })
+    }
+
+    private var rotationWorkoutContent: some View {
         NavigationStack {
             List {
                 if let draftSession, let activeDay {
@@ -113,49 +172,6 @@ struct WorkoutView: View {
                 }
             }
         }
-        .sheet(item: $swapContext) { context in
-            let currentExercise = exercises.first(where: { $0.id == context.currentExerciseId })
-            ExerciseSwapSheet(
-                currentExercise: currentExercise,
-                exercises: exercises,
-                slotMuscle: context.slot.muscle,
-                onSelect: { selected in
-                    applySwap(
-                        sessionId: context.sessionId,
-                        slot: context.slot,
-                        fromExerciseId: context.currentExerciseId,
-                        toExerciseId: selected.id
-                    )
-                    swapContext = nil
-                },
-                onCreate: { name, muscle, type, equipment in
-                    createExerciseAndSwap(
-                        sessionId: context.sessionId,
-                        slot: context.slot,
-                        fromExerciseId: context.currentExerciseId,
-                        name: name,
-                        muscle: muscle,
-                        type: type,
-                        equipment: equipment
-                    )
-                    swapContext = nil
-                }
-            )
-        }
-        .sheet(item: $historyContext) { context in
-            ExerciseHistorySheet(
-                exerciseName: context.exerciseName,
-                efforts: recentEfforts(exerciseId: context.exerciseId, exerciseName: context.exerciseName)
-            )
-        }
-        .task {
-            await prepareWorkoutState()
-        }
-        .alert("Validation Error", isPresented: .constant(errorMessage != nil), actions: {
-            Button("OK") { errorMessage = nil }
-        }, message: {
-            Text(errorMessage ?? "Unknown error")
-        })
     }
 
     private func prepareWorkoutState() async {
@@ -271,6 +287,7 @@ struct WorkoutView: View {
 
     private func hydrateLatestCompletedSessionIfPossible(cycle: ActiveCycleInstance, template: CycleTemplate) throws {
         guard let export = BootstrapDataService.latestExportSummary() else { return }
+        guard export.workout_kind != "ad_hoc" else { return }
         guard let finishedAt = SessionExportService.parseExportDate(export.date) else { return }
 
         let completed = Session(
@@ -301,6 +318,17 @@ struct WorkoutView: View {
                 try entry.validate()
                 modelContext.insert(entry)
             }
+            if let raw = exportExercise.volume_feedback,
+               let rating = ComplexFeedbackRating(rawValue: raw) {
+                modelContext.insert(
+                    AdHocExerciseFeedback(
+                        sessionId: completed.id,
+                        exerciseId: exercise.id,
+                        rating: rating,
+                        createdAt: finishedAt
+                    )
+                )
+            }
         }
 
         cycle.currentDayIndex = (export.cycle_day_index + 1) % max(1, template.days.count)
@@ -325,7 +353,9 @@ struct WorkoutView: View {
                 cycleInstanceId: cycle.id,
                 cycleDayIndex: export.cycle_day_index,
                 cycleNameSnapshot: export.cycle_name,
-                dayLabelSnapshot: "Day \(export.cycle_day_index + 1)",
+                dayLabelSnapshot: export.workout_kind == "ad_hoc"
+                    ? "Off-Schedule"
+                    : "Day \(export.cycle_day_index + 1)",
                 createdAt: finishedAt.addingTimeInterval(-60),
                 finishedAt: finishedAt,
                 status: .completed,
@@ -347,6 +377,17 @@ struct WorkoutView: View {
                     )
                     try entry.validate()
                     modelContext.insert(entry)
+                }
+                if let raw = exportExercise.volume_feedback,
+                   let rating = ComplexFeedbackRating(rawValue: raw) {
+                    modelContext.insert(
+                        AdHocExerciseFeedback(
+                            sessionId: recovered.id,
+                            exerciseId: exercise.id,
+                            rating: rating,
+                            createdAt: finishedAt
+                        )
+                    )
                 }
             }
 
@@ -1108,7 +1149,7 @@ struct ExerciseHistorySheet: View {
     }
 }
 
-private struct ExerciseSwapSheet: View {
+struct ExerciseSwapSheet: View {
     let currentExercise: Exercise?
     let exercises: [Exercise]
     let slotMuscle: MuscleGroup
@@ -1228,15 +1269,6 @@ private struct ExerciseSwapSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
-        }
-    }
-}
-
-private extension MuscleGroup {
-    var displayName: String {
-        switch self {
-        case .sideDelts: return "Side Delts"
-        default: return rawValue.capitalized
         }
     }
 }

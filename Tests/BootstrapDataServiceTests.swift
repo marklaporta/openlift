@@ -224,6 +224,38 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(selected, "4D Upper/Lower")
     }
 
+    func testAdHocHistoryAndExportCannotSelectOrAdvanceRotation() {
+        let adHoc = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 1,
+            cycleNameSnapshot: "4D Upper/Lower",
+            dayLabelSnapshot: "Off-Schedule",
+            createdAt: Date(timeIntervalSince1970: 200),
+            finishedAt: Date(timeIntervalSince1970: 220),
+            status: .completed,
+            exportStatus: .success
+        )
+        let export = SessionExportService.ExportPayload(
+            session_id: adHoc.id.uuidString,
+            cycle_name: "4D Upper/Lower",
+            cycle_day_index: 1,
+            date: ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 220)),
+            exercises: [],
+            workout_kind: "ad_hoc"
+        )
+
+        XCTAssertNil(BootstrapDataService.recentCycleName(sessions: [adHoc], latestExport: export))
+        XCTAssertEqual(
+            BootstrapDataService.inferredNextDayIndex(
+                dayCount: 4,
+                sessions: [adHoc],
+                targetCycleName: "4D Upper/Lower",
+                latestExport: export
+            ),
+            0
+        )
+    }
+
     func testMatchingTemplateIgnoresPunctuationDifferences() {
         let template = CycleTemplate(name: "4D Upper/Lower", days: [CycleDay(label: "Upper A", slots: [])])
 

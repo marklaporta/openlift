@@ -28,6 +28,20 @@
 		B3F3E7F7A5493C6B842CA86D /* CycleOrdering.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D2E5FA0D8760A475D05B1A /* CycleOrdering.swift */; };
 		C960CB659748E17E46C7B3C5 /* CycleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94D35FC8C396AB62398530B2 /* CycleView.swift */; };
 		EC8B3E6759E1D89CF6734D6D /* OpenLiftValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CC1E33FC961BDF6FC6C4FAF /* OpenLiftValidator.swift */; };
+		F10000000000000000000001 /* OpenLiftSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* OpenLiftSchema.swift */; };
+		F10000000000000000000002 /* MigrationSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000002 /* MigrationSafetyTests.swift */; };
+		F10000000000000000000003 /* ExerciseCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000003 /* ExerciseCatalogService.swift */; };
+		F10000000000000000000004 /* ExerciseCatalogServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000004 /* ExerciseCatalogServiceTests.swift */; };
+		F10000000000000000000005 /* TrainingModeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000005 /* TrainingModeService.swift */; };
+		F10000000000000000000006 /* TrainingModeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000006 /* TrainingModeServiceTests.swift */; };
+		F10000000000000000000007 /* AdaptiveProgramService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000007 /* AdaptiveProgramService.swift */; };
+		F10000000000000000000008 /* AdaptiveProgramEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000008 /* AdaptiveProgramEditorView.swift */; };
+		F10000000000000000000009 /* AdaptiveProgramServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000009 /* AdaptiveProgramServiceTests.swift */; };
+		F1000000000000000000000A /* AdaptivePlanningServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000A /* AdaptivePlanningServices.swift */; };
+		F1000000000000000000000B /* AdaptivePlanningServicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000B /* AdaptivePlanningServicesTests.swift */; };
+		F1000000000000000000000C /* AdaptiveWorkoutService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000C /* AdaptiveWorkoutService.swift */; };
+		F1000000000000000000000D /* AdaptiveWorkoutServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000D /* AdaptiveWorkoutServiceTests.swift */; };
+		F1000000000000000000000E /* AdaptiveWorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000E /* AdaptiveWorkoutView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -79,16 +93,36 @@
 		D9995B252405F5B7995C4373 /* OpenLiftApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenLiftApp.swift; sourceTree = "<group>"; };
 		E7E50088A602E2773296E6DD /* ImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportView.swift; sourceTree = "<group>"; };
 		F06DD4B2D3F64E16AF5A2012 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
+		F20000000000000000000001 /* OpenLiftSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenLiftSchema.swift; sourceTree = "<group>"; };
+		F20000000000000000000002 /* MigrationSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationSafetyTests.swift; sourceTree = "<group>"; };
+		F20000000000000000000003 /* ExerciseCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseCatalogService.swift; sourceTree = "<group>"; };
+		F20000000000000000000004 /* ExerciseCatalogServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseCatalogServiceTests.swift; sourceTree = "<group>"; };
+		F20000000000000000000005 /* TrainingModeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingModeService.swift; sourceTree = "<group>"; };
+		F20000000000000000000006 /* TrainingModeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingModeServiceTests.swift; sourceTree = "<group>"; };
+		F20000000000000000000007 /* AdaptiveProgramService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveProgramService.swift; sourceTree = "<group>"; };
+		F20000000000000000000008 /* AdaptiveProgramEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveProgramEditorView.swift; sourceTree = "<group>"; };
+		F20000000000000000000009 /* AdaptiveProgramServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveProgramServiceTests.swift; sourceTree = "<group>"; };
+		F2000000000000000000000A /* AdaptivePlanningServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptivePlanningServices.swift; sourceTree = "<group>"; };
+		F2000000000000000000000B /* AdaptivePlanningServicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptivePlanningServicesTests.swift; sourceTree = "<group>"; };
+		F2000000000000000000000C /* AdaptiveWorkoutService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveWorkoutService.swift; sourceTree = "<group>"; };
+		F2000000000000000000000D /* AdaptiveWorkoutServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveWorkoutServiceTests.swift; sourceTree = "<group>"; };
+		F2000000000000000000000E /* AdaptiveWorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveWorkoutView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
 		162F9BF98BBC5D63F65311DE /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				F2000000000000000000000D /* AdaptiveWorkoutServiceTests.swift */,
+				F2000000000000000000000B /* AdaptivePlanningServicesTests.swift */,
+				F20000000000000000000009 /* AdaptiveProgramServiceTests.swift */,
 				5FC1716D76135B2B3E68D7CB /* BootstrapDataServiceTests.swift */,
 				AE461DEF18F8275C02EE014A /* CycleOrderingTests.swift */,
 				7CFB35CE5B48A79BFE463927 /* ExerciseSwapServiceTests.swift */,
+				F20000000000000000000004 /* ExerciseCatalogServiceTests.swift */,
+				F20000000000000000000002 /* MigrationSafetyTests.swift */,
 				5A8CF670E4C6344D76DEA364 /* PublishedCycleServiceTests.swift */,
+				F20000000000000000000006 /* TrainingModeServiceTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -137,16 +171,23 @@
 		EC261616F0A6B5B6EF9E2D61 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				F20000000000000000000008 /* AdaptiveProgramEditorView.swift */,
+				F2000000000000000000000A /* AdaptivePlanningServices.swift */,
+				F20000000000000000000007 /* AdaptiveProgramService.swift */,
+				F2000000000000000000000C /* AdaptiveWorkoutService.swift */,
+				F2000000000000000000000E /* AdaptiveWorkoutView.swift */,
 				5BFA6838778B4C1F8BD337E6 /* AppRuntime.swift */,
 				A35F65E5A97D67A2045F686F /* BootstrapDataService.swift */,
 				C6D2E5FA0D8760A475D05B1A /* CycleOrdering.swift */,
 				94D35FC8C396AB62398530B2 /* CycleView.swift */,
 				3A276F5E5098E9F746A85B25 /* ExerciseSwapService.swift */,
+				F20000000000000000000003 /* ExerciseCatalogService.swift */,
 				36BC97ACBFC2F3135919BE0C /* HistoryView.swift */,
 				E7E50088A602E2773296E6DD /* ImportView.swift */,
 				A22222222222222222222222 /* LogWorkoutView.swift */,
 				9B5C389CDFB0AC4404609392 /* Info.plist */,
 				AABD1A8273A28304CAF8742B /* Models.swift */,
+				F20000000000000000000001 /* OpenLiftSchema.swift */,
 				174D0F7D6748402A8FDE3758 /* OpenLiftStateResolver.swift */,
 				B6D8EAC8B86B8C1FAD64BC59 /* OpenLift.entitlements */,
 				D9995B252405F5B7995C4373 /* OpenLiftApp.swift */,
@@ -154,6 +195,7 @@
 				152C10B5009490BBC2CAF54F /* PublishedCycleService.swift */,
 				6492CEEF557772DF251890FB /* RootTabView.swift */,
 				4CB4FE3F83FF1998DC82B5D2 /* SessionExportService.swift */,
+				F20000000000000000000005 /* TrainingModeService.swift */,
 				9275815CF668B77423798D35 /* WorkoutView.swift */,
 			);
 			path = Sources;
@@ -270,21 +312,29 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F10000000000000000000008 /* AdaptiveProgramEditorView.swift in Sources */,
+				F1000000000000000000000A /* AdaptivePlanningServices.swift in Sources */,
+				F10000000000000000000007 /* AdaptiveProgramService.swift in Sources */,
+				F1000000000000000000000C /* AdaptiveWorkoutService.swift in Sources */,
+				F1000000000000000000000E /* AdaptiveWorkoutView.swift in Sources */,
 				02DA37FA2EF34418B76A2695 /* AppRuntime.swift in Sources */,
 				8B52A251828F8378E3602B5B /* BootstrapDataService.swift in Sources */,
 				B3F3E7F7A5493C6B842CA86D /* CycleOrdering.swift in Sources */,
 				C960CB659748E17E46C7B3C5 /* CycleView.swift in Sources */,
 				5631A4B67B638E84567D4DA4 /* ExerciseSwapService.swift in Sources */,
+				F10000000000000000000003 /* ExerciseCatalogService.swift in Sources */,
 				70C2298C3C511DC074837077 /* HistoryView.swift in Sources */,
 				1F6E588A059838A62777CE81 /* ImportView.swift in Sources */,
 				A11111111111111111111111 /* LogWorkoutView.swift in Sources */,
 				87F67DB5992A7D5B22EF2FD4 /* Models.swift in Sources */,
+				F10000000000000000000001 /* OpenLiftSchema.swift in Sources */,
 				2F4917A0A3D84D81B76A164F /* OpenLiftStateResolver.swift in Sources */,
 				61BB964C30B2859AED8F245A /* OpenLiftApp.swift in Sources */,
 				EC8B3E6759E1D89CF6734D6D /* OpenLiftValidator.swift in Sources */,
 				04D8FD89F53261F38AEB610E /* PublishedCycleService.swift in Sources */,
 				20C3D90C7DA90E4B1BA220BA /* RootTabView.swift in Sources */,
 				6B0BD985752C67FE87DBF8B3 /* SessionExportService.swift in Sources */,
+				F10000000000000000000005 /* TrainingModeService.swift in Sources */,
 				978168F33A22E2B56E3A59B8 /* WorkoutView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -293,10 +343,16 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F1000000000000000000000D /* AdaptiveWorkoutServiceTests.swift in Sources */,
+				F1000000000000000000000B /* AdaptivePlanningServicesTests.swift in Sources */,
+				F10000000000000000000009 /* AdaptiveProgramServiceTests.swift in Sources */,
 				1D001C9D45315DE1EC11CFD8 /* BootstrapDataServiceTests.swift in Sources */,
 				86A1C57B01274387BB6C6705 /* CycleOrderingTests.swift in Sources */,
 				9BF4260727BBA3F3B619B825 /* ExerciseSwapServiceTests.swift in Sources */,
+				F10000000000000000000004 /* ExerciseCatalogServiceTests.swift in Sources */,
+				F10000000000000000000002 /* MigrationSafetyTests.swift in Sources */,
 				8E534C6712920AB206BE35B7 /* PublishedCycleServiceTests.swift in Sources */,
+				F10000000000000000000006 /* TrainingModeServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

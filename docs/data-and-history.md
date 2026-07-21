@@ -6,7 +6,11 @@ OpenLift stores app data locally with SwiftData.
 
 Core models live in [`Models.swift`](../Sources/Models.swift):
 
+- `TrainingPreference`
 - `Exercise`
+- versioned Adaptive program, muscle-rule, complex, and component records
+- raw daily readiness and generated/frozen plan snapshots
+- Adaptive occurrence links, complex feedback, and explicit override events
 - `CycleTemplate`
 - `ActiveCycleInstance`
 - `Session`
@@ -16,6 +20,17 @@ Core models live in [`Models.swift`](../Sources/Models.swift):
 ## What Counts As History
 
 The History tab primarily shows completed `Session` records plus their locked `SetEntry` values.
+
+Ad hoc logging remains available in either training mode. Completed locked ad
+hoc sets will be load/recovery evidence for Adaptive planning, but they are not
+automatically same-complex performance evidence. Drafts and unlocked sets do
+not count.
+
+Legacy Rotation `Session` and `SetEntry` shapes remain unchanged for copied-store
+migration safety. Adaptive planning/execution provenance lives in parallel
+records keyed by stable plan, session, set-entry, and planned-occurrence IDs.
+This avoids fake cycle IDs and allows the same exercise ID to appear in more than
+one planned complex without merging its occurrences.
 
 Relevant logic:
 
@@ -45,6 +60,22 @@ Completed workouts only count as successfully exported after the iCloud Document
 ## Recovery Behavior
 
 The app can rebuild missing completed sessions from export files during bootstrap. That is why export files matter even though SwiftData is the primary store.
+
+Rotation and ad hoc workouts remain backward-readable through the v1 JSON
+shape. Ad hoc exercise entries may add the optional `volume_feedback` field;
+older files decode with that field missing.
+
+Adaptive workouts use additive schema v2 JSON. The payload records
+`workout_kind: adaptive`, the session UUID, raw readiness/version, planner
+version, ordered frozen complex and component snapshots, planned occurrence
+IDs, actual locked sets, overrides, and feedback. Hydration deduplicates
+Adaptive work by session UUID and reconstructs parallel Adaptive records; it
+never creates or advances a Rotation cycle.
+
+History badges Rotation, Ad hoc, and Adaptive explicitly. Adaptive detail
+renders frozen complex/component order and duplicate exercise occurrences
+separately, including raw previous/current set rows and conservative comparison
+labels.
 
 Bootstrap and recovery logic live in:
 

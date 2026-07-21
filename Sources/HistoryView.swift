@@ -9,6 +9,8 @@ struct HistoryView: View {
     @Query private var templates: [CycleTemplate]
     @Query private var setEntries: [SetEntry]
     @Query private var exercises: [Exercise]
+    @Query(sort: \AdaptiveWorkoutSession.createdAt, order: .reverse) private var adaptiveSessions: [AdaptiveWorkoutSession]
+    @Query private var generatedPlans: [GeneratedWorkoutPlan]
     @State private var exportedSessions: [ExportedSessionSummary] = []
     @State private var showingManualWorkout = false
     @State private var manualWorkoutError: String?
@@ -33,6 +35,12 @@ struct HistoryView: View {
         return deduped.sorted { ($0.finishedAt ?? $0.createdAt) > ($1.finishedAt ?? $1.createdAt) }
     }
 
+    private var completedAdaptiveSessions: [AdaptiveWorkoutSession] {
+        adaptiveSessions
+            .filter { $0.status == .completed && $0.finishedAt != nil }
+            .sorted { ($0.finishedAt ?? $0.createdAt) > ($1.finishedAt ?? $1.createdAt) }
+    }
+
     private var exportedBySessionId: [String: ExportedSessionSummary] {
         Dictionary(uniqueKeysWithValues: exportedSessions.map { ($0.id, $0) })
     }
@@ -44,7 +52,7 @@ struct HistoryView: View {
     var body: some View {
         NavigationStack {
             List {
-                if completedSessions.isEmpty {
+                if completedSessions.isEmpty && completedAdaptiveSessions.isEmpty {
                     if exportedSessions.isEmpty {
                         ContentUnavailableView(
                             "No Completed Sessions",
@@ -63,16 +71,34 @@ struct HistoryView: View {
                         }
                     }
                 } else {
-                    ForEach(completedSessions) { session in
-                        NavigationLink {
-                            SessionDetailView(session: session)
-                        } label: {
-                            SessionRowView(
-                                session: session,
-                                cycleName: cycleName(for: session),
-                                dayLabel: dayLabel(for: session),
-                                exerciseCount: exerciseCount(for: session)
-                            )
+                    if !completedAdaptiveSessions.isEmpty {
+                        Section("Adaptive Workouts") {
+                            ForEach(completedAdaptiveSessions) { session in
+                                NavigationLink {
+                                    AdaptiveSessionDetailView(session: session)
+                                } label: {
+                                    AdaptiveSessionRowView(
+                                        session: session,
+                                        plan: generatedPlans.first(where: { $0.id == session.generatedPlanId })
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if !completedSessions.isEmpty {
+                        Section("Rotation & Ad Hoc") {
+                            ForEach(completedSessions) { session in
+                                NavigationLink {
+                                    SessionDetailView(session: session)
+                                } label: {
+                                    SessionRowView(
+                                        session: session,
+                                        cycleName: cycleName(for: session),
+                                        dayLabel: dayLabel(for: session),
+                                        exerciseCount: exerciseCount(for: session)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -98,6 +124,7 @@ struct HistoryView: View {
                 Text(manualWorkoutError ?? "Unknown error")
             })
             .task {
+                _ = try? AdaptiveExportService.hydrateAvailableExports(modelContext: modelContext)
                 reloadExportedSessions()
             }
             .onChange(of: scenePhase) { _, newPhase in
@@ -380,6 +407,12 @@ private struct SessionRowView: View {
                 Text(dayLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text(dayLabel == "Off-Schedule" ? "Ad hoc" : "Rotation")
+                    .font(.caption2)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(.blue.opacity(0.15))
+                    .clipShape(Capsule())
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 4) {
@@ -396,12 +429,170 @@ private struct SessionRowView: View {
     }
 }
 
+private struct AdaptiveSessionRowView: View {
+    let session: AdaptiveWorkoutSession
+    let plan: GeneratedWorkoutPlan?
+
+    var body: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(session.finishedAt ?? session.createdAt, style: .date)
+                    .font(.headline)
+                Text("Adaptive Floating")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("\(plan?.complexes.reduce(0, { $0 + $1.exercises.count }) ?? 0) component movements")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Adaptive")
+                    .font(.caption2)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(.purple.opacity(0.15))
+                    .clipShape(Capsule())
+            }
+            Spacer()
+            Text(session.exportStatus.rawValue)
+                .font(.caption2)
+        }
+    }
+}
+
+private struct AdaptiveSessionDetailView: View {
+    @Query private var plans: [GeneratedWorkoutPlan]
+    @Query private var sessions: [AdaptiveWorkoutSession]
+    @Query private var setEntries: [AdaptiveSetEntry]
+    @Query private var exercises: [Exercise]
+    @Query private var feedback: [ComplexFeedback]
+    @Query private var overrides: [AdaptiveOverrideEvent]
+
+    let session: AdaptiveWorkoutSession
+
+    private var plan: GeneratedWorkoutPlan? {
+        plans.first(where: { $0.id == session.generatedPlanId })
+    }
+
+    var body: some View {
+        List {
+            Section("Summary") {
+                LabeledContent("Date") { Text(session.finishedAt ?? session.createdAt, style: .date) }
+                LabeledContent("Workout kind", value: "Adaptive")
+                LabeledContent("Export status", value: session.exportStatus.rawValue)
+                if let plan { LabeledContent("Planner", value: "v\(plan.plannerVersion)") }
+            }
+
+            if let plan {
+                ForEach(plan.complexes.sorted(by: { $0.position < $1.position })) { complex in
+                    Section {
+                        ForEach(complex.exercises.sorted(by: { $0.position < $1.position })) { snapshot in
+                            let rows = entries(for: snapshot, session: session)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(exercises.first(where: { $0.id == rows.first?.exerciseId })?.name ?? snapshot.exerciseName)
+                                    .font(.headline)
+                                ForEach(rows) { row in
+                                    Text("Set \(row.setIndex): \(WeightFormatting.normalized(row.weight), format: WeightFormatting.style) x \(row.reps)")
+                                        .foregroundStyle(.secondary)
+                                }
+                                let comparison = comparisonFor(snapshot: snapshot, complex: complex)
+                                Text(comparison.label.displayName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if !comparison.previous.isEmpty {
+                                    Text("Previous: \(formatted(comparison.previous))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("Current: \(formatted(comparison.current))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        let savedRating = feedback
+                            .filter { $0.generatedPlanId == plan.id && $0.plannedComplexId == complex.id }
+                            .max(by: { $0.createdAt < $1.createdAt })?.rating
+                        if let rating = savedRating {
+                            LabeledContent("Volume feedback", value: rating.displayName)
+                        } else {
+                            LabeledContent("Volume feedback", value: "Missing")
+                        }
+                    } header: {
+                        Text(complex.name)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Adaptive Session")
+    }
+
+    private func entries(
+        for snapshot: PlannedExerciseSnapshot,
+        session: AdaptiveWorkoutSession
+    ) -> [AdaptiveSetEntry] {
+        setEntries
+            .filter {
+                $0.adaptiveSessionId == session.id
+                    && $0.occurrenceId == snapshot.occurrenceId
+                    && $0.isLocked
+                    && $0.reps > 0
+            }
+            .sorted { $0.setIndex < $1.setIndex }
+    }
+
+    private func comparisonFor(
+        snapshot: PlannedExerciseSnapshot,
+        complex: PlannedComplexSnapshot
+    ) -> RepeatPerformanceResult {
+        let currentRows = entries(for: snapshot, session: session)
+        let current = PerformanceOccurrence(
+            exerciseId: currentRows.first?.exerciseId ?? snapshot.exerciseId,
+            complexDefinitionId: complex.sourceDefinitionId,
+            componentPosition: snapshot.position,
+            isCompleted: session.status == .completed,
+            isSubstitution: isSubstitution(planId: session.generatedPlanId, occurrenceId: snapshot.occurrenceId),
+            sets: currentRows.map { .init(setIndex: $0.setIndex, weight: $0.weight, reps: $0.reps, isLocked: $0.isLocked) }
+        )
+        let priorCandidates = sessions
+            .filter { $0.status == .completed && ($0.finishedAt ?? $0.createdAt) < (session.finishedAt ?? session.createdAt) }
+            .sorted { ($0.finishedAt ?? $0.createdAt) > ($1.finishedAt ?? $1.createdAt) }
+        for priorSession in priorCandidates {
+            guard let priorPlan = plans.first(where: { $0.id == priorSession.generatedPlanId }),
+                  let priorComplex = priorPlan.complexes.first(where: { $0.sourceDefinitionId == complex.sourceDefinitionId }),
+                  let priorSnapshot = priorComplex.exercises.first(where: { $0.position == snapshot.position }),
+                  priorSnapshot.exerciseId == snapshot.exerciseId else { continue }
+            let rows = entries(for: priorSnapshot, session: priorSession)
+            let previous = PerformanceOccurrence(
+                exerciseId: rows.first?.exerciseId ?? priorSnapshot.exerciseId,
+                complexDefinitionId: priorComplex.sourceDefinitionId,
+                componentPosition: priorSnapshot.position,
+                isCompleted: true,
+                isSubstitution: isSubstitution(planId: priorPlan.id, occurrenceId: priorSnapshot.occurrenceId),
+                sets: rows.map { .init(setIndex: $0.setIndex, weight: $0.weight, reps: $0.reps, isLocked: $0.isLocked) }
+            )
+            return RepeatPerformanceService.compare(previous: previous, current: current)
+        }
+        return RepeatPerformanceService.compare(previous: nil, current: current)
+    }
+
+    private func isSubstitution(planId: UUID, occurrenceId: UUID) -> Bool {
+        overrides.contains {
+            $0.generatedPlanId == planId
+                && $0.occurrenceId == occurrenceId
+                && $0.kind == .substituteExercise
+        }
+    }
+
+    private func formatted(_ rows: [ComparableSetRow]) -> String {
+        rows.map { "\(WeightFormatting.normalized($0.weight)) x \($0.reps)" }.joined(separator: ", ")
+    }
+}
+
 private struct SessionDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var exercises: [Exercise]
     @Query private var activeCycles: [ActiveCycleInstance]
     @Query private var templates: [CycleTemplate]
     @Query private var setEntries: [SetEntry]
+    @Query private var adHocFeedback: [AdHocExerciseFeedback]
 
     let session: Session
     @State private var exportError: String?
@@ -432,6 +623,9 @@ private struct SessionDetailView: View {
                             Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) x \(set.reps)")
                                 .foregroundStyle(.secondary)
                         }
+                    }
+                    if let rating = feedbackRating(for: group.exercise.id) {
+                        LabeledContent("Volume feedback", value: rating.displayName)
                     }
                 }
             }
@@ -476,6 +670,13 @@ private struct SessionDetailView: View {
             return (exercise: exercise, sets: sets.sorted { $0.setIndex < $1.setIndex })
         }
         .sorted { $0.exercise.name < $1.exercise.name }
+    }
+
+    private func feedbackRating(for exerciseId: UUID) -> ComplexFeedbackRating? {
+        adHocFeedback
+            .filter { $0.sessionId == session.id && $0.exerciseId == exerciseId }
+            .max(by: { $0.createdAt < $1.createdAt })?
+            .rating
     }
 
     private func retryExport() {
@@ -613,6 +814,10 @@ private struct ExportedSessionDetailView: View {
                             Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) x \(set.reps)")
                                 .foregroundStyle(.secondary)
                         }
+                    }
+                    if let raw = exercise.volume_feedback,
+                       let rating = ComplexFeedbackRating(rawValue: raw) {
+                        LabeledContent("Volume feedback", value: rating.displayName)
                     }
                 }
             }

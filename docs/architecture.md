@@ -15,6 +15,7 @@ Entry points:
 
 Main tabs:
 
+- Log
 - Workout
 - History
 - Cycle
@@ -25,6 +26,12 @@ Main tabs:
 The main SwiftData models are defined in [`Models.swift`](../Sources/Models.swift):
 
 - `Exercise`
+- `TrainingPreference`
+- `AdaptiveProgram`, `AdaptiveMuscleRule`
+- `AdaptiveExerciseComplex`, `AdaptiveComplexComponent`
+- `DailyReadinessCheck`, `AdaptiveReadinessResponse`
+- `GeneratedWorkoutPlan`, `PlannedComplexSnapshot`, `PlannedExerciseSnapshot`
+- `AdaptiveSetOccurrenceLink`, `ComplexFeedback`, `AdaptiveOverrideEvent`
 - `CycleTemplate`
 - `CycleDay`
 - `CycleSlot`
@@ -35,6 +42,12 @@ The main SwiftData models are defined in [`Models.swift`](../Sources/Models.swif
 
 Design intent:
 
+- `TrainingPreference` selects exactly one active programming mode and defaults
+  missing legacy state to Fixed Cycle
+- Adaptive profile/complex edits create immutable versions; proposed and frozen
+  execution records snapshot source IDs, names, muscles, order, sets, and costs
+- occurrence links keep duplicate uses of one exercise distinct without adding
+  migration-sensitive fields to legacy `SetEntry`
 - `CycleTemplate` describes programming structure
 - `ActiveCycleInstance` tracks where the user currently is in a cycle
 - `Session` is the workout occurrence
@@ -91,16 +104,27 @@ Relevant code:
 
 - [`WorkoutView.swift`](../Sources/WorkoutView.swift)
 
-Key behavior:
+Key Fixed Cycle behavior:
 
 - a draft session is created for the active cycle and current day
 - draft entries are prefilled from the most recent matching completed day
 - finishing a workout converts the draft to a completed session, exports it, advances the cycle, and creates the next draft
 
+`WorkoutView` remains the single user-facing Workout page. Its content mutates
+with the selected mode. While Adaptive is selected, Fixed Cycle's instance,
+pointer, rotation indices, and draft remain persisted but cannot resolve into
+the active Workout UI.
+
+Adaptive planning evaluates observed muscle readiness before difficulty.
+Difficulty balances the proposed same-day workload and can serve as a
+recovery-prediction hint, but it cannot route an easier exercise to a muscle
+that the morning check says is unrecovered.
+
 ## Cycle Flow
 
 The Cycle tab manages:
 
+- selecting Fixed Cycle or Adaptive Floating as the one active training mode
 - listing templates
 - editing and cloning templates
 - importing published cycle JSON
@@ -110,6 +134,10 @@ The Cycle tab manages:
 Relevant code:
 
 - [`CycleView.swift`](../Sources/CycleView.swift)
+- Adaptive profile validation/versioning:
+  [`AdaptiveProgramService.swift`](../Sources/AdaptiveProgramService.swift)
+- Adaptive profile and complex editor:
+  [`AdaptiveProgramEditorView.swift`](../Sources/AdaptiveProgramEditorView.swift)
 - published cycle parsing: [`PublishedCycleService.swift`](../Sources/PublishedCycleService.swift)
 
 Activation behavior:
@@ -201,6 +229,8 @@ Regression coverage is concentrated in:
 - [`BootstrapDataServiceTests.swift`](../Tests/BootstrapDataServiceTests.swift)
 - [`CycleOrderingTests.swift`](../Tests/CycleOrderingTests.swift)
 - [`PublishedCycleServiceTests.swift`](../Tests/PublishedCycleServiceTests.swift)
+- [`AdaptiveProgramServiceTests.swift`](../Tests/AdaptiveProgramServiceTests.swift)
+- [`MigrationSafetyTests.swift`](../Tests/MigrationSafetyTests.swift)
 
 Run:
 

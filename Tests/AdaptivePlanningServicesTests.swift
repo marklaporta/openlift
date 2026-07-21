@@ -1,0 +1,526 @@
+import XCTest
+@testable import OpenLift
+
+final class AdaptivePlanningServicesTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testLedgerCountsOnlyCompletedLockedSetsAndIncludesAdHocAndSecondaryLoad() {
+        let evidence = [
+            evidence(muscles: [.chest], daysAgo: 1, completed: true, locked: true, kind: .adHoc),
+            evidence(muscles: [.chest, .triceps], daysAgo: 2, completed: true, locked: true, kind: .adaptiveComparable),
+            evidence(muscles: [.chest], daysAgo: 1, completed: false, locked: true, kind: .rotation),
+            evidence(muscles: [.chest], daysAgo: 1, completed: true, locked: false, kind: .rotation),
+            evidence(muscles: [.chest], daysAgo: 10, completed: true, locked: true, kind: .rotation)
+        ]
+        let ledger = TrainingLoadLedgerService.build(
+            evidence: evidence,
+            asOf: now,
+            rollingWindowDays: [.chest: 7, .triceps: 7],
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(ledger[.chest].lockedSetCount, 2)
+        XCTAssertEqual(ledger[.triceps].lockedSetCount, 1)
+        XCTAssertEqual(ledger[.chest].lastProductiveExposureAt, now.addingTimeInterval(-86_400))
+    }
+
+    func testStoredAdHocHistoryIsLoadEvidenceButHasNoComparableContext() {
+        let exercise = Exercise(
+            name: "Belt Squat",
+            primaryMuscle: .quads,
+            type: .compound,
+            equipment: .machine
+        )
+        let session = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            cycleNameSnapshot: "Return Session",
+            dayLabelSnapshot: "Off-Schedule",
+            createdAt: now.addingTimeInterval(-60),
+            finishedAt: now,
+            status: .completed
+        )
+        let set = SetEntry(
+            sessionId: session.id,
+            exerciseId: exercise.id,
+            setIndex: 1,
+            weight: 185,
+            reps: 9,
+            isLocked: true
+        )
+
+        let evidence = TrainingLoadLedgerService.storedEvidence(
+            sessions: [session],
+            setEntries: [set],
+            exercises: [exercise],
+            adaptivePlans: [],
+            occurrenceLinks: [],
+            overrides: []
+        )
+
+        XCTAssertEqual(evidence.count, 1)
+        XCTAssertEqual(evidence.first?.kind, .adHoc)
+        XCTAssertNil(evidence.first?.complexDefinitionId)
+        XCTAssertNil(evidence.first?.componentPosition)
+        XCTAssertEqual(evidence.first?.muscles, [.quads])
+    }
+
+    func testAtomicPressFlyComplexConsumesTwoMovements() {
+        let press = exercise("Press", muscle: .chest)
+        let fly = exercise("Fly", muscle: .chest, type: .isolation)
+        let complex = makeComplex(
+            id: uuid(1),
+            position: 0,
+            primary: .chest,
+            components: [component(press, sets: 2, difficulty: .moderate), component(fly, position: 1, sets: 2)]
+        )
+        let program = makeProgram(
+            movements: 2,
+            difficulty: 3,
+            enabled: [.chest],
+            complexes: [complex]
+        )
+
+        let result = AdaptivePlanService.generate(
+            program: program,
+            exercises: [press, fly],
+            readiness: readyInputs,
+            ledger: recentLedger([.chest]),
+            now: now,
+            calendar: utcCalendar
+        )
+
+        let proposal = unwrapProposal(result)
+        XCTAssertEqual(proposal.complexes.count, 1)
+        XCTAssertEqual(proposal.complexes.first?.components.count, 2)
+        XCTAssertEqual(proposal.totalMovements, 2)
+        XCTAssertEqual(proposal.muscleSetDose[.chest], 4)
+        let trace = AdaptivePlanService.trace(for: result)
+        XCTAssertEqual(trace.plannerVersion, 1)
+        XCTAssertEqual(trace.outcomeCode, "proposal")
+        XCTAssertEqual(trace.selectedComplexDefinitionIds, [uuid(1)])
+        XCTAssertNil(trace.conflictCode)
+    }
+
+    func testRecoveredLowerPriorityFloorWinsBeforeHigherPriorityFill() {
+        let chest = exercise("Chest", muscle: .chest)
+        let back = exercise("Back", muscle: .back)
+        let program = makeProgram(
+            movements: 1,
+            difficulty: 3,
+            enabled: [.chest, .back],
+            floors: [.back: 2],
+            complexes: [
+                makeComplex(id: uuid(1), position: 0, primary: .chest, components: [component(chest, sets: 2)]),
+                makeComplex(id: uuid(2), position: 1, primary: .back, components: [component(back, sets: 2)])
+            ]
+        )
+        var ledger = recentLedger([.chest])
+        ledger.byMuscle[.back] = MuscleLoadSummary(lockedSetCount: 0, lastProductiveExposureAt: now.addingTimeInterval(-20 * 86_400))
+
+        let proposal = unwrapProposal(
+            AdaptivePlanService.generate(
+                program: program,
+                exercises: [chest, back],
+                readiness: readyInputs,
+                ledger: ledger,
+                now: now,
+                calendar: utcCalendar
+            )
+        )
+
+        XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.back])
+        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["back_floor_due"])
+    }
+
+    func testImpossibleFloorReturnsExactCapacityConflict() {
+        let back = exercise("Back", muscle: .back)
+        let program = makeProgram(
+            movements: 1,
+            difficulty: 3,
+            enabled: [.back],
+            floors: [.back: 4],
+            complexes: [
+                makeComplex(id: uuid(1), position: 0, primary: .back, components: [component(back, sets: 2)])
+            ]
+        )
+
+        let result = AdaptivePlanService.generate(
+            program: program,
+            exercises: [back],
+            readiness: readyInputs,
+            ledger: TrainingLoadLedger(byMuscle: [:]),
+            now: now,
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(
+            result,
+            .infeasible(
+                AdaptivePlanConflict(
+                    muscle: .back,
+                    requiredAdditionalSets: 2,
+                    code: "insufficient_floor_qualifying_dose"
+                )
+            )
+        )
+    }
+
+    func testHamstringSetCapBeatsGlobalCapacity() {
+        let curl = exercise("Leg Curl", muscle: .hamstrings)
+        let program = makeProgram(
+            movements: 6,
+            difficulty: 10,
+            enabled: [.hamstrings],
+            floors: [.hamstrings: 1],
+            setCaps: [.hamstrings: 2],
+            complexes: [
+                makeComplex(id: uuid(1), position: 0, primary: .hamstrings, components: [component(curl, sets: 3)])
+            ]
+        )
+
+        let result = AdaptivePlanService.generate(
+            program: program,
+            exercises: [curl],
+            readiness: readyInputs,
+            ledger: TrainingLoadLedger(byMuscle: [:]),
+            now: now,
+            calendar: utcCalendar
+        )
+        guard case .infeasible(let conflict) = result else {
+            return XCTFail("Expected a cap conflict")
+        }
+        XCTAssertEqual(conflict.muscle, .hamstrings)
+        XCTAssertEqual(conflict.code, "sets_per_exercise_cap")
+    }
+
+    func testDifficultyBudgetAllowsHardAndEasyButRejectsSecondHardMovement() {
+        let sldl = exercise("SLDL", muscle: .hamstrings)
+        let ghd = exercise("GHD", muscle: .hamstrings)
+        let curl = exercise("Leg Curl", muscle: .hamstrings, type: .isolation)
+        let program = makeProgram(
+            movements: 3,
+            difficulty: 4,
+            enabled: [.hamstrings],
+            complexes: [
+                makeComplex(id: uuid(1), name: "SLDL Complex", position: 0, primary: .hamstrings, components: [component(sldl, difficulty: .hard)]),
+                makeComplex(id: uuid(2), name: "GHD Complex", position: 1, primary: .hamstrings, components: [component(ghd, difficulty: .hard)]),
+                makeComplex(id: uuid(3), name: "Leg Curl Complex", position: 2, primary: .hamstrings, components: [component(curl, difficulty: .easy)])
+            ]
+        )
+
+        let proposal = unwrapProposal(
+            AdaptivePlanService.generate(
+                program: program,
+                exercises: [sldl, ghd, curl],
+                readiness: readyInputs,
+                ledger: recentLedger([.hamstrings]),
+                now: now,
+                calendar: utcCalendar
+            )
+        )
+
+        XCTAssertEqual(proposal.complexes.map(\.name), ["SLDL Complex", "Leg Curl Complex"])
+        XCTAssertEqual(proposal.totalDifficultyCost, 4)
+        XCTAssertTrue(proposal.rejections.contains(.init(complexDefinitionId: uuid(2), code: "difficulty_budget")))
+    }
+
+    func testEasyHamstringCurlIsStillIneligibleWhenHamstringsAreUnrecovered() {
+        let curl = exercise("Hamstring Curl", muscle: .hamstrings, type: .isolation)
+        let program = makeProgram(
+            movements: 4,
+            difficulty: 10,
+            enabled: [.hamstrings],
+            complexes: [
+                makeComplex(
+                    id: uuid(41),
+                    position: 0,
+                    primary: .hamstrings,
+                    components: [component(curl, sets: 2, difficulty: .easy)]
+                )
+            ]
+        )
+        var readiness = readyInputs
+        readiness[.hamstrings] = MuscleReadinessInput(
+            soreness: .high,
+            connectiveTissuePain: .none,
+            eagerness: .neutral
+        )
+
+        let proposal = unwrapProposal(
+            AdaptivePlanService.generate(
+                program: program,
+                exercises: [curl],
+                readiness: readiness,
+                ledger: TrainingLoadLedger(byMuscle: [:]),
+                now: now,
+                calendar: utcCalendar
+            )
+        )
+
+        XCTAssertTrue(proposal.complexes.isEmpty)
+        XCTAssertEqual(proposal.rejections.first?.code, "held_for_recovery")
+    }
+
+    func testPlannerIsStableAcrossCollectionOrdering() {
+        let first = exercise("First", muscle: .chest)
+        let second = exercise("Second", muscle: .chest)
+        let a = makeComplex(id: uuid(1), position: 0, primary: .chest, components: [component(first)])
+        let b = makeComplex(id: uuid(2), position: 0, primary: .chest, components: [component(second)])
+        let programA = makeProgram(movements: 1, difficulty: 3, enabled: [.chest], complexes: [b, a])
+        let programB = makeProgram(movements: 1, difficulty: 3, enabled: [.chest], complexes: [a, b])
+
+        let idsA = unwrapProposal(AdaptivePlanService.generate(
+            program: programA,
+            exercises: [second, first],
+            readiness: readyInputs,
+            ledger: recentLedger([.chest]),
+            now: now,
+            calendar: utcCalendar
+        )).complexes.map(\.definitionId)
+        let idsB = unwrapProposal(AdaptivePlanService.generate(
+            program: programB,
+            exercises: [first, second],
+            readiness: readyInputs,
+            ledger: recentLedger([.chest]),
+            now: now,
+            calendar: utcCalendar
+        )).complexes.map(\.definitionId)
+
+        XCTAssertEqual(idsA, [uuid(1)])
+        XCTAssertEqual(idsA, idsB)
+    }
+
+    func testPlannerPropertyLoopNeverExceedsMovementOrDifficultyCaps() {
+        let exercises = (1...8).map { exercise("Chest \($0)", muscle: .chest) }
+        for seed in 1...80 {
+            let movementCap = (seed % 5) + 1
+            let difficultyCap = (seed % 7) + 2
+            let complexes = exercises.enumerated().map { index, exercise in
+                makeComplex(
+                    id: uuid(index + 1),
+                    position: (seed * (index + 3)) % 11,
+                    primary: .chest,
+                    components: [component(exercise, difficulty: MovementDifficulty.allCases[(seed + index) % 3])]
+                )
+            }
+            let program = makeProgram(
+                movements: movementCap,
+                difficulty: difficultyCap,
+                enabled: [.chest],
+                exerciseCaps: [.chest: 10],
+                complexes: complexes
+            )
+            let proposal = unwrapProposal(AdaptivePlanService.generate(
+                program: program,
+                exercises: Array(exercises.reversed()),
+                readiness: readyInputs,
+                ledger: recentLedger([.chest]),
+                now: now,
+                calendar: utcCalendar
+            ))
+            XCTAssertLessThanOrEqual(proposal.totalMovements, movementCap, "seed \(seed)")
+            XCTAssertLessThanOrEqual(proposal.totalDifficultyCost, difficultyCap, "seed \(seed)")
+            XCTAssertEqual(proposal.totalMovements, proposal.complexes.reduce(0) { $0 + $1.components.count })
+        }
+    }
+
+    func testRepeatPerformanceRequiresSameAdaptiveOccurrenceContext() {
+        let exerciseId = UUID()
+        let definitionId = UUID()
+        let previous = PerformanceOccurrence(
+            exerciseId: exerciseId,
+            complexDefinitionId: definitionId,
+            componentPosition: 0,
+            isCompleted: true,
+            isSubstitution: false,
+            sets: [ComparableSetRow(setIndex: 1, weight: 60, reps: 9, isLocked: true)]
+        )
+        var current = previous
+        current.sets[0].reps = 10
+        XCTAssertEqual(RepeatPerformanceService.compare(previous: previous, current: current).label, .moreRepsAtSameWeight)
+
+        current.complexDefinitionId = nil
+        XCTAssertEqual(RepeatPerformanceService.compare(previous: previous, current: current).label, .notComparable)
+        current = previous
+        current.isSubstitution = true
+        XCTAssertEqual(RepeatPerformanceService.compare(previous: previous, current: current).label, .notComparable)
+    }
+
+    func testDoseChangesAreBoundedAndOneTooLittleTapDoesNotIncrease() {
+        XCTAssertEqual(
+            DoseRecommendationService.recommend(
+                currentSetCount: 1,
+                maximumSetCount: 3,
+                recentFeedback: [.tooLittle],
+                latestPerformance: .matched,
+                recoveredOnTime: true
+            ).prescribedSetCount,
+            1
+        )
+        XCTAssertEqual(
+            DoseRecommendationService.recommend(
+                currentSetCount: 1,
+                maximumSetCount: 3,
+                recentFeedback: [.tooLittle, .tooLittle],
+                latestPerformance: .moreRepsAtSameWeight,
+                recoveredOnTime: true
+            ).prescribedSetCount,
+            2
+        )
+        XCTAssertEqual(
+            DoseRecommendationService.recommend(
+                currentSetCount: 3,
+                minimumSetCount: 1,
+                maximumSetCount: 5,
+                recentFeedback: [.tooMuch],
+                latestPerformance: .matched,
+                recoveredOnTime: true
+            ).prescribedSetCount,
+            2
+        )
+        XCTAssertTrue(
+            DoseRecommendationService.recommend(
+                currentSetCount: 2,
+                maximumSetCount: 4,
+                recentFeedback: [.painProblem],
+                latestPerformance: nil,
+                recoveredOnTime: false
+            ).isPainBlocked
+        )
+    }
+
+    private var readyInputs: [MuscleGroup: MuscleReadinessInput] {
+        Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map {
+            ($0, MuscleReadinessInput(soreness: .none, connectiveTissuePain: .none, eagerness: .neutral))
+        })
+    }
+
+    private var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private func recentLedger(_ muscles: [MuscleGroup]) -> TrainingLoadLedger {
+        TrainingLoadLedger(
+            byMuscle: Dictionary(uniqueKeysWithValues: muscles.map {
+                ($0, MuscleLoadSummary(lockedSetCount: 100, lastProductiveExposureAt: now))
+            })
+        )
+    }
+
+    private func evidence(
+        muscles: [MuscleGroup],
+        daysAgo: Int,
+        completed: Bool,
+        locked: Bool,
+        kind: TrainingEvidenceKind
+    ) -> TrainingLoadEvidence {
+        TrainingLoadEvidence(
+            sessionId: UUID(),
+            setEntryId: UUID(),
+            exerciseId: UUID(),
+            completedAt: now.addingTimeInterval(Double(-daysAgo * 86_400)),
+            muscles: muscles,
+            weight: 100,
+            reps: 10,
+            isSessionCompleted: completed,
+            isLocked: locked,
+            kind: kind,
+            complexDefinitionId: nil,
+            componentPosition: nil
+        )
+    }
+
+    private func exercise(
+        _ name: String,
+        muscle: MuscleGroup,
+        type: ExerciseType = .compound
+    ) -> Exercise {
+        Exercise(name: name, primaryMuscle: muscle, type: type, equipment: .machine)
+    }
+
+    private func component(
+        _ exercise: Exercise,
+        position: Int = 0,
+        sets: Int = 1,
+        secondary: MuscleGroup? = nil,
+        difficulty: MovementDifficulty = .easy
+    ) -> AdaptiveComplexComponent {
+        AdaptiveComplexComponent(
+            position: position,
+            exerciseId: exercise.id,
+            prescribedSetCount: sets,
+            primaryMuscle: exercise.primaryMuscle,
+            secondaryMuscle: secondary,
+            difficulty: difficulty
+        )
+    }
+
+    private func makeComplex(
+        id: UUID,
+        name: String? = nil,
+        position: Int,
+        primary: MuscleGroup,
+        components: [AdaptiveComplexComponent]
+    ) -> AdaptiveExerciseComplex {
+        AdaptiveExerciseComplex(
+            definitionId: id,
+            version: 1,
+            name: name ?? "\(primary.displayName) Complex",
+            position: position,
+            primaryMuscle: primary,
+            qualifiesForPrimaryFloor: true,
+            components: components
+        )
+    }
+
+    private func makeProgram(
+        movements: Int,
+        difficulty: Int,
+        enabled: [MuscleGroup],
+        floors: [MuscleGroup: Int] = [:],
+        exerciseCaps: [MuscleGroup: Int] = [:],
+        setCaps: [MuscleGroup: Int] = [:],
+        complexes: [AdaptiveExerciseComplex]
+    ) -> AdaptiveProgram {
+        let rules = MuscleGroup.allCases.map { muscle in
+            AdaptiveMuscleRule(
+                muscle: muscle,
+                priorityRank: enabled.firstIndex(of: muscle).map { $0 + 1 } ?? 0,
+                rollingSetFloor: floors[muscle] ?? 0,
+                rollingWindowDays: 7,
+                maxRecoveredDayGap: 10,
+                maxExercisesPerExposure: exerciseCaps[muscle] ?? 10,
+                maxSetsPerExercise: setCaps[muscle] ?? 10,
+                isEnabled: enabled.contains(muscle)
+            )
+        }
+        return AdaptiveProgram(
+            version: 1,
+            name: "Test",
+            isReviewedForUse: false,
+            globalMaxMovements: movements,
+            maxDifficultyCost: difficulty,
+            muscleRules: rules,
+            complexes: complexes
+        )
+    }
+
+    private func unwrapProposal(
+        _ result: AdaptivePlannerResult,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> AdaptivePlanProposal {
+        guard case .proposal(let proposal) = result else {
+            XCTFail("Expected proposal, got \(result)", file: file, line: line)
+            return AdaptivePlanProposal(complexes: [], totalMovements: 0, totalDifficultyCost: 0, muscleSetDose: [:], rejections: [])
+        }
+        return proposal
+    }
+
+    private func uuid(_ value: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", value))!
+    }
+}

@@ -15,6 +15,7 @@ struct LogWorkoutView: View {
     @State private var errorMessage: String?
     @State private var savedMessage: String?
     @State private var historyContext: ExerciseHistoryContext?
+    @State private var newExerciseRequest: NewExerciseRequest?
     @FocusState private var focusedField: LogEntryField?
 
     private var sortedExercises: [Exercise] {
@@ -49,6 +50,10 @@ struct LogWorkoutView: View {
                             ForEach(sortedExercises) { exercise in
                                 Text(exercise.name).tag(exercise.id)
                             }
+                        }
+
+                        Button("Create New Exercise…") {
+                            newExerciseRequest = NewExerciseRequest(draftId: exerciseDraft.id)
                         }
 
                         ForEach($exerciseDraft.sets) { $set in
@@ -121,6 +126,16 @@ struct LogWorkoutView: View {
                         Button("Add Set") {
                             addSet(to: exerciseDraft.id)
                         }
+
+                        Picker("Volume adequacy", selection: $exerciseDraft.feedback) {
+                            Text("Not recorded").tag(Optional<ComplexFeedbackRating>.none)
+                            ForEach(ComplexFeedbackRating.allCases, id: \.self) { rating in
+                                Text(rating.displayName).tag(Optional(rating))
+                            }
+                        }
+                        Text("Ad hoc feedback is stored with this exercise. It informs future dose conservatively but never makes this session comparable to an Adaptive complex.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     } header: {
                         HStack(spacing: 8) {
                             Text(exerciseName(for: exerciseDraft.exerciseId))
@@ -146,16 +161,20 @@ struct LogWorkoutView: View {
                 }
 
                 Section {
-                    Button("Add Exercise") {
+                    Button("Add Existing Exercise") {
                         addExercise()
                     }
                     .disabled(sortedExercises.isEmpty)
+
+                    Button("Create New Exercise") {
+                        newExerciseRequest = NewExerciseRequest(draftId: nil)
+                    }
 
                     Button("Save to History") {
                         saveWorkout()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(sortedExercises.isEmpty)
+                    .disabled(exerciseDrafts.isEmpty)
                 }
 
                 if let savedMessage {
@@ -192,16 +211,33 @@ struct LogWorkoutView: View {
                 efforts: recentEfforts(exerciseId: context.exerciseId, exerciseName: context.exerciseName)
             )
         }
+        .sheet(item: $newExerciseRequest) { request in
+            NewExerciseSheet(existingExercises: exercises) { exercise in
+                applyCreatedExercise(exercise, to: request.draftId)
+            }
+        }
     }
 
     private func addExercise() {
-        let exerciseId = sortedExercises.first?.id ?? UUID()
+        guard let exerciseId = sortedExercises.first?.id else { return }
         exerciseDrafts.append(
             LogExerciseDraft(
                 exerciseId: exerciseId,
                 sets: prefilledSets(for: exerciseId)
             )
         )
+    }
+
+    private func applyCreatedExercise(_ exercise: Exercise, to draftId: UUID?) {
+        let blankSets = [LogSetDraft(), LogSetDraft(), LogSetDraft()]
+        if let draftId,
+           let index = exerciseDrafts.firstIndex(where: { $0.id == draftId }) {
+            exerciseDrafts[index].exerciseId = exercise.id
+            exerciseDrafts[index].sets = blankSets
+        } else {
+            exerciseDrafts.append(LogExerciseDraft(exerciseId: exercise.id, sets: blankSets))
+        }
+        savedMessage = "Created \(exercise.name)."
     }
 
     private func addSet(to exerciseId: UUID) {
@@ -285,6 +321,7 @@ struct LogWorkoutView: View {
                 guard !cleanedSets.isEmpty else { return nil }
                 return LogExerciseInput(
                     exerciseId: draft.exerciseId,
+                    feedback: draft.feedback,
                     sets: cleanedSets.map { LogSetInput(weight: $0.weight, reps: $0.reps) }
                 )
             }
@@ -308,6 +345,7 @@ struct LogWorkoutView: View {
             modelContext.insert(session)
 
             var insertedEntries: [SetEntry] = []
+            var insertedFeedback: [AdHocExerciseFeedback] = []
             for exerciseInput in cleanedExercises {
                 for (index, set) in exerciseInput.sets.enumerated() {
                     let entry = SetEntry(
@@ -322,6 +360,16 @@ struct LogWorkoutView: View {
                     modelContext.insert(entry)
                     insertedEntries.append(entry)
                 }
+                if let rating = exerciseInput.feedback {
+                    let feedback = AdHocExerciseFeedback(
+                        sessionId: session.id,
+                        exerciseId: exerciseInput.exerciseId,
+                        rating: rating,
+                        createdAt: date
+                    )
+                    modelContext.insert(feedback)
+                    insertedFeedback.append(feedback)
+                }
             }
 
             do {
@@ -330,7 +378,8 @@ struct LogWorkoutView: View {
                     cycleName: cycleName,
                     exercises: exercises,
                     setEntries: insertedEntries,
-                    requireICloudMirror: true
+                    requireICloudMirror: true,
+                    adHocFeedback: insertedFeedback
                 )
                 session.exportStatus = .success
             } catch {
@@ -492,8 +541,121 @@ private enum LogEntryField: Hashable {
     case weight(UUID), reps(UUID)
 }
 
+private struct NewExerciseRequest: Identifiable {
+    let id = UUID()
+    let draftId: UUID?
+}
+
+struct NewExerciseSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+
+    let existingExercises: [Exercise]
+    let onCreated: (Exercise) -> Void
+    let purposeText: String
+
+    @State private var name = ""
+    @State private var primaryMuscle: MuscleGroup = .chest
+    @State private var type: ExerciseType = .compound
+    @State private var equipment: EquipmentType = .machine
+    @State private var errorMessage: String?
+
+    init(
+        existingExercises: [Exercise],
+        purposeText: String = "The exercise is added to OpenLift’s shared catalog and selected for this workout.",
+        onCreated: @escaping (Exercise) -> Void
+    ) {
+        self.existingExercises = existingExercises
+        self.purposeText = purposeText
+        self.onCreated = onCreated
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Exercise") {
+                    TextField("Name", text: $name)
+                        .textInputAutocapitalization(.words)
+                        .accessibilityIdentifier("newExercise.name")
+
+                    Picker("Primary Muscle", selection: $primaryMuscle) {
+                        ForEach(MuscleGroup.allCases, id: \.self) { muscle in
+                            Text(muscle.displayName).tag(muscle)
+                        }
+                    }
+
+                    Picker("Type", selection: $type) {
+                        ForEach(ExerciseType.allCases, id: \.self) { exerciseType in
+                            Text(exerciseType.rawValue.capitalized).tag(exerciseType)
+                        }
+                    }
+
+                    Picker("Equipment", selection: $equipment) {
+                        ForEach(EquipmentType.allCases, id: \.self) { equipmentType in
+                            Text(equipmentType.rawValue.capitalized).tag(equipmentType)
+                        }
+                    }
+                }
+
+                Section {
+                    Text(purposeText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("New Exercise")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") { createExercise() }
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("newExercise.create")
+                }
+            }
+            .alert(
+                "Cannot Create Exercise",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("OK") { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "Unknown error")
+            }
+        }
+    }
+
+    private func createExercise() {
+        do {
+            let exercise = try ExerciseCatalogService.makeExercise(
+                name: name,
+                primaryMuscle: primaryMuscle,
+                type: type,
+                equipment: equipment,
+                existingExercises: existingExercises
+            )
+            modelContext.insert(exercise)
+            do {
+                try modelContext.save()
+            } catch {
+                modelContext.delete(exercise)
+                throw error
+            }
+            onCreated(exercise)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
 private struct LogExerciseInput {
     let exerciseId: UUID
+    let feedback: ComplexFeedbackRating?
     let sets: [LogSetInput]
 }
 
@@ -505,6 +667,7 @@ private struct LogSetInput {
 private struct LogExerciseDraft: Identifiable {
     let id = UUID()
     var exerciseId: UUID
+    var feedback: ComplexFeedbackRating? = nil
     var sets: [LogSetDraft] = [LogSetDraft(), LogSetDraft(), LogSetDraft()]
 }
 

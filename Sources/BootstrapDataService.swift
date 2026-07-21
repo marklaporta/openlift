@@ -116,13 +116,14 @@ enum BootstrapDataService {
         latestExport: SessionExportService.ExportPayload?
     ) -> String? {
         if let latestCompletedName = sessions
-            .filter({ $0.status == .completed })
+            .filter({ $0.status == .completed && $0.dayLabelSnapshot != "Off-Schedule" })
             .sorted(by: { ($0.finishedAt ?? $0.createdAt) > ($1.finishedAt ?? $1.createdAt) })
             .compactMap({ normalizedNonEmptyName($0.cycleNameSnapshot) })
             .first {
             return latestCompletedName
         }
 
+        guard latestExport?.workout_kind != "ad_hoc" else { return nil }
         return normalizedNonEmptyName(latestExport?.cycle_name)
     }
 
@@ -152,12 +153,15 @@ enum BootstrapDataService {
     ) -> Int {
         let canonicalTarget = canonical(targetCycleName)
         let matchingSessions = sessions.filter { session in
+            guard session.dayLabelSnapshot != "Off-Schedule" else { return false }
             guard let name = normalizedNonEmptyName(session.cycleNameSnapshot) else { return false }
             return canonical(name) == canonicalTarget
         }
 
         let exportDayIndex: Int?
-        if let latestExport, canonical(latestExport.cycle_name) == canonicalTarget {
+        if let latestExport,
+           latestExport.workout_kind != "ad_hoc",
+           canonical(latestExport.cycle_name) == canonicalTarget {
             exportDayIndex = latestExport.cycle_day_index
         } else {
             exportDayIndex = nil
@@ -366,6 +370,7 @@ enum BootstrapDataService {
         ("Leg Press", .quads, .compound, .machine),
         ("Bulgarian Split Squat", .quads, .compound, .dumbbell),
         ("Pendulum Squat", .quads, .compound, .machine),
+        ("Belt Squat", .quads, .compound, .machine),
         ("Seated Leg Curl", .hamstrings, .isolation, .machine),
         ("Leg Curl", .hamstrings, .isolation, .machine),
         ("Romanian Deadlift", .hamstrings, .compound, .barbell),
@@ -375,6 +380,7 @@ enum BootstrapDataService {
         ("Incline Curl", .biceps, .isolation, .dumbbell),
         ("Dumbbell Preacher Curl", .biceps, .isolation, .dumbbell),
         ("Cable Curl", .biceps, .isolation, .cable),
+        ("Bayesian Curl", .biceps, .isolation, .cable),
         ("EZ Bar Curl", .biceps, .isolation, .barbell),
         ("Cable Pushdown", .triceps, .isolation, .cable),
         ("Assisted Dips", .triceps, .compound, .machine),
