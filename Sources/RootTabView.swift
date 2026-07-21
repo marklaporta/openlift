@@ -46,6 +46,8 @@ struct RootTabView: View {
             _ = try? BootstrapDataService.ensureExerciseCatalog(modelContext: modelContext)
             _ = try? AdaptiveProgramService.normalizeBinaryExposureRequirements(modelContext: modelContext)
             _ = try? AdaptiveProgramService.normalizeLegacyDemoLabels(modelContext: modelContext)
+            _ = try? AdaptiveProgramService.ensureWorkoutSizePreferences(modelContext: modelContext)
+            _ = try? AdaptiveProgramService.ensurePlanDesignStates(modelContext: modelContext)
             _ = try? AdaptiveProgramService.normalizeOpenPlanExerciseCategories(
                 modelContext: modelContext
             )

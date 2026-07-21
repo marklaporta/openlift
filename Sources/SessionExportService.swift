@@ -100,19 +100,27 @@ enum SessionExportService {
             modelContext: modelContext,
             environment: environment
         )
+        let readinessSuccessCount = try AdaptiveReadinessExportService.retryPendingExports(
+            modelContext: modelContext,
+            environment: environment
+        )
         try modelContext.save()
         if (try? hasPendingCompletedSessionExports(modelContext: modelContext)) == true {
             scheduleBackgroundExportRetry()
         }
-        return retryableSessions.filter { $0.exportStatus == .success }.count + adaptiveSuccessCount
+        return retryableSessions.filter { $0.exportStatus == .success }.count
+            + adaptiveSuccessCount
+            + readinessSuccessCount
     }
 
     @MainActor
     static func hasPendingCompletedSessionExports(modelContext: ModelContext) throws -> Bool {
         let sessions = try modelContext.fetch(FetchDescriptor<Session>())
         let adaptiveSessions = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+        let diagnostics = try modelContext.fetch(FetchDescriptor<ExportDiagnostic>())
         return sessions.contains { $0.status == .completed && $0.exportStatus != .success }
             || adaptiveSessions.contains { $0.status == .completed && $0.exportStatus != .success }
+            || diagnostics.contains { $0.sessionKind == .adaptiveReadiness && $0.status != .success }
     }
 
     @MainActor
@@ -447,6 +455,33 @@ enum SessionExportService {
     }
 
     @MainActor
+    static func recordPending(
+        sessionId: UUID,
+        sessionKind: ExportSessionKind,
+        filename: String,
+        detail: String,
+        modelContext: ModelContext
+    ) throws {
+        let existing = try diagnostic(
+            sessionId: sessionId,
+            sessionKind: sessionKind,
+            modelContext: modelContext
+        )
+        let diagnostic = existing ?? ExportDiagnostic(
+            sessionId: sessionId,
+            sessionKind: sessionKind,
+            status: .pending,
+            filename: filename,
+            detail: detail
+        )
+        if diagnostic.modelContext == nil { modelContext.insert(diagnostic) }
+        diagnostic.status = .pending
+        diagnostic.filename = filename
+        diagnostic.detail = detail
+        diagnostic.updatedAt = .now
+    }
+
+    @MainActor
     private static func diagnostic(
         sessionId: UUID,
         sessionKind: ExportSessionKind,
@@ -777,6 +812,185 @@ enum SessionExportService {
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return formatter
     }()
+}
+
+enum AdaptiveReadinessExportService {
+    struct ResponsePayload: Codable, Equatable {
+        let muscle: String
+        let soreness: String
+        let connective_tissue_pain: String
+        let eagerness: String
+    }
+
+    struct Payload: Codable, Equatable {
+        let schema_version: Int
+        let record_kind: String
+        let check_id: String
+        let revision: Int
+        let local_date_key: String
+        let time_zone_identifier: String
+        let created_at: String
+        let adaptive_program_id: String
+        let adaptive_program_version: Int
+        let responses: [ResponsePayload]
+    }
+
+    static func makePayload(check: DailyReadinessCheck) -> Payload {
+        let iso = ISO8601DateFormatter()
+        return Payload(
+            schema_version: 1,
+            record_kind: "adaptive_readiness",
+            check_id: check.id.uuidString,
+            revision: check.revision,
+            local_date_key: check.localDateKey,
+            time_zone_identifier: check.timeZoneIdentifier,
+            created_at: iso.string(from: check.createdAt),
+            adaptive_program_id: check.adaptiveProgramId.uuidString,
+            adaptive_program_version: check.adaptiveProgramVersion,
+            responses: check.responses.sorted { $0.muscle.rawValue < $1.muscle.rawValue }.map {
+                ResponsePayload(
+                    muscle: $0.muscle.rawValue,
+                    soreness: $0.soreness.rawValue,
+                    connective_tissue_pain: $0.connectiveTissuePain.rawValue,
+                    eagerness: $0.eagerness.rawValue
+                )
+            }
+        )
+    }
+
+    static func filename(checkId: UUID, revision: Int) -> String {
+        "readiness-\(checkId.uuidString)-r\(revision).json"
+    }
+
+    static func encode(_ payload: Payload) throws -> Data {
+        try JSONEncoder.pretty.encode(payload)
+    }
+
+    @discardableResult
+    static func export(
+        check: DailyReadinessCheck,
+        environment: SessionExportService.ExportEnvironment = .live()
+    ) throws -> SessionExportService.ExportWriteOutcome {
+        try export(
+            data: encode(makePayload(check: check)),
+            checkId: check.id,
+            revision: check.revision,
+            environment: environment
+        )
+    }
+
+    @discardableResult
+    static func export(
+        data: Data,
+        checkId: UUID,
+        revision: Int,
+        environment: SessionExportService.ExportEnvironment = .live()
+    ) throws -> SessionExportService.ExportWriteOutcome {
+        try SessionExportService.writeExportData(
+            data: data,
+            relativeSubdirectory: "exports/readiness",
+            filename: filename(checkId: checkId, revision: revision),
+            requireICloudMirror: true,
+            environment: environment
+        )
+    }
+
+    /// Records the durable pending state synchronously, then yields navigation
+    /// before any coordinated file or iCloud metadata work begins.
+    @MainActor
+    @discardableResult
+    static func enqueueMirror(
+        check: DailyReadinessCheck,
+        modelContext: ModelContext,
+        environment: SessionExportService.ExportEnvironment = .live()
+    ) throws -> Task<Void, Never> {
+        let checkId = check.id
+        let revision = check.revision
+        let data = try encode(makePayload(check: check))
+        try SessionExportService.recordPending(
+            sessionId: checkId,
+            sessionKind: .adaptiveReadiness,
+            filename: filename(checkId: checkId, revision: revision),
+            detail: "Queued for iCloud Drive upload.",
+            modelContext: modelContext
+        )
+        try modelContext.save()
+        SessionExportService.scheduleBackgroundExportRetry()
+
+        return Task { @MainActor in
+            await Task.yield()
+            let result = await Task.detached(priority: .utility) {
+                Result {
+                    try export(
+                        data: data,
+                        checkId: checkId,
+                        revision: revision,
+                        environment: environment
+                    )
+                }
+            }.value
+            do {
+                switch result {
+                case .success(let outcome):
+                    try SessionExportService.record(
+                        outcome,
+                        sessionId: checkId,
+                        sessionKind: .adaptiveReadiness,
+                        modelContext: modelContext
+                    )
+                case .failure(let error):
+                    try SessionExportService.recordFailure(
+                        error,
+                        sessionId: checkId,
+                        sessionKind: .adaptiveReadiness,
+                        modelContext: modelContext
+                    )
+                }
+                try modelContext.save()
+            } catch {
+                SessionExportService.scheduleBackgroundExportRetry()
+            }
+        }
+    }
+
+    @MainActor
+    static func retryPendingExports(
+        modelContext: ModelContext,
+        environment: SessionExportService.ExportEnvironment = .live()
+    ) throws -> Int {
+        let diagnostics = try modelContext.fetch(FetchDescriptor<ExportDiagnostic>()).filter {
+            $0.sessionKind == .adaptiveReadiness && $0.status != .success
+        }
+        guard !diagnostics.isEmpty else { return 0 }
+        let checks = try modelContext.fetch(FetchDescriptor<DailyReadinessCheck>())
+        var successes = 0
+        for diagnostic in diagnostics {
+            guard let check = checks.first(where: { $0.id == diagnostic.sessionId }) else {
+                diagnostic.status = .failed
+                diagnostic.detail = "The local readiness check no longer exists."
+                continue
+            }
+            do {
+                let outcome = try export(check: check, environment: environment)
+                try SessionExportService.record(
+                    outcome,
+                    sessionId: check.id,
+                    sessionKind: .adaptiveReadiness,
+                    modelContext: modelContext
+                )
+                if outcome.status == .success { successes += 1 }
+            } catch {
+                try SessionExportService.recordFailure(
+                    error,
+                    sessionId: check.id,
+                    sessionKind: .adaptiveReadiness,
+                    modelContext: modelContext
+                )
+            }
+        }
+        try modelContext.save()
+        return successes
+    }
 }
 
 enum AdaptiveExportService {

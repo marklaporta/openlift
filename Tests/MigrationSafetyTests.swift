@@ -40,6 +40,171 @@ private enum UnsupportedMigrationPlan: SchemaMigrationPlan {
 }
 
 final class MigrationSafetyTests: XCTestCase {
+    func testV5StoreMigratesToV6WithoutChangingWorkoutOrExportData() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let storeURL = fixture.working.appendingPathComponent("default.store")
+        let sessionId = UUID()
+        let adaptiveProgramId = UUID()
+        let readinessId = UUID()
+        let adaptivePlanId = UUID()
+        let adaptiveSessionId = UUID()
+        let adaptiveSetEntryId = UUID()
+        let exerciseId = UUID()
+
+        do {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV5.self)
+            let container = try ModelContainer(
+                for: schema,
+                configurations: [
+                    ModelConfiguration(
+                        "V5AdaptiveDesignFixture",
+                        schema: schema,
+                        url: storeURL,
+                        cloudKitDatabase: .none
+                    )
+                ]
+            )
+            let context = ModelContext(container)
+            context.insert(
+                Session(
+                    id: sessionId,
+                    cycleInstanceId: UUID(),
+                    cycleDayIndex: 0,
+                    finishedAt: Date(timeIntervalSince1970: 1_774_228_400),
+                    status: .completed,
+                    exportStatus: .success
+                )
+            )
+            context.insert(
+                ExportDiagnostic(
+                    sessionId: sessionId,
+                    sessionKind: .fixed,
+                    status: .success,
+                    filename: "workout-existing.json",
+                    detail: "Uploaded to iCloud Drive."
+                )
+            )
+            let exercise = Exercise(
+                id: exerciseId,
+                name: "Existing Cable Row",
+                primaryMuscle: .back,
+                type: .compound,
+                equipment: .cable
+            )
+            let program = AdaptiveProgram(
+                id: adaptiveProgramId,
+                version: 3,
+                name: "Existing Adaptive Profile",
+                isReviewedForUse: true,
+                globalMaxMovements: 4,
+                maxDifficultyCost: 60,
+                muscleRules: [],
+                complexes: []
+            )
+            let readiness = DailyReadinessCheck(
+                id: readinessId,
+                localDateKey: "2026-07-20",
+                timeZoneIdentifier: "America/Los_Angeles",
+                revision: 2,
+                adaptiveProgramId: adaptiveProgramId,
+                adaptiveProgramVersion: 3,
+                responses: [
+                    AdaptiveReadinessResponse(
+                        muscle: .back,
+                        soreness: .none,
+                        connectiveTissuePain: .none,
+                        eagerness: .eager
+                    )
+                ]
+            )
+            let plannedExercise = PlannedExerciseSnapshot(
+                position: 0,
+                exerciseId: exerciseId,
+                exerciseName: exercise.name,
+                primaryMuscle: .back,
+                difficulty: .hard,
+                prescribedSetCount: 1
+            )
+            let plan = GeneratedWorkoutPlan(
+                id: adaptivePlanId,
+                localDateKey: "2026-07-20",
+                timeZoneIdentifier: "America/Los_Angeles",
+                status: .completed,
+                adaptiveProgramId: adaptiveProgramId,
+                adaptiveProgramVersion: 3,
+                readinessCheckId: readinessId,
+                plannerVersion: 4,
+                reasonCodes: ["existing_workout"],
+                sessionId: adaptiveSessionId,
+                complexes: [
+                    PlannedComplexSnapshot(
+                        sourceDefinitionId: UUID(),
+                        sourceVersion: 3,
+                        position: 0,
+                        name: "Existing Back",
+                        primaryMuscle: .back,
+                        reasonCodes: ["existing_workout"],
+                        exercises: [plannedExercise]
+                    )
+                ]
+            )
+            let adaptiveSession = AdaptiveWorkoutSession(
+                id: adaptiveSessionId,
+                generatedPlanId: adaptivePlanId,
+                finishedAt: Date(timeIntervalSince1970: 1_774_228_400),
+                status: .completed,
+                exportStatus: .success
+            )
+            let adaptiveSet = AdaptiveSetEntry(
+                id: adaptiveSetEntryId,
+                adaptiveSessionId: adaptiveSessionId,
+                occurrenceId: plannedExercise.occurrenceId,
+                exerciseId: exerciseId,
+                setIndex: 1,
+                weight: 120,
+                reps: 8,
+                isLocked: true
+            )
+            context.insert(exercise)
+            context.insert(program)
+            context.insert(readiness)
+            context.insert(plan)
+            context.insert(adaptiveSession)
+            context.insert(adaptiveSet)
+            try context.save()
+        }
+
+        let schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
+        let startup = OpenLiftModelContainerFactory.makePersistent(
+            schema: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: ModelConfiguration(
+                "V6AdaptiveDesignFixture",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+        )
+
+        XCTAssertNil(startup.issue)
+        let context = ModelContext(startup.container)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).map(\.id), [sessionId])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<ExportDiagnostic>()).first?.filename, "workout-existing.json")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<AdaptiveProgram>()).first?.id, adaptiveProgramId)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<DailyReadinessCheck>()).first?.id, readinessId)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<GeneratedWorkoutPlan>()).first?.id, adaptivePlanId)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<AdaptiveWorkoutSession>()).first?.id, adaptiveSessionId)
+        let migratedSet = try XCTUnwrap(context.fetch(FetchDescriptor<AdaptiveSetEntry>()).first)
+        XCTAssertEqual(migratedSet.id, adaptiveSetEntryId)
+        XCTAssertEqual(migratedSet.exerciseId, exerciseId)
+        XCTAssertEqual(migratedSet.weight, 120)
+        XCTAssertEqual(migratedSet.reps, 8)
+        XCTAssertTrue(migratedSet.isLocked)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutSizePreference>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptivePlanDesignState>()), 0)
+    }
+
     func testV4StoreMigratesToV5WithoutChangingWorkoutData() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -126,12 +291,12 @@ final class MigrationSafetyTests: XCTestCase {
         )
         let legacyCounts = try legacyEntityCounts(in: legacyContainer)
 
-        let v5Schema = Schema(versionedSchema: OpenLiftSchemaV5.self)
+        let v5Schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
         let startup = OpenLiftModelContainerFactory.makePersistent(
             schema: v5Schema,
             migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configuration: ModelConfiguration(
-                "CopiedDeviceV5Readback",
+                "CopiedDeviceV6Readback",
                 schema: v5Schema,
                 url: fixture.working.appendingPathComponent("default.store"),
                 cloudKitDatabase: .none
@@ -148,7 +313,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try persistentStoreManifest(in: suppliedBackup), suppliedManifestBefore)
     }
 
-    func testUnversionedV1FixtureMigratesToV5AndRollsBack() throws {
+    func testUnversionedV1FixtureMigratesToV6AndRollsBack() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
@@ -159,7 +324,7 @@ final class MigrationSafetyTests: XCTestCase {
         let sourceManifestBefore = try persistentStoreManifest(in: fixture.source)
         XCTAssertFalse(sourceManifestBefore.isEmpty)
 
-        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV5.self)
+        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV6.self)
         let workingStoreURL = fixture.working.appendingPathComponent("default.store")
         let workingConfiguration = ModelConfiguration(
             "MigrationFixture",
@@ -259,6 +424,8 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveOverrideEvent>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveExerciseSelectionPreference>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ExportDiagnostic>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutSizePreference>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptivePlanDesignState>()), 0)
     }
 
     private func createUnversionedV1Fixture(at storeURL: URL) throws {

@@ -17,6 +17,8 @@ struct AdaptiveWorkoutView: View {
     @Query private var complexFeedback: [ComplexFeedback]
     @Query private var adHocFeedback: [AdHocExerciseFeedback]
     @Query private var exerciseSelectionPreferences: [AdaptiveExerciseSelectionPreference]
+    @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
+    @Query private var planDesignStates: [AdaptivePlanDesignState]
 
     @State private var readiness: [MuscleGroup: ReadinessSelection] = Dictionary(
         uniqueKeysWithValues: MuscleGroup.allCases.map { ($0, ReadinessSelection()) }
@@ -24,6 +26,8 @@ struct AdaptiveWorkoutView: View {
     @State private var errorMessage: String?
     @State private var swapContext: AdaptiveSwapContext?
     @State private var addMovementContext: AdaptiveAddMovementContext?
+    @State private var addComplexContext: AdaptiveAddComplexContext?
+    @State private var isEditingReadiness = false
 
     private var activeProgram: AdaptiveProgram? {
         AdaptiveProgramService.activeProgram(from: adaptivePrograms)
@@ -51,14 +55,18 @@ struct AdaptiveWorkoutView: View {
                     } else if let plan = currentPlan {
                         switch plan.status {
                         case .proposed:
-                            previewContent(plan: plan)
+                            if isEditingReadiness {
+                                readinessContent(program: program, editingPlan: plan)
+                            } else {
+                                previewContent(plan: plan)
+                            }
                         case .frozen, .inProgress:
                             executionContent(plan: plan)
                         case .completed:
                             completedContent(plan: plan)
                         }
                     } else {
-                        readinessContent(program: program)
+                        readinessContent(program: program, editingPlan: nil)
                     }
                 } else {
                     Section {
@@ -121,6 +129,24 @@ struct AdaptiveWorkoutView: View {
                 }
             )
         }
+        .sheet(item: $addComplexContext) { context in
+            AdaptiveAddComplexSheet(
+                muscles: context.availableMuscles,
+                program: activeProgram,
+                onSelectConfigured: { definition in
+                    appendConfiguredComplex(definition, planId: context.planId)
+                    addComplexContext = nil
+                },
+                onBuildManually: { muscle in
+                    addComplexContext = nil
+                    addMovementContext = AdaptiveAddMovementContext(
+                        planId: context.planId,
+                        complexId: nil,
+                        primaryMuscle: muscle
+                    )
+                }
+            )
+        }
         .alert(
             "Adaptive Workout Error",
             isPresented: Binding(
@@ -152,9 +178,9 @@ struct AdaptiveWorkoutView: View {
     }
 
     @ViewBuilder
-    private func readinessContent(program: AdaptiveProgram) -> some View {
-        Section("Morning Readiness") {
-            Text("Rate each enabled muscle for today’s workout.")
+    private func readinessContent(program: AdaptiveProgram, editingPlan: GeneratedWorkoutPlan?) -> some View {
+        Section(editingPlan == nil ? "1 · Readiness" : "Edit Readiness") {
+            Text("Adjust anything that is not at its recovered default, then submit once.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -169,7 +195,7 @@ struct AdaptiveWorkoutView: View {
                         .foregroundStyle(.secondary)
                     Picker("Muscle soreness", selection: sorenessBinding(for: muscle)) {
                         ForEach(SorenessLevel.allCases, id: \.self) { value in
-                            Text(value.displayName).tag(Optional(value))
+                            Text(value.displayName).tag(value)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -186,7 +212,7 @@ struct AdaptiveWorkoutView: View {
                         .foregroundStyle(.secondary)
                     Picker("Connective-tissue pain", selection: painBinding(for: muscle)) {
                         ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
-                            Text(value.displayName).tag(Optional(value))
+                            Text(value.displayName).tag(value)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -203,7 +229,7 @@ struct AdaptiveWorkoutView: View {
                         .foregroundStyle(.secondary)
                     Picker("Eagerness to train", selection: eagernessBinding(for: muscle)) {
                         ForEach(EagernessLevel.allCases, id: \.self) { value in
-                            Text(value.displayName).tag(Optional(value))
+                            Text(value.displayName).tag(value)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -224,7 +250,7 @@ struct AdaptiveWorkoutView: View {
                             ReadinessSelection(
                                 soreness: SorenessLevel.none,
                                 pain: ConnectiveTissuePainLevel.none,
-                                eagerness: .neutral
+                                eagerness: .eager
                             )
                         )
                     })
@@ -235,25 +261,42 @@ struct AdaptiveWorkoutView: View {
 #endif
 
         Section {
-            Button("Generate Plan") {
-                generateNewPlan(program: program)
+            Button(editingPlan == nil ? "Submit Readiness" : "Update Readiness") {
+                submitReadiness(program: program, editingPlan: editingPlan)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!readinessIsComplete(for: program) && !AppRuntime.isAdaptiveWorkflowUITesting)
             .accessibilityIdentifier("adaptive.generatePlan")
+            if editingPlan != nil {
+                Button("Cancel") { isEditingReadiness = false }
+            }
         }
     }
 
     @ViewBuilder
     private func previewContent(plan: GeneratedWorkoutPlan) -> some View {
-        Section("Proposed Plan") {
-            Text("Swap, reorder, add, or remove exercises before starting.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        Section("2 · Design") {
             let complexes = plan.complexes.sorted { $0.position < $1.position }
-            let movementCount = complexes.reduce(0) { $0 + $1.exercises.count }
-            Text("\(movementCount) exercise\(movementCount == 1 ? "" : "s")")
-                .font(.headline)
+            let target = designState(for: plan)?.targetComplexCount ?? complexes.count
+            HStack {
+                Text("Today: \(target) muscle group\(target == 1 ? "" : "s")")
+                Spacer()
+                Button { updateTodayTarget(plan: plan, target: target - 1) } label: {
+                    Image(systemName: "minus")
+                }
+                .disabled(target <= 1)
+                .accessibilityLabel("Decrease today's muscle-group target")
+                .accessibilityIdentifier("adaptive.decreaseTarget")
+                Button { updateTodayTarget(plan: plan, target: target + 1) } label: {
+                    Image(systemName: "plus")
+                }
+                .disabled(target >= enabledMuscles(in: activeProgram!).count)
+                .accessibilityLabel("Increase today's muscle-group target")
+                .accessibilityIdentifier("adaptive.increaseTarget")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Text("\(complexes.count) proposed exposure\(complexes.count == 1 ? "" : "s")")
+                .font(.subheadline)
                 .accessibilityValue(
                     complexes
                         .flatMap(\.exercises)
@@ -261,6 +304,14 @@ struct AdaptiveWorkoutView: View {
                         .map(\.exerciseName)
                         .joined(separator: ", ")
                 )
+            Button {
+                loadReadiness(from: plan)
+                isEditingReadiness = true
+            } label: {
+                Label("Edit Readiness", systemImage: "slider.horizontal.3")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("adaptive.editReadiness")
         }
 
         ForEach(plan.complexes.sorted(by: { $0.position < $1.position })) { complex in
@@ -327,32 +378,18 @@ struct AdaptiveWorkoutView: View {
                         .controlSize(.small)
                     }
                 }
-                Button {
-                    addMovementContext = AdaptiveAddMovementContext(
-                        planId: plan.id,
-                        complexId: complex.id,
-                        primaryMuscle: complex.primaryMuscle
-                    )
-                } label: {
-                    Label("Add Exercise to \(complex.primaryMuscle.displayName)", systemImage: "plus.circle")
-                }
-                .accessibilityIdentifier("adaptive.addToComplex.\(complex.id.uuidString)")
             } header: {
-                Text(complex.primaryMuscle.displayName)
+                complexHeader(complex: complex, plan: plan, isExecuting: false)
             }
         }
 
         Section {
             Button {
-                addMovementContext = AdaptiveAddMovementContext(
-                    planId: plan.id,
-                    complexId: nil,
-                    primaryMuscle: .chest
-                )
+                presentAddComplex(for: plan)
             } label: {
-                Label("Add Standalone Exercise", systemImage: "plus.circle")
+                Label("Add Complex", systemImage: "plus.circle")
             }
-            .accessibilityIdentifier("adaptive.addMovement")
+            .accessibilityIdentifier("adaptive.addComplex")
             Button("Use Workout") { freeze(plan: plan) }
                 .buttonStyle(.borderedProminent)
                 .disabled(plan.complexes.flatMap(\.exercises).isEmpty)
@@ -365,45 +402,39 @@ struct AdaptiveWorkoutView: View {
     @ViewBuilder
     private func executionContent(plan: GeneratedWorkoutPlan) -> some View {
         if let session = adaptiveSessions.first(where: { $0.generatedPlanId == plan.id }) {
-            Section("Adaptive Workout") {
-                Text(plan.status == .inProgress ? "In Progress" : "Ready")
-                    .font(.headline)
+            Section("3 · Execute") {
+                HStack {
+                    Button {
+                        presentAddComplex(for: plan)
+                    } label: {
+                        Label("Add Complex", systemImage: "plus.circle")
+                    }
+                    .accessibilityIdentifier("adaptive.addComplex.execute")
+                    Spacer()
                 if AdaptiveWorkoutService.canRegenerate(
                     plan: plan,
                     adaptiveSessions: adaptiveSessions,
                     setEntries: adaptiveSetEntries
                 ) {
-                    Button("Regenerate Before First Locked Set") { regenerate(plan: plan) }
+                        Button("Regenerate") { regenerate(plan: plan) }
+                            .accessibilityLabel("Regenerate Before First Locked Set")
+                            .accessibilityIdentifier("adaptive.regenerateBeforeFirstSet")
+                    }
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
 
             ForEach(plan.complexes.sorted(by: { $0.position < $1.position })) { complex in
                 if isComplexSkipped(complex, plan: plan) {
-                    Section(complex.primaryMuscle.displayName) {
+                    Section {
+                        complexHeader(complex: complex, plan: plan, isExecuting: true)
                         Label("Skipped", systemImage: "forward.end")
                             .foregroundStyle(.secondary)
                     }
                 } else {
                     Section {
-                        Button {
-                            addMovementContext = AdaptiveAddMovementContext(
-                                planId: plan.id,
-                                complexId: complex.id,
-                                primaryMuscle: complex.primaryMuscle
-                            )
-                        } label: {
-                            Label(
-                                "Add Exercise to \(complex.primaryMuscle.displayName)",
-                                systemImage: "plus.circle"
-                            )
-                        }
-                        .accessibilityIdentifier("adaptive.addToFrozenComplex.\(complex.id.uuidString)")
-                        Button("Skip Complex", role: .destructive) {
-                            skipComplex(complex, plan: plan)
-                        }
-                        .disabled(complexHasLockedSet(complex, session: session))
-                    } header: {
-                        Text(complex.primaryMuscle.displayName)
+                        complexHeader(complex: complex, plan: plan, isExecuting: true)
                     }
 
                     ForEach(complex.exercises.sorted(by: { $0.position < $1.position })) { snapshot in
@@ -443,6 +474,7 @@ struct AdaptiveWorkoutView: View {
                                     )
                                 },
                                 onSkip: { skipExercise(snapshot, plan: plan) },
+                                onRemove: { removeMovement(snapshot, from: plan) },
                                 onEntryUpdated: { locked in
                                     if locked {
                                         do {
@@ -517,49 +549,110 @@ struct AdaptiveWorkoutView: View {
             .map(\.muscle)
     }
 
-    private func readinessIsComplete(for program: AdaptiveProgram) -> Bool {
-        enabledMuscles(in: program).allSatisfy { readiness[$0]?.isComplete == true }
-    }
-
-    private func readinessInputs() -> [MuscleGroup: MuscleReadinessInput] {
-        Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.compactMap { muscle in
-            guard let value = readiness[muscle],
-                  let soreness = value.soreness,
-                  let pain = value.pain,
-                  let eagerness = value.eagerness else { return nil }
-            return (
-                muscle,
-                MuscleReadinessInput(
-                    soreness: soreness,
-                    connectiveTissuePain: pain,
-                    eagerness: eagerness
+    private func loadReadiness(from plan: GeneratedWorkoutPlan) {
+        guard let check = readinessChecks.first(where: { $0.id == plan.readinessCheckId }) else { return }
+        readiness = Dictionary(uniqueKeysWithValues: check.responses.map {
+            (
+                $0.muscle,
+                ReadinessSelection(
+                    soreness: $0.soreness,
+                    pain: $0.connectiveTissuePain,
+                    eagerness: $0.eagerness
                 )
             )
         })
     }
 
-    private func sorenessBinding(for muscle: MuscleGroup) -> Binding<SorenessLevel?> {
+    @ViewBuilder
+    private func complexHeader(
+        complex: PlannedComplexSnapshot,
+        plan: GeneratedWorkoutPlan,
+        isExecuting: Bool
+    ) -> some View {
+        HStack(spacing: 6) {
+            Text(complex.primaryMuscle.displayName)
+            Spacer()
+            Button {
+                addMovementContext = AdaptiveAddMovementContext(
+                    planId: plan.id,
+                    complexId: complex.id,
+                    primaryMuscle: complex.primaryMuscle
+                )
+            } label: { Image(systemName: "plus") }
+                .accessibilityLabel("Add exercise to \(complex.primaryMuscle.displayName)")
+                .accessibilityIdentifier("adaptive.addToComplex.\(complex.id.uuidString)")
+            Button { moveComplex(complex, in: plan, direction: .earlier) } label: {
+                Image(systemName: "arrow.up")
+            }
+            .disabled(!canMoveComplex(complex, in: plan, direction: .earlier))
+            .accessibilityLabel("Move \(complex.primaryMuscle.displayName) earlier")
+            Button { moveComplex(complex, in: plan, direction: .later) } label: {
+                Image(systemName: "arrow.down")
+            }
+            .disabled(!canMoveComplex(complex, in: plan, direction: .later))
+            .accessibilityLabel("Move \(complex.primaryMuscle.displayName) later")
+            if isExecuting {
+                Button {
+                    if isComplexSkipped(complex, plan: plan) {
+                        unskipComplex(complex, plan: plan)
+                    } else {
+                        skipComplex(complex, plan: plan)
+                    }
+                } label: {
+                    Image(systemName: isComplexSkipped(complex, plan: plan)
+                        ? "arrow.uturn.backward" : "forward.end")
+                }
+                .accessibilityLabel(
+                    isComplexSkipped(complex, plan: plan)
+                        ? "Restore \(complex.primaryMuscle.displayName) complex"
+                        : "Skip \(complex.primaryMuscle.displayName) complex"
+                )
+            }
+            Button(role: .destructive) { removeComplex(complex, from: plan) } label: {
+                Image(systemName: "trash")
+            }
+            .accessibilityLabel("Remove \(complex.primaryMuscle.displayName) complex")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private func readinessInputs() -> [MuscleGroup: MuscleReadinessInput] {
+        Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map { muscle in
+            let value = readiness[muscle] ?? ReadinessSelection()
+            return (
+                muscle,
+                MuscleReadinessInput(
+                    soreness: value.soreness,
+                    connectiveTissuePain: value.pain,
+                    eagerness: value.eagerness
+                )
+            )
+        })
+    }
+
+    private func sorenessBinding(for muscle: MuscleGroup) -> Binding<SorenessLevel> {
         Binding(
-            get: { readiness[muscle]?.soreness },
+            get: { readiness[muscle]?.soreness ?? .none },
             set: { readiness[muscle, default: ReadinessSelection()].soreness = $0 }
         )
     }
 
-    private func painBinding(for muscle: MuscleGroup) -> Binding<ConnectiveTissuePainLevel?> {
+    private func painBinding(for muscle: MuscleGroup) -> Binding<ConnectiveTissuePainLevel> {
         Binding(
-            get: { readiness[muscle]?.pain },
+            get: { readiness[muscle]?.pain ?? .none },
             set: { readiness[muscle, default: ReadinessSelection()].pain = $0 }
         )
     }
 
-    private func eagernessBinding(for muscle: MuscleGroup) -> Binding<EagernessLevel?> {
+    private func eagernessBinding(for muscle: MuscleGroup) -> Binding<EagernessLevel> {
         Binding(
-            get: { readiness[muscle]?.eagerness },
+            get: { readiness[muscle]?.eagerness ?? .eager },
             set: { readiness[muscle, default: ReadinessSelection()].eagerness = $0 }
         )
     }
 
-    private func generateNewPlan(program: AdaptiveProgram) {
+    private func submitReadiness(program: AdaptiveProgram, editingPlan: GeneratedWorkoutPlan?) {
         do {
             guard program.isReviewedForUse else { throw AdaptiveWorkoutServiceError.profileNotReviewed }
             let revision = readinessChecks
@@ -574,17 +667,55 @@ struct AdaptiveWorkoutView: View {
                 revision: revision
             )
             modelContext.insert(check)
-            try generateAndPersistPlan(program: program, readinessCheck: check)
+            let requestedTarget = editingPlan.flatMap(designState(for:))?.targetComplexCount
+                ?? AdaptiveProgramService.defaultComplexCount(
+                    for: program,
+                    preferences: workoutSizePreferences
+                )
+            let target = max(1, min(requestedTarget, enabledMuscles(in: program).count))
+            let candidate = try makePlan(
+                program: program,
+                readinessCheck: check,
+                targetComplexCount: target
+            )
+            if let editingPlan, let state = designState(for: editingPlan) {
+                _ = try AdaptiveWorkoutService.reconcileReadinessRevision(
+                    existingPlan: editingPlan,
+                    existingState: state,
+                    candidatePlan: candidate,
+                    readinessCheck: check,
+                    overrides: overrides,
+                    modelContext: modelContext
+                )
+            } else {
+                modelContext.insert(candidate)
+                modelContext.insert(
+                    AdaptiveWorkoutService.makeDesignState(
+                        plan: candidate,
+                        targetComplexCount: target,
+                        readinessRevision: check.revision
+                    )
+                )
+                try modelContext.save()
+            }
+            isEditingReadiness = false
+            if !AppRuntime.isUITesting {
+                _ = try AdaptiveReadinessExportService.enqueueMirror(
+                    check: check,
+                    modelContext: modelContext
+                )
+            }
         } catch {
             modelContext.rollback()
             errorMessage = error.localizedDescription
         }
     }
 
-    private func generateAndPersistPlan(
+    private func makePlan(
         program: AdaptiveProgram,
-        readinessCheck: DailyReadinessCheck
-    ) throws {
+        readinessCheck: DailyReadinessCheck,
+        targetComplexCount: Int
+    ) throws -> GeneratedWorkoutPlan {
         let rotationEvidence = TrainingLoadLedgerService.storedEvidence(
             sessions: rotationSessions,
             setEntries: rotationSetEntries,
@@ -621,6 +752,7 @@ struct AdaptiveWorkoutView: View {
             exercises: exercises,
             readiness: AdaptiveWorkoutService.readinessInputs(from: readinessCheck),
             ledger: ledger,
+            targetComplexCount: targetComplexCount,
             doseRecommendations: AdaptiveDoseEvidenceService.recommendations(
                 program: program,
                 plans: generatedPlans,
@@ -634,15 +766,13 @@ struct AdaptiveWorkoutView: View {
             exerciseSelections: exerciseSelections,
             now: .now
         )
-        let proposed = try AdaptiveWorkoutService.makeProposedPlan(
+        return try AdaptiveWorkoutService.makeProposedPlan(
             result: result,
             program: program,
             readinessCheck: readinessCheck,
             localDateKey: todayKey,
             timeZoneIdentifier: TimeZone.current.identifier
         )
-        modelContext.insert(proposed)
-        try modelContext.save()
     }
 
     private func freeze(plan: GeneratedWorkoutPlan) {
@@ -693,14 +823,72 @@ struct AdaptiveWorkoutView: View {
                   let check = readinessChecks.first(where: { $0.id == plan.readinessCheckId }) else {
                 throw AdaptiveWorkoutServiceError.adaptiveSessionNotFound
             }
+            let oldDesignState = designState(for: plan)
+            let requestedTarget = oldDesignState?.targetComplexCount
+                ?? AdaptiveProgramService.defaultComplexCount(
+                    for: program,
+                    preferences: workoutSizePreferences
+                )
+            let target = max(1, min(requestedTarget, enabledMuscles(in: program).count))
+            if let oldDesignState { modelContext.delete(oldDesignState) }
             try AdaptiveWorkoutService.discardForRegeneration(
                 plan: plan,
                 adaptiveSessions: adaptiveSessions,
                 setEntries: adaptiveSetEntries,
+                overrides: overrides,
                 modelContext: modelContext
             )
-            try generateAndPersistPlan(program: program, readinessCheck: check)
+            let proposed = try makePlan(
+                program: program,
+                readinessCheck: check,
+                targetComplexCount: target
+            )
+            modelContext.insert(proposed)
+            modelContext.insert(
+                AdaptiveWorkoutService.makeDesignState(
+                    plan: proposed,
+                    targetComplexCount: target,
+                    readinessRevision: check.revision
+                )
+            )
+            try modelContext.save()
         } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func designState(for plan: GeneratedWorkoutPlan) -> AdaptivePlanDesignState? {
+        planDesignStates.first { $0.generatedPlanId == plan.id }
+    }
+
+    private func updateTodayTarget(plan: GeneratedWorkoutPlan, target: Int) {
+        guard let program = activeProgram,
+              let check = readinessChecks.first(where: { $0.id == plan.readinessCheckId }) else { return }
+        do {
+            let boundedTarget = max(1, min(target, enabledMuscles(in: program).count))
+            let proposed = try makePlan(
+                program: program,
+                readinessCheck: check,
+                targetComplexCount: boundedTarget
+            )
+            AdaptiveWorkoutService.deleteAuditRecords(
+                generatedPlanId: plan.id,
+                overrides: overrides,
+                modelContext: modelContext
+            )
+            if let state = designState(for: plan) { modelContext.delete(state) }
+            modelContext.delete(plan)
+            modelContext.insert(proposed)
+            modelContext.insert(
+                AdaptiveWorkoutService.makeDesignState(
+                    plan: proposed,
+                    targetComplexCount: boundedTarget,
+                    readinessRevision: check.revision
+                )
+            )
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
             errorMessage = error.localizedDescription
         }
     }
@@ -765,11 +953,12 @@ struct AdaptiveWorkoutView: View {
         plan: GeneratedWorkoutPlan,
         session: AdaptiveWorkoutSession
     ) -> Bool {
-        let skippedComplexes = Set(overrides.filter {
-            $0.generatedPlanId == plan.id && $0.kind == .skipComplex
-        }.compactMap(\.plannedComplexId))
         return plan.complexes.contains { complex in
-            !skippedComplexes.contains(complex.id)
+            !AdaptiveWorkoutService.isComplexSkipped(
+                planId: plan.id,
+                complexId: complex.id,
+                overrides: overrides
+            )
                 && complexIsReadyForFeedback(complex, session: session)
                 && feedbackFor(complex, plan: plan) == nil
         }
@@ -816,23 +1005,25 @@ struct AdaptiveWorkoutView: View {
 
     private func addSet(snapshot: PlannedExerciseSnapshot, session: AdaptiveWorkoutSession) {
         let existing = entries(for: snapshot.occurrenceId, sessionId: session.id)
-        let exerciseId = existing.first?.exerciseId ?? snapshot.exerciseId
-        modelContext.insert(
-            AdaptiveSetEntry(
-                adaptiveSessionId: session.id,
-                occurrenceId: snapshot.occurrenceId,
-                exerciseId: exerciseId,
-                setIndex: (existing.map(\.setIndex).max() ?? 0) + 1
+        do {
+            _ = try AdaptiveWorkoutService.addSet(
+                snapshot: snapshot,
+                session: session,
+                existingEntries: existing,
+                modelContext: modelContext
             )
-        )
-        do { try modelContext.save() } catch { errorMessage = error.localizedDescription }
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func removeSet(snapshot: PlannedExerciseSnapshot, session: AdaptiveWorkoutSession) {
         let existing = entries(for: snapshot.occurrenceId, sessionId: session.id)
-        guard existing.count > 1, let last = existing.last, !last.isLocked else { return }
-        modelContext.delete(last)
-        do { try modelContext.save() } catch { errorMessage = error.localizedDescription }
+        do {
+            _ = try AdaptiveWorkoutService.removeLastSet(
+                snapshot: snapshot,
+                existingEntries: existing,
+                modelContext: modelContext
+            )
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func skipComplex(_ complex: PlannedComplexSnapshot, plan: GeneratedWorkoutPlan) {
@@ -842,6 +1033,16 @@ struct AdaptiveWorkoutView: View {
                 complexId: complex.id,
                 occurrenceId: nil,
                 kind: .skipComplex,
+                modelContext: modelContext
+            )
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func unskipComplex(_ complex: PlannedComplexSnapshot, plan: GeneratedWorkoutPlan) {
+        do {
+            try AdaptiveWorkoutService.recordUnskipComplex(
+                plan: plan,
+                complexId: complex.id,
                 modelContext: modelContext
             )
         } catch { errorMessage = error.localizedDescription }
@@ -870,9 +1071,11 @@ struct AdaptiveWorkoutView: View {
     }
 
     private func isComplexSkipped(_ complex: PlannedComplexSnapshot, plan: GeneratedWorkoutPlan) -> Bool {
-        overrides.contains {
-            $0.generatedPlanId == plan.id && $0.plannedComplexId == complex.id && $0.kind == .skipComplex
-        }
+        AdaptiveWorkoutService.isComplexSkipped(
+            planId: plan.id,
+            complexId: complex.id,
+            overrides: overrides
+        )
     }
 
     private func isExerciseSkipped(_ snapshot: PlannedExerciseSnapshot, plan: GeneratedWorkoutPlan) -> Bool {
@@ -972,11 +1175,31 @@ struct AdaptiveWorkoutView: View {
                     modelContext: modelContext
                 )
             } else {
-                try AdaptiveWorkoutService.addProposedMovement(
+                let previous = AdaptivePrefillService.latestRows(
+                    exerciseId: exercise.id,
+                    excludingPlanId: plan.id,
+                    adaptiveSessions: adaptiveSessions,
+                    adaptiveSetEntries: adaptiveSetEntries,
+                    rotationSessions: rotationSessions,
+                    rotationSetEntries: rotationSetEntries,
+                    overrides: overrides
+                )
+                var prefillByExerciseId: [UUID: [Int: AdaptiveSetPrefill]] = [:]
+                if !previous.isEmpty {
+                    for setIndex in 1...setCount {
+                        let row = previous.first(where: { $0.setIndex == setIndex }) ?? previous.last!
+                        prefillByExerciseId[exercise.id, default: [:]][setIndex] =
+                            AdaptiveSetPrefill(weight: row.weight, reps: row.reps)
+                    }
+                }
+                _ = try AdaptiveWorkoutService.appendComplex(
                     plan: plan,
-                    exercise: exercise,
-                    difficulty: proposedDifficulty(for: exercise),
-                    prescribedSetCount: setCount,
+                    definition: nil,
+                    manualExercise: exercise,
+                    manualPrescribedSetCount: setCount,
+                    exercises: exercises,
+                    adaptiveSessions: adaptiveSessions,
+                    prefillByExerciseId: prefillByExerciseId,
                     modelContext: modelContext
                 )
             }
@@ -1006,9 +1229,92 @@ struct AdaptiveWorkoutView: View {
 
     private func removeMovement(_ exercise: PlannedExerciseSnapshot, from plan: GeneratedWorkoutPlan) {
         do {
-            try AdaptiveWorkoutService.removeProposedMovement(
+            try AdaptiveWorkoutService.removeMovement(
                 plan: plan,
                 occurrenceId: exercise.occurrenceId,
+                adaptiveSessions: adaptiveSessions,
+                setEntries: adaptiveSetEntries,
+                modelContext: modelContext
+            )
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func presentAddComplex(for plan: GeneratedWorkoutPlan) {
+        let presentMuscles = Set(plan.complexes.map(\.primaryMuscle))
+        addComplexContext = AdaptiveAddComplexContext(
+            planId: plan.id,
+            availableMuscles: MuscleGroup.allCases.filter { !presentMuscles.contains($0) }
+        )
+    }
+
+    private func appendConfiguredComplex(_ definition: AdaptiveExerciseComplex, planId: UUID) {
+        guard let plan = generatedPlans.first(where: { $0.id == planId }) else { return }
+        do {
+            var prefillByExerciseId: [UUID: [Int: AdaptiveSetPrefill]] = [:]
+            for component in definition.components {
+                let rows = AdaptivePrefillService.latestRows(
+                    exerciseId: component.exerciseId,
+                    excludingPlanId: plan.id,
+                    adaptiveSessions: adaptiveSessions,
+                    adaptiveSetEntries: adaptiveSetEntries,
+                    rotationSessions: rotationSessions,
+                    rotationSetEntries: rotationSetEntries,
+                    overrides: overrides
+                )
+                guard !rows.isEmpty else { continue }
+                for setIndex in 1...max(1, component.prescribedSetCount) {
+                    let row = rows.first(where: { $0.setIndex == setIndex }) ?? rows.last!
+                    prefillByExerciseId[component.exerciseId, default: [:]][setIndex] =
+                        AdaptiveSetPrefill(weight: row.weight, reps: row.reps)
+                }
+            }
+            _ = try AdaptiveWorkoutService.appendComplex(
+                plan: plan,
+                definition: definition,
+                exercises: exercises,
+                adaptiveSessions: adaptiveSessions,
+                prefillByExerciseId: prefillByExerciseId,
+                modelContext: modelContext
+            )
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func moveComplex(
+        _ complex: PlannedComplexSnapshot,
+        in plan: GeneratedWorkoutPlan,
+        direction: AdaptiveMovementDirection
+    ) {
+        do {
+            _ = try AdaptiveWorkoutService.moveComplex(
+                plan: plan,
+                complexId: complex.id,
+                direction: direction,
+                modelContext: modelContext
+            )
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func canMoveComplex(
+        _ complex: PlannedComplexSnapshot,
+        in plan: GeneratedWorkoutPlan,
+        direction: AdaptiveMovementDirection
+    ) -> Bool {
+        let ordered = plan.complexes.sorted { $0.position < $1.position }
+        guard let index = ordered.firstIndex(where: { $0.id == complex.id }) else { return false }
+        switch direction {
+        case .earlier: return index > 0
+        case .later: return index < ordered.count - 1
+        }
+    }
+
+    private func removeComplex(_ complex: PlannedComplexSnapshot, from plan: GeneratedWorkoutPlan) {
+        do {
+            try AdaptiveWorkoutService.removeComplex(
+                plan: plan,
+                complexId: complex.id,
+                adaptiveSessions: adaptiveSessions,
+                setEntries: adaptiveSetEntries,
+                feedback: complexFeedback,
                 modelContext: modelContext
             )
         } catch { errorMessage = error.localizedDescription }
@@ -1085,7 +1391,8 @@ struct AdaptiveWorkoutView: View {
                 }
                 guard fixtureExercises.count == names.count else { return }
             } else {
-                fixtureExercises = [chest]
+                guard let back = catalog.first(where: { $0.primaryMuscle == .back }) else { return }
+                fixtureExercises = [chest, back]
             }
             let enabledMuscles = Set(fixtureExercises.map(\.primaryMuscle))
             if AppRuntime.isAdaptiveHistoryUITesting {
@@ -1101,6 +1408,7 @@ struct AdaptiveWorkoutView: View {
             var draft = AdaptiveProgramDraft.blank
             draft.name = "UI Test Adaptive"
             draft.isReviewedForUse = true
+            draft.defaultComplexCount = fixtureExercises.count
             draft.muscleRules = draft.muscleRules.map { rule in
                 var copy = rule
                 copy.isEnabled = enabledMuscles.contains(rule.muscle)
@@ -1150,7 +1458,7 @@ struct AdaptiveWorkoutView: View {
                     ReadinessSelection(
                         soreness: SorenessLevel.none,
                         pain: ConnectiveTissuePainLevel.none,
-                        eagerness: .neutral
+                        eagerness: .eager
                     )
                 )
             })
@@ -1232,13 +1540,9 @@ struct AdaptiveWorkoutView: View {
 }
 
 private struct ReadinessSelection {
-    var soreness: SorenessLevel?
-    var pain: ConnectiveTissuePainLevel?
-    var eagerness: EagernessLevel?
-
-    var isComplete: Bool {
-        soreness != nil && pain != nil && eagerness != nil
-    }
+    var soreness: SorenessLevel = .none
+    var pain: ConnectiveTissuePainLevel = .none
+    var eagerness: EagernessLevel = .eager
 }
 
 private struct AdaptiveSwapContext: Identifiable {
@@ -1256,6 +1560,49 @@ private struct AdaptiveAddMovementContext: Identifiable {
     let primaryMuscle: MuscleGroup
 }
 
+private struct AdaptiveAddComplexContext: Identifiable {
+    let id = UUID()
+    let planId: UUID
+    let availableMuscles: [MuscleGroup]
+}
+
+private struct AdaptiveAddComplexSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let muscles: [MuscleGroup]
+    let program: AdaptiveProgram?
+    let onSelectConfigured: (AdaptiveExerciseComplex) -> Void
+    let onBuildManually: (MuscleGroup) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List(muscles, id: \.self) { muscle in
+                Section(muscle.displayName) {
+                    let configured = program?.complexes.filter {
+                        $0.isEnabled && $0.primaryMuscle == muscle && !$0.components.isEmpty
+                    }.sorted { $0.position < $1.position } ?? []
+                    ForEach(configured) { definition in
+                        Button(definition.name) { onSelectConfigured(definition) }
+                    }
+                    Button {
+                        onBuildManually(muscle)
+                    } label: {
+                        Label("Build Manually", systemImage: "wrench.and.screwdriver")
+                    }
+                    .accessibilityIdentifier("adaptive.buildComplex.\(muscle.rawValue)")
+                }
+            }
+            .navigationTitle("Add Complex")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 private struct AdaptiveExerciseSection: View {
     @Environment(\.modelContext) private var modelContext
 
@@ -1270,6 +1617,7 @@ private struct AdaptiveExerciseSection: View {
     let onRemoveSet: () -> Void
     let onSwap: () -> Void
     let onSkip: () -> Void
+    let onRemove: () -> Void
     let onEntryUpdated: (Bool) -> Void
 
     private enum RowField: Hashable {
@@ -1279,22 +1627,6 @@ private struct AdaptiveExerciseSection: View {
 
     var body: some View {
         Section {
-            HStack {
-                Label("Workout order", systemImage: "arrow.up.arrow.down")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button(action: onMoveEarlier) { Image(systemName: "arrow.up") }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(!canMoveEarlier)
-                    .accessibilityLabel("Move \(title) earlier")
-                Button(action: onMoveLater) { Image(systemName: "arrow.down") }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(!canMoveLater)
-                    .accessibilityLabel("Move \(title) later")
-            }
             ForEach(entries) { entry in
                 HStack {
                     Text("S\(entry.setIndex)")
@@ -1364,16 +1696,30 @@ private struct AdaptiveExerciseSection: View {
             HStack(spacing: 8) {
                 Text(title)
                 Spacer()
-                Button(action: onSwap) { Image(systemName: "arrow.left.arrow.right") }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .accessibilityLabel("Substitute \(title)")
-                    .disabled(entries.contains(where: \.isLocked))
-                Button(action: onSkip) { Image(systemName: "forward.end") }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .accessibilityLabel("Skip \(title)")
-                    .disabled(entries.contains(where: \.isLocked))
+                Menu {
+                    Button(action: onMoveEarlier) {
+                        Label("Move Earlier", systemImage: "arrow.up")
+                    }
+                    .disabled(!canMoveEarlier)
+                    Button(action: onMoveLater) {
+                        Label("Move Later", systemImage: "arrow.down")
+                    }
+                    .disabled(!canMoveLater)
+                    Button(action: onSwap) {
+                        Label("Substitute", systemImage: "arrow.left.arrow.right")
+                    }
+                    Button(action: onSkip) {
+                        Label("Skip", systemImage: "forward.end")
+                    }
+                    Button(role: .destructive, action: onRemove) {
+                        Label("Remove", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Edit \(title)")
                 Button(action: onRemoveSet) { Image(systemName: "minus") }
                     .buttonStyle(.bordered)
                     .controlSize(.small)

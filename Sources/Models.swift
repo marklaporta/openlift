@@ -73,6 +73,7 @@ enum ExportStatus: String, Codable {
 enum ExportSessionKind: String, Codable {
     case fixed
     case adaptive
+    case adaptiveReadiness
 }
 
 /// Persistent evidence for the distinction between a recovery mirror, a file
@@ -210,14 +211,59 @@ enum ComplexFeedbackRating: String, Codable, CaseIterable, Hashable {
 }
 
 enum AdaptiveOverrideKind: String, Codable, CaseIterable, Hashable {
+    case addComplex
+    case removeComplex
+    case reorderComplex
     case addExercise
     case removeExercise
     case reorderExercise
     case skipComplex
+    case unskipComplex
     case skipExercise
     case unskipExercise
     case substituteExercise
     case painBlock
+}
+
+/// Additive profile metadata introduced after Adaptive programs were already
+/// persisted. Keeping it parallel avoids changing the checksum of V3 programs.
+@Model
+final class AdaptiveWorkoutSizePreference {
+    @Attribute(.unique) var adaptiveProgramId: UUID
+    var defaultComplexCount: Int
+    var updatedAt: Date
+
+    init(adaptiveProgramId: UUID, defaultComplexCount: Int, updatedAt: Date = .now) {
+        self.adaptiveProgramId = adaptiveProgramId
+        self.defaultComplexCount = defaultComplexCount
+        self.updatedAt = updatedAt
+    }
+}
+
+/// Mutable design metadata is deliberately separate from the immutable plan
+/// snapshot. It persists today's exposure target and the canonical proposal
+/// signature used when readiness is revised.
+@Model
+final class AdaptivePlanDesignState {
+    @Attribute(.unique) var generatedPlanId: UUID
+    var targetComplexCount: Int
+    var readinessRevision: Int
+    var canonicalSignature: String
+    var updatedAt: Date
+
+    init(
+        generatedPlanId: UUID,
+        targetComplexCount: Int,
+        readinessRevision: Int,
+        canonicalSignature: String,
+        updatedAt: Date = .now
+    ) {
+        self.generatedPlanId = generatedPlanId
+        self.targetComplexCount = targetComplexCount
+        self.readinessRevision = readinessRevision
+        self.canonicalSignature = canonicalSignature
+        self.updatedAt = updatedAt
+    }
 }
 
 enum AdaptiveExerciseSelectionMode: String, Codable, CaseIterable, Hashable {

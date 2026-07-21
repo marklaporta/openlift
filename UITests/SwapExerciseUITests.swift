@@ -131,7 +131,7 @@ final class SwapExerciseUITests: XCTestCase {
         let adaptiveMode = app.buttons["Adaptive Floating"]
         XCTAssertTrue(adaptiveMode.waitForExistence(timeout: 5))
         adaptiveMode.tap()
-        XCTAssertTrue(app.staticTexts["Muscle Scope"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Adaptive Profile"].waitForExistence(timeout: 5))
 
         let selection = app.buttons["adaptive.exerciseSelection"]
         scrollToElement(selection, in: app)
@@ -174,26 +174,42 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Connective-tissue pain"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["Eagerness to train"].firstMatch.exists)
 
-        let fillReadiness = app.buttons["adaptive.fillTestReadiness"]
-        scrollToElement(fillReadiness, in: app)
-        fillReadiness.tap()
-
         let generatePlan = app.buttons["adaptive.generatePlan"]
         scrollToElement(generatePlan, in: app)
         XCTAssertTrue(generatePlan.isEnabled)
         generatePlan.tap()
 
-        XCTAssertTrue(app.staticTexts["Proposed Plan"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["2 · Design"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Chest"].waitForExistence(timeout: 5))
-        let addMovement = app.buttons["adaptive.addMovement"]
-        scrollToElement(addMovement, in: app)
-        addMovement.tap()
+        XCTAssertTrue(app.staticTexts["Today: 2 muscle groups"].waitForExistence(timeout: 5))
+
+        let decreaseTarget = app.buttons["adaptive.decreaseTarget"]
+        XCTAssertTrue(decreaseTarget.waitForExistence(timeout: 5))
+        decreaseTarget.tap()
+        XCTAssertTrue(app.staticTexts["Today: 1 muscle group"].waitForExistence(timeout: 5))
+        let increaseTarget = app.buttons["adaptive.increaseTarget"]
+        XCTAssertTrue(increaseTarget.waitForExistence(timeout: 5))
+        increaseTarget.tap()
+        XCTAssertTrue(app.staticTexts["Today: 2 muscle groups"].waitForExistence(timeout: 5))
+
+        let editReadiness = app.buttons["adaptive.editReadiness"]
+        XCTAssertTrue(editReadiness.waitForExistence(timeout: 5))
+        editReadiness.tap()
+        XCTAssertTrue(app.staticTexts["Edit Readiness"].waitForExistence(timeout: 5))
+        let updateReadiness = app.buttons["adaptive.generatePlan"]
+        scrollToElement(updateReadiness, in: app)
+        updateReadiness.tap()
+        XCTAssertTrue(app.staticTexts["2 · Design"].waitForExistence(timeout: 10))
+
+        let compactAddExercise = app.buttons["Add exercise to Chest"]
+        scrollToElement(compactAddExercise, in: app)
+        XCTAssertFalse(app.buttons["Add Exercise to Chest"].exists)
+        let addComplex = app.buttons["adaptive.addComplex"]
+        scrollToElement(addComplex, in: app)
+        addComplex.tap()
+        XCTAssertTrue(app.navigationBars["Add Complex"].waitForExistence(timeout: 5))
+        app.buttons["adaptive.buildComplex.biceps"].tap()
         XCTAssertTrue(app.navigationBars["Add Movement"].waitForExistence(timeout: 5))
-        let addMusclePicker = app.buttons["swap.musclePicker"].firstMatch
-        addMusclePicker.tap()
-        let addBiceps = app.buttons["Biceps"].firstMatch
-        XCTAssertTrue(addBiceps.waitForExistence(timeout: 5))
-        addBiceps.tap()
         let addedMovement = app.buttons["Incline Curl"].firstMatch
         XCTAssertTrue(addedMovement.waitForExistence(timeout: 5))
         addedMovement.tap()
@@ -229,8 +245,14 @@ final class SwapExerciseUITests: XCTestCase {
         scrollToElement(useWorkout, in: app)
         useWorkout.tap()
 
-        let frozenStatus = app.staticTexts["Ready"]
-        scrollToElement(frozenStatus, in: app)
+        let executePhase = app.staticTexts["3 · Execute"]
+        scrollToElement(executePhase, in: app)
+        let executeAddComplex = app.buttons["adaptive.addComplex.execute"]
+        XCTAssertTrue(executeAddComplex.waitForExistence(timeout: 5))
+        executeAddComplex.tap()
+        XCTAssertTrue(app.navigationBars["Add Complex"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["adaptive.regenerateBeforeFirstSet"].waitForExistence(timeout: 5))
         let weight = app.textFields["Weight"].firstMatch
         scrollToElement(weight, in: app)
         weight.tap()
@@ -245,11 +267,20 @@ final class SwapExerciseUITests: XCTestCase {
         let lock = app.buttons["adaptive.lockSet.1"].firstMatch
         scrollToElement(lock, in: app)
         lock.tap()
-        let inProgressStatus = app.staticTexts["In Progress"]
-        scrollToElement(inProgressStatus, in: app)
-        XCTAssertFalse(app.buttons["Regenerate Before First Locked Set"].exists)
+        XCTAssertFalse(app.buttons["adaptive.regenerateBeforeFirstSet"].exists)
 
-        let addToFrozen = app.buttons["Add Exercise to Chest"].firstMatch
+        lock.tap()
+        let correctedReps = app.textFields["Reps"].firstMatch
+        correctedReps.tap()
+        correctedReps.typeText(XCUIKeyboardKey.delete.rawValue)
+        correctedReps.typeText("10")
+        if app.buttons["Done"].firstMatch.waitForExistence(timeout: 2) {
+            app.buttons["Done"].firstMatch.tap()
+        }
+        lock.tap()
+        XCTAssertEqual(correctedReps.value as? String, "10")
+
+        let addToFrozen = app.buttons["Add exercise to Chest"].firstMatch
         scrollToElement(addToFrozen, in: app)
         addToFrozen.tap()
         XCTAssertTrue(app.navigationBars["Add Movement"].waitForExistence(timeout: 5))
@@ -257,19 +288,20 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(addedAfterFreeze.waitForExistence(timeout: 5))
         addedAfterFreeze.tap()
         XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
-        let moveFrozenEarlier = app.buttons["Move Flat Dumbbell Press earlier"].firstMatch
-        scrollToElement(moveFrozenEarlier, in: app)
-        moveFrozenEarlier.tap()
-        let skipAddedAfterFreeze = app.buttons["Skip Flat Dumbbell Press"].firstMatch
-        scrollToElement(skipAddedAfterFreeze, in: app)
-        skipAddedAfterFreeze.tap()
+        let editFrozen = app.buttons["Edit Flat Dumbbell Press"].firstMatch
+        scrollToElement(editFrozen, in: app)
+        editFrozen.tap()
+        app.buttons["Move Earlier"].tap()
+        app.buttons["Edit Flat Dumbbell Press"].firstMatch.tap()
+        app.buttons["Skip"].tap()
         let restoreAddedAfterFreeze = app.buttons["Restore Flat Dumbbell Press"].firstMatch
         scrollToElement(restoreAddedAfterFreeze, in: app)
         restoreAddedAfterFreeze.tap()
         XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
-        let skipRestoredExercise = app.buttons["Skip Flat Dumbbell Press"].firstMatch
-        scrollToElement(skipRestoredExercise, in: app)
-        skipRestoredExercise.tap()
+        let editRestored = app.buttons["Edit Flat Dumbbell Press"].firstMatch
+        scrollToElement(editRestored, in: app)
+        editRestored.tap()
+        app.buttons["Skip"].tap()
 
         let feedbackPicker = app.buttons["adaptive.feedbackPicker"].firstMatch
         scrollToElement(feedbackPicker, in: app)
@@ -305,20 +337,16 @@ final class SwapExerciseUITests: XCTestCase {
         adaptiveMode.tap()
 
         app.tabBars.buttons["Workout"].tap()
-        let fillReadiness = app.buttons["adaptive.fillTestReadiness"]
-        scrollToElement(fillReadiness, in: app)
-        fillReadiness.tap()
-
         let generatePlan = app.buttons["adaptive.generatePlan"]
         scrollToElement(generatePlan, in: app)
         generatePlan.tap()
 
-        let proposedPlan = app.staticTexts["Proposed Plan"]
+        let proposedPlan = app.staticTexts["2 · Design"]
         for _ in 0..<4 where !proposedPlan.isHittable {
             app.swipeDown()
         }
         XCTAssertTrue(proposedPlan.waitForExistence(timeout: 5))
-        let proposalSummary = app.staticTexts["4 exercises"]
+        let proposalSummary = app.staticTexts["4 proposed exposures"]
         XCTAssertTrue(proposalSummary.waitForExistence(timeout: 5))
         for exercise in ["Flat Dumbbell Press", "Cable Row", "Bayesian Curl", "Cable Lateral Raise"] {
             XCTAssertTrue((proposalSummary.value as? String)?.contains(exercise) == true)

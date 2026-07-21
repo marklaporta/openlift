@@ -272,13 +272,14 @@ struct AdaptivePlanDecisionTrace: Equatable {
 }
 
 enum AdaptivePlanService {
-    static let plannerVersion = 4
+    static let plannerVersion = 5
 
     static func generate(
         program: AdaptiveProgram,
         exercises: [Exercise],
         readiness: [MuscleGroup: MuscleReadinessInput],
         ledger: TrainingLoadLedger,
+        targetComplexCount: Int? = nil,
         doseRecommendations: [UUID: [Int: DoseRecommendation]] = [:],
         exerciseSelections: [AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation] = [:],
         now: Date,
@@ -402,24 +403,19 @@ enum AdaptivePlanService {
                 )
             }
 
+        let exposureTarget = max(1, targetComplexCount ?? program.globalMaxMovements)
         var selected: [AdaptivePlannedComplex] = []
         var selectedDefinitions = Set<UUID>()
+        var selectedMuscles = Set<MuscleGroup>()
         var movements = 0
         var difficulty = 0
         var exerciseCounts: [MuscleGroup: Int] = [:]
         var setDose: [MuscleGroup: Int] = [:]
 
         func fitFailure(for candidate: AdaptivePlannedComplex) -> String? {
-            if movements + candidate.components.count > program.globalMaxMovements { return "daily_movement_cap" }
+            if selected.count >= exposureTarget { return "daily_exposure_target" }
+            if selectedMuscles.contains(candidate.primaryMuscle) { return "muscle_already_selected" }
             let combinedComponents = selected.flatMap(\.components) + candidate.components
-            let hasHardQuads = combinedComponents.contains {
-                $0.difficulty == .hard && ($0.primaryMuscle == .quads || $0.secondaryMuscle == .quads)
-            }
-            let hasHardHamstrings = combinedComponents.contains {
-                $0.difficulty == .hard && ($0.primaryMuscle == .hamstrings || $0.secondaryMuscle == .hamstrings)
-            }
-            if hasHardQuads && hasHardHamstrings { return "hard_quad_hamstring_pair" }
-
             var compoundCounts: [MuscleGroup: Int] = [:]
             for component in combinedComponents
                 where exercisesById[component.exerciseId]?.type == .compound {
@@ -453,6 +449,7 @@ enum AdaptivePlanService {
             selectedCandidate.reasonCodes.append(reason)
             selected.append(selectedCandidate)
             selectedDefinitions.insert(candidate.definitionId)
+            selectedMuscles.insert(candidate.primaryMuscle)
             movements += candidate.components.count
             difficulty += candidate.components.reduce(0) { $0 + $1.difficulty.cost }
             for component in candidate.components {
@@ -463,6 +460,7 @@ enum AdaptivePlanService {
             }
         }
 
+        var dueReasonByMuscle: [MuscleGroup: String] = [:]
         for rule in enabledRules {
             let load = ledger[rule.muscle]
             let exposureDue = rule.rollingSetFloor > 0 && load.lockedSetCount == 0
@@ -473,67 +471,78 @@ enum AdaptivePlanService {
             } else {
                 gapDue = true
             }
-            guard exposureDue || gapDue else { continue }
+            if exposureDue {
+                dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_exposure_due"
+            } else if gapDue {
+                dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_gap_due"
+            }
+        }
 
-            let target = 1
-            while setDose[rule.muscle, default: 0] < target {
-                let eligibleQualifying = candidates
-                    .filter {
-                        $0.primaryMuscle == rule.muscle
-                    }
-                    .filter { candidate in
-                        program.complexes.first(where: { $0.definitionId == candidate.definitionId })?
-                            .qualifiesForPrimaryFloor == true
-                    }
-                let options = eligibleQualifying
-                    .filter { !selectedDefinitions.contains($0.definitionId) }
-                    .sorted(by: floorFitOrder)
-                guard let fitting = options.first(where: { fitFailure(for: $0) == nil }) else {
-                    let failures = options.compactMap(fitFailure(for:))
-                    // The training-window floor is binary: one qualifying
-                    // completed exposure satisfies it regardless of set count.
-                    // A due muscle with no usable dose at all because every
-                    // candidate exceeds its per-exercise set cap remains a
-                    // genuine configuration conflict.
-                    if setDose[rule.muscle, default: 0] == 0,
-                       !options.isEmpty,
-                       failures.allSatisfy({ $0 == "sets_per_exercise_cap" }) {
-                        return .infeasible(
-                            AdaptivePlanConflict(
-                                muscle: rule.muscle,
-                                requiredAdditionalSets: target - setDose[rule.muscle, default: 0],
-                                code: "sets_per_exercise_cap"
-                            )
-                        )
-                    }
-                    break
-                }
-                select(
-                    fitting,
-                    reason: exposureDue
-                        ? "\(rule.muscle.rawValue)_exposure_due"
-                        : "\(rule.muscle.rawValue)_gap_due"
+        // Preserve the pre-v5 configuration safeguard: a due exposure whose
+        // only qualifying definitions violate the per-exercise set cap is a
+        // real profile conflict, not an undersized but otherwise valid plan.
+        for muscle in dueReasonByMuscle.keys {
+            let qualifying = candidates.filter { candidate in
+                candidate.primaryMuscle == muscle
+                    && program.complexes.first(where: {
+                        $0.definitionId == candidate.definitionId
+                    })?.qualifiesForPrimaryFloor == true
+            }
+            guard !qualifying.isEmpty else { continue }
+            let failures = qualifying.compactMap(fitFailure(for:))
+            if failures.count == qualifying.count,
+               failures.allSatisfy({ $0 == "sets_per_exercise_cap" }) {
+                return .infeasible(
+                    AdaptivePlanConflict(
+                        muscle: muscle,
+                        requiredAdditionalSets: 1,
+                        code: "sets_per_exercise_cap"
+                    )
                 )
             }
         }
 
-        let remaining = candidates
-            .filter { !selectedDefinitions.contains($0.definitionId) }
-            .sorted { left, right in
+        // Pick one complex per muscle-group exposure. Quad/hamstring pairing is
+        // a strong automatic-planning preference: it sorts behind every
+        // otherwise usable alternative, but never becomes an infeasibility.
+        while selected.count < exposureTarget {
+            let remaining = candidates.filter {
+                !selectedDefinitions.contains($0.definitionId)
+                    && !selectedMuscles.contains($0.primaryMuscle)
+                    && fitFailure(for: $0) == nil
+            }
+            guard let candidate = remaining.sorted(by: { left, right in
+                let leftPair = createsHardLowerBodyPair(selected: selected, adding: left)
+                let rightPair = createsHardLowerBodyPair(selected: selected, adding: right)
+                if leftPair != rightPair { return !leftPair }
+                let leftDue = dueReasonByMuscle[left.primaryMuscle] != nil
+                let rightDue = dueReasonByMuscle[right.primaryMuscle] != nil
+                if leftDue != rightDue { return leftDue }
+                let leftEagerness = eagernessRank(readiness[left.primaryMuscle]?.eagerness)
+                let rightEagerness = eagernessRank(readiness[right.primaryMuscle]?.eagerness)
+                if leftEagerness != rightEagerness { return leftEagerness < rightEagerness }
                 let leftRank = rules[left.primaryMuscle]?.priorityRank ?? Int.max
                 let rightRank = rules[right.primaryMuscle]?.priorityRank ?? Int.max
                 if leftRank != rightRank { return leftRank < rightRank }
                 let leftLast = ledger[left.primaryMuscle].lastProductiveExposureAt ?? .distantPast
                 let rightLast = ledger[right.primaryMuscle].lastProductiveExposureAt ?? .distantPast
                 if leftLast != rightLast { return leftLast < rightLast }
-                return stableComplexOrder(left, right)
-            }
-        for candidate in remaining {
-            if let failure = fitFailure(for: candidate) {
-                rejections.append(.init(complexDefinitionId: candidate.definitionId, code: failure))
-            } else {
-                select(candidate, reason: "\(candidate.primaryMuscle.rawValue)_priority")
-            }
+                return floorFitOrder(left, right)
+            }).first else { break }
+            select(
+                candidate,
+                reason: dueReasonByMuscle[candidate.primaryMuscle]
+                    ?? "\(candidate.primaryMuscle.rawValue)_priority"
+            )
+        }
+
+        for candidate in candidates where !selectedDefinitions.contains(candidate.definitionId) {
+            rejections.append(
+                .init(
+                    complexDefinitionId: candidate.definitionId,
+                    code: fitFailure(for: candidate) ?? "lower_priority_complex"
+                )
+            )
         }
 
         return .proposal(
@@ -583,6 +592,29 @@ enum AdaptivePlanService {
         var result: Set<MuscleGroup> = [component.primaryMuscle]
         if let secondary = component.secondaryMuscle { result.insert(secondary) }
         return result
+    }
+
+    private static func eagernessRank(_ eagerness: EagernessLevel?) -> Int {
+        switch eagerness {
+        case .eager: return 0
+        case .neutral: return 1
+        case .reluctant: return 2
+        case nil: return 3
+        }
+    }
+
+    private static func createsHardLowerBodyPair(
+        selected: [AdaptivePlannedComplex],
+        adding candidate: AdaptivePlannedComplex
+    ) -> Bool {
+        let components = selected.flatMap(\.components) + candidate.components
+        let hasQuads = components.contains {
+            $0.difficulty == .hard && ($0.primaryMuscle == .quads || $0.secondaryMuscle == .quads)
+        }
+        let hasHamstrings = components.contains {
+            $0.difficulty == .hard && ($0.primaryMuscle == .hamstrings || $0.secondaryMuscle == .hamstrings)
+        }
+        return hasQuads && hasHamstrings
     }
 
     private static func prefersCompoundContinuity(_ muscle: MuscleGroup) -> Bool {

@@ -13,6 +13,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(enabled.map(\.priorityRank), Array(1...10))
         XCTAssertEqual(enabled[4].muscle, .sideDelts)
         XCTAssertEqual(draft.globalMaxMovements, 4)
+        XCTAssertEqual(draft.defaultComplexCount, 4)
         XCTAssertEqual(draft.maxDifficultyCost, 60)
         XCTAssertTrue(enabled.allSatisfy { $0.rollingSetFloor == 1 })
 
@@ -57,6 +58,11 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(saved.muscleRules.count, MuscleGroup.allCases.count)
         XCTAssertEqual(saved.complexes.count, 10)
         XCTAssertEqual(AdaptiveProgramService.activeProgram(from: [saved])?.id, saved.id)
+        let sizePreference = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AdaptiveWorkoutSizePreference>()).first
+        )
+        XCTAssertEqual(sizePreference.adaptiveProgramId, saved.id)
+        XCTAssertEqual(sizePreference.defaultComplexCount, draft.defaultComplexCount)
     }
 
     func testValidationRejectsNonBinaryExposureRequirementAndAtomicComplexCaps() {
@@ -371,7 +377,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
     }
 
     private func makeContext() -> (ModelContext, ModelContainer) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (ModelContext(container), container)
     }

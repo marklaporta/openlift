@@ -4,6 +4,7 @@ import SwiftData
 enum AdaptiveProgramValidationError: LocalizedError, Equatable {
     case emptyProgramName
     case invalidGlobalMovementCap(Int)
+    case invalidDefaultComplexCount(Int)
     case invalidDifficultyBudget(Int)
     case missingMuscleRule(MuscleGroup)
     case duplicateMuscleRule(MuscleGroup)
@@ -30,7 +31,9 @@ enum AdaptiveProgramValidationError: LocalizedError, Equatable {
         case .emptyProgramName:
             return "Adaptive profile name cannot be empty."
         case .invalidGlobalMovementCap(let value):
-            return "Daily component movement cap must be between 1 and 20. Got \(value)."
+            return "Maximum exercises per complex must be between 1 and 20. Got \(value)."
+        case .invalidDefaultComplexCount(let value):
+            return "Default muscle-group count must be between 1 and 12. Got \(value)."
         case .invalidDifficultyBudget(let value):
             return "Daily difficulty budget must be between 1 and 60. Got \(value)."
         case .missingMuscleRule(let muscle):
@@ -110,6 +113,7 @@ struct AdaptiveExerciseComplexDraft: Identifiable, Equatable {
 struct AdaptiveProgramDraft: Equatable {
     var name: String
     var isReviewedForUse: Bool
+    var defaultComplexCount: Int
     var globalMaxMovements: Int
     var maxDifficultyCost: Int
     var muscleRules: [AdaptiveMuscleRuleDraft]
@@ -119,6 +123,7 @@ struct AdaptiveProgramDraft: Equatable {
         AdaptiveProgramDraft(
             name: "New Adaptive Profile",
             isReviewedForUse: false,
+            defaultComplexCount: 4,
             globalMaxMovements: 4,
             maxDifficultyCost: 60,
             muscleRules: MuscleGroup.allCases.map { muscle in
@@ -142,6 +147,7 @@ struct AdaptiveProgramDraft: Equatable {
     init(
         name: String,
         isReviewedForUse: Bool,
+        defaultComplexCount: Int? = nil,
         globalMaxMovements: Int,
         maxDifficultyCost: Int,
         muscleRules: [AdaptiveMuscleRuleDraft],
@@ -149,6 +155,7 @@ struct AdaptiveProgramDraft: Equatable {
     ) {
         self.name = name
         self.isReviewedForUse = isReviewedForUse
+        self.defaultComplexCount = defaultComplexCount ?? globalMaxMovements
         self.globalMaxMovements = globalMaxMovements
         self.maxDifficultyCost = maxDifficultyCost
         self.muscleRules = muscleRules
@@ -158,6 +165,7 @@ struct AdaptiveProgramDraft: Equatable {
     init(existing: AdaptiveProgram) {
         name = existing.name
         isReviewedForUse = existing.isReviewedForUse
+        defaultComplexCount = max(1, min(existing.globalMaxMovements, 12))
         globalMaxMovements = existing.globalMaxMovements
         maxDifficultyCost = existing.maxDifficultyCost
         muscleRules = existing.muscleRules
@@ -204,6 +212,57 @@ struct AdaptiveProgramDraft: Equatable {
 }
 
 enum AdaptiveProgramService {
+    static func defaultComplexCount(
+        for program: AdaptiveProgram,
+        preferences: [AdaptiveWorkoutSizePreference]
+    ) -> Int {
+        preferences.first { $0.adaptiveProgramId == program.id }?.defaultComplexCount
+            ?? max(1, min(program.globalMaxMovements, 12))
+    }
+
+    @discardableResult
+    static func ensureWorkoutSizePreferences(modelContext: ModelContext) throws -> Int {
+        let programs = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
+        let existing = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSizePreference>())
+        let existingProgramIds = Set(existing.map(\.adaptiveProgramId))
+        var inserted = 0
+        for program in programs where !existingProgramIds.contains(program.id) {
+            modelContext.insert(
+                AdaptiveWorkoutSizePreference(
+                    adaptiveProgramId: program.id,
+                    defaultComplexCount: max(1, min(program.globalMaxMovements, 12))
+                )
+            )
+            inserted += 1
+        }
+        if inserted > 0 { try modelContext.save() }
+        return inserted
+    }
+
+    @discardableResult
+    static func ensurePlanDesignStates(modelContext: ModelContext) throws -> Int {
+        let plans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>()).filter {
+            $0.status != .completed
+        }
+        let states = try modelContext.fetch(FetchDescriptor<AdaptivePlanDesignState>())
+        let statePlanIds = Set(states.map(\.generatedPlanId))
+        let checks = try modelContext.fetch(FetchDescriptor<DailyReadinessCheck>())
+        var inserted = 0
+        for plan in plans where !statePlanIds.contains(plan.id) {
+            let revision = checks.first { $0.id == plan.readinessCheckId }?.revision ?? 1
+            modelContext.insert(
+                AdaptiveWorkoutService.makeDesignState(
+                    plan: plan,
+                    targetComplexCount: max(1, plan.complexes.count),
+                    readinessRevision: revision
+                )
+            )
+            inserted += 1
+        }
+        if inserted > 0 { try modelContext.save() }
+        return inserted
+    }
+
     static func activeProgram(from programs: [AdaptiveProgram]) -> AdaptiveProgram? {
         programs
             .filter(\.isActiveVersion)
@@ -317,6 +376,9 @@ enum AdaptiveProgramService {
         }
         guard (1...20).contains(draft.globalMaxMovements) else {
             throw AdaptiveProgramValidationError.invalidGlobalMovementCap(draft.globalMaxMovements)
+        }
+        guard (1...12).contains(draft.defaultComplexCount) else {
+            throw AdaptiveProgramValidationError.invalidDefaultComplexCount(draft.defaultComplexCount)
         }
         guard (1...60).contains(draft.maxDifficultyCost) else {
             throw AdaptiveProgramValidationError.invalidDifficultyBudget(draft.maxDifficultyCost)
@@ -432,6 +494,13 @@ enum AdaptiveProgramService {
             existing.isActiveVersion = false
         }
         modelContext.insert(program)
+        modelContext.insert(
+            AdaptiveWorkoutSizePreference(
+                adaptiveProgramId: program.id,
+                defaultComplexCount: draft.defaultComplexCount,
+                updatedAt: now
+            )
+        )
 
         do {
             try modelContext.save()

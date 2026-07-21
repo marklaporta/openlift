@@ -115,11 +115,14 @@ with the selected mode. While Adaptive is selected, Fixed Cycle's instance,
 pointer, rotation indices, and draft remain persisted but cannot resolve into
 the active Workout UI.
 
-Adaptive planning evaluates observed muscle readiness before difficulty.
-Difficulty is retained as recovery context but is not a global point budget.
-The planner blocks a hard quad plus hard hamstring pairing, and it cannot route
-an easier exercise to a muscle that readiness or the post-exposure DOMS
-observation window says is unrecovered.
+Adaptive Workout is one tab with three service-backed phases: Readiness, Design,
+and Execute. Readiness is committed locally before its distinct asynchronous
+iCloud mirror begins. Design stores a per-plan muscle-group exposure target in
+parallel migration-safe metadata; the profile default remains independent.
+Difficulty is recovery context rather than a global point budget. The canonical
+planner strongly deprioritizes a hard quad plus hard hamstring pairing but does
+not make it infeasible, and it cannot route an easier exercise to a muscle that
+readiness or the post-exposure DOMS observation window says is unrecovered.
 
 ## Cycle Flow
 

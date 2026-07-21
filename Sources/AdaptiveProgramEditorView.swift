@@ -7,6 +7,7 @@ struct AdaptiveProgramEditorView: View {
 
     @Query private var exercises: [Exercise]
     @Query private var programs: [AdaptiveProgram]
+    @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
 
     let existingProgram: AdaptiveProgram?
 
@@ -59,6 +60,13 @@ struct AdaptiveProgramEditorView: View {
             } message: {
                 Text(errorMessage ?? "Unknown error")
             }
+            .task {
+                guard let existingProgram,
+                      let stored = workoutSizePreferences.first(where: {
+                          $0.adaptiveProgramId == existingProgram.id
+                      }) else { return }
+                draft.defaultComplexCount = stored.defaultComplexCount
+            }
         }
         .sheet(isPresented: $presentingNewExercise) {
             NewExerciseSheet(
@@ -75,10 +83,13 @@ struct AdaptiveProgramEditorView: View {
             TextField("Profile Name", text: $draft.name)
                 .accessibilityIdentifier("adaptive.profileName")
             Stepper(
-                "Planner movement target: \(draft.globalMaxMovements)",
-                value: $draft.globalMaxMovements,
-                in: 1...20
+                "Default muscle groups: \(draft.defaultComplexCount)",
+                value: $draft.defaultComplexCount,
+                in: 1...12
             )
+            Text("Each muscle-group complex counts once, regardless of its exercise or set count.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Toggle("Reviewed for real use", isOn: $draft.isReviewedForUse)
             Text("Approve after checking the settings below. Saving creates a new version.")
                 .font(.caption)
