@@ -3,108 +3,65 @@ import SwiftData
 
 @main
 struct OpenLiftApp: App {
-    private static let sharedModelContainer: ModelContainer = {
+    private static let schema = Schema(versionedSchema: OpenLiftSchemaV3.self)
+
+    private static let startup: OpenLiftContainerStartup = {
         AppRuntime.prepareForUITesting()
-        let schema = Schema([
-            Exercise.self,
-            CycleSlot.self,
-            CycleDay.self,
-            RotationPoolEntry.self,
-            RotationPool.self,
-            CycleTemplate.self,
-            RotationIndex.self,
-            ActiveCycleInstance.self,
-            Session.self,
-            SetEntry.self,
-            SessionSlotOverride.self
-        ])
-        return makeContainer(schema: schema)
-    }()
 
-    var body: some Scene {
-        WindowGroup {
-            RootTabView()
-        }
-        .modelContainer(Self.sharedModelContainer)
-        .backgroundTask(.appRefresh(SessionExportService.backgroundRefreshIdentifier)) {
-            await SessionExportService.runBackgroundExportRetry(modelContainer: Self.sharedModelContainer)
-        }
-    }
-
-    private static func makeContainer(schema: Schema) -> ModelContainer {
         if AppRuntime.isUITesting {
-            let inMemoryConfiguration = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
+            return OpenLiftContainerStartup(
+                container: OpenLiftModelContainerFactory.makeInMemory(schema: schema),
+                issue: nil
             )
-
-            do {
-                return try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
-            } catch {
-                fatalError("Failed to create UI test model container: \(error)")
-            }
         }
 
         let configuration = ModelConfiguration(
             schema: schema,
             cloudKitDatabase: .none
         )
+        return OpenLiftModelContainerFactory.makePersistent(
+            schema: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: configuration
+        )
+    }()
 
-        do {
-            return try ModelContainer(for: schema, configurations: [configuration])
-        } catch {
-            print("SwiftData container failed on first attempt: \(error)")
-            quarantineLikelyCorruptStoreFiles()
+    private static var sharedModelContainer: ModelContainer {
+        startup.container
+    }
 
-            do {
-                return try ModelContainer(for: schema, configurations: [configuration])
-            } catch {
-                print("SwiftData container failed after store quarantine: \(error)")
-
-                let inMemoryConfiguration = ModelConfiguration(
-                    schema: schema,
-                    isStoredInMemoryOnly: true,
-                    cloudKitDatabase: .none
-                )
-
-                do {
-                    print("Falling back to in-memory SwiftData store for this launch.")
-                    return try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
-                } catch {
-                    fatalError("Failed to create any SwiftData container: \(error)")
-                }
+    var body: some Scene {
+        WindowGroup {
+            if let issue = Self.startup.issue {
+                StoreStartupFailureView(issue: issue)
+            } else {
+                RootTabView()
+            }
+        }
+        .modelContainer(Self.sharedModelContainer)
+        .backgroundTask(.appRefresh(SessionExportService.backgroundRefreshIdentifier)) {
+            let startup = await Self.startup
+            if startup.issue == nil {
+                await SessionExportService.runBackgroundExportRetry(modelContainer: startup.container)
             }
         }
     }
+}
 
-    private static func quarantineLikelyCorruptStoreFiles() {
-        let fileManager = FileManager.default
-        guard let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            return
+private struct StoreStartupFailureView: View {
+    let issue: OpenLiftStoreStartupIssue
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("Workout Database Unavailable", systemImage: "externaldrive.badge.exclamationmark")
+        } description: {
+            Text(issue.userMessage)
+                .textSelection(.enabled)
+        } actions: {
+            Text("No workout data was moved, deleted, or replaced.")
+                .font(.headline)
+                .accessibilityLabel("No workout data was moved, deleted, or replaced")
         }
-
-        let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        let quarantineDirectory = appSupportURL.appendingPathComponent("CorruptStoreBackups/\(timestamp)", isDirectory: true)
-
-        do {
-            try fileManager.createDirectory(at: quarantineDirectory, withIntermediateDirectories: true)
-        } catch {
-            print("Failed to create corrupt store backup directory: \(error)")
-            return
-        }
-
-        let candidateNames = ["default.store", "default.store-wal", "default.store-shm"]
-        for name in candidateNames {
-            let sourceURL = appSupportURL.appendingPathComponent(name)
-            guard fileManager.fileExists(atPath: sourceURL.path) else { continue }
-
-            let destinationURL = quarantineDirectory.appendingPathComponent(name)
-            do {
-                try fileManager.moveItem(at: sourceURL, to: destinationURL)
-            } catch {
-                print("Failed moving \(name) to corrupt store backup: \(error)")
-            }
-        }
+        .padding()
     }
 }

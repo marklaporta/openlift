@@ -13,6 +13,8 @@ struct CycleView: View {
     @Query private var activeCycles: [ActiveCycleInstance]
     @Query private var sessions: [Session]
     @Query private var setEntries: [SetEntry]
+    @Query private var trainingPreferences: [TrainingPreference]
+    @Query private var adaptivePrograms: [AdaptiveProgram]
 
     @State private var presentingNewTemplate = false
     @State private var editingTemplate: CycleTemplate?
@@ -26,6 +28,8 @@ struct CycleView: View {
     @State private var debugTapCount: Int = 0
     @State private var debugUnlocked: Bool = false
     @State private var debugSnapshotText: String?
+    @State private var presentingNewAdaptiveProgram = false
+    @State private var editingAdaptiveProgram: AdaptiveProgram?
 
     private var activeTemplate: CycleTemplate? {
         OpenLiftStateResolver.activeTemplate(
@@ -38,9 +42,38 @@ struct CycleView: View {
         )
     }
 
+    private var trainingMode: TrainingMode {
+        TrainingModeService.resolvedMode(preferences: trainingPreferences)
+    }
+
+    private var activeAdaptiveProgram: AdaptiveProgram? {
+        AdaptiveProgramService.activeProgram(from: adaptivePrograms)
+    }
+
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Picker("Programming", selection: trainingModeBinding) {
+                        ForEach(TrainingMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if trainingMode == .adaptive {
+                        Text("Adaptive Floating is selected. Your fixed-cycle draft and position remain saved.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Training Mode")
+                }
+
+                if trainingMode == .adaptive {
+                    adaptiveProgrammingSections
+                } else {
+
                 Section {
                     if let activeTemplate {
                         Text(activeTemplate.name)
@@ -152,6 +185,7 @@ struct CycleView: View {
                         .padding(.vertical, 4)
                     }
                 }
+                }
 
 #if DEBUG
                 if debugUnlocked {
@@ -180,17 +214,24 @@ struct CycleView: View {
             }
             .navigationTitle("Cycle")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Refresh") {
-                        reloadPublishedCycles()
+                if trainingMode == .rotation {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Refresh") {
+                            reloadPublishedCycles()
+                        }
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        presentingNewTemplate = true
+                        if trainingMode == .adaptive {
+                            presentingNewAdaptiveProgram = true
+                        } else {
+                            presentingNewTemplate = true
+                        }
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .accessibilityLabel(trainingMode == .adaptive ? "New Adaptive Profile" : "New Cycle Template")
                 }
             }
             .sheet(isPresented: $presentingNewTemplate) {
@@ -198,6 +239,12 @@ struct CycleView: View {
             }
             .sheet(item: $editingTemplate) { template in
                 TemplateEditorView(existingTemplate: template)
+            }
+            .sheet(isPresented: $presentingNewAdaptiveProgram) {
+                AdaptiveProgramEditorView(existingProgram: nil)
+            }
+            .sheet(item: $editingAdaptiveProgram) { program in
+                AdaptiveProgramEditorView(existingProgram: program)
             }
             .alert("Cycle Error", isPresented: .constant(errorMessage != nil), actions: {
                 Button("OK") { errorMessage = nil }
@@ -224,22 +271,111 @@ struct CycleView: View {
                 }
             }
             .onReceive(refreshTimer) { _ in
-                reloadPublishedCycles()
+                if trainingMode == .rotation {
+                    reloadPublishedCycles()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-                reloadPublishedCycles()
+                if trainingMode == .rotation {
+                    reloadPublishedCycles()
+                }
             }
             .task {
                 do {
                     let currentExercises = try ensureExerciseCatalog()
-                    _ = try BootstrapDataService.importPreferredPublishedTemplateIfNeeded(
-                        modelContext: modelContext,
-                        existingTemplates: templates,
-                        exercises: currentExercises
-                    )
-                    reloadPublishedCycles()
+                    if trainingMode == .rotation {
+                        _ = try BootstrapDataService.importPreferredPublishedTemplateIfNeeded(
+                            modelContext: modelContext,
+                            existingTemplates: templates,
+                            exercises: currentExercises
+                        )
+                        reloadPublishedCycles()
+                    }
                 } catch {
                     errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private var trainingModeBinding: Binding<TrainingMode> {
+        Binding(
+            get: { trainingMode },
+            set: { newMode in
+                do {
+                    _ = try TrainingModeService.setMode(
+                        newMode,
+                        preferences: trainingPreferences,
+                        modelContext: modelContext
+                    )
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var adaptiveProgrammingSections: some View {
+        Section("Adaptive Profile") {
+            if let program = activeAdaptiveProgram {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(program.name)
+                            .font(.headline)
+                        Spacer()
+                        Text("v\(program.version)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("\(program.globalMaxMovements) movements/day · difficulty budget \(program.maxDifficultyCost)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Label(
+                        program.isReviewedForUse ? "Reviewed for use" : "Review required before real use",
+                        systemImage: program.isReviewedForUse ? "checkmark.seal" : "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(program.isReviewedForUse ? .green : .orange)
+                }
+
+                Button("Edit Profile and Complexes") {
+                    editingAdaptiveProgram = program
+                }
+                .accessibilityIdentifier("adaptive.editProfile")
+            } else {
+                Text("No Adaptive profile has been saved. Create one or load the explicit demo proposal in the editor; no values are activated silently.")
+                    .foregroundStyle(.secondary)
+                Button("Create Adaptive Profile") {
+                    presentingNewAdaptiveProgram = true
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("adaptive.createProfile")
+            }
+        }
+
+        Section("Muscle Scope") {
+            Text("Initial rank: Chest, Back, Triceps, Biceps, Shoulders, Quads, Hamstrings, Forearms, Glutes, Calves.")
+            Text("Your current shoulder exercise library is side-delt focused; future shoulder exercises use the same programming bucket.")
+            Text("Abs and Traps remain supported candidates but start disabled with no volume floor.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        if let program = activeAdaptiveProgram {
+            Section("Enabled Complexes") {
+                let enabled = program.complexes.filter(\.isEnabled).sorted { $0.position < $1.position }
+                if enabled.isEmpty {
+                    Text("No enabled complexes")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(enabled, id: \.id) { complex in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(complex.name)
+                        Text("\(complex.primaryMuscle.displayName) · \(complex.components.count) movement(s)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }

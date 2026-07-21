@@ -1,6 +1,6 @@
 import Foundation
 
-enum OpenLiftValidationError: LocalizedError {
+enum OpenLiftValidationError: LocalizedError, Equatable {
     case emptyName(entity: String)
     case emptyDays
     case emptyDayLabel
