@@ -8,6 +8,25 @@ final class BootstrapDataServiceTests: XCTestCase {
         super.tearDown()
     }
 
+    func testEnsureExerciseCatalogRepairsCanonicalExerciseCategory() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let reverseHyper = Exercise(
+            name: "Reverse Hyper",
+            primaryMuscle: .hamstrings,
+            type: .compound,
+            equipment: .machine
+        )
+        context.insert(reverseHyper)
+        try context.save()
+
+        let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+
+        XCTAssertEqual(catalog.first { $0.id == reverseHyper.id }?.primaryMuscle, .hamstrings)
+        XCTAssertEqual(catalog.first { $0.id == reverseHyper.id }?.type, .isolation)
+    }
+
     func testPreferredPublishedCyclePrefersFB2DName() {
         let files = [
             PublishedCycleFile(
