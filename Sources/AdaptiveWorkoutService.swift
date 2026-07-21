@@ -147,10 +147,14 @@ enum AdaptiveWorkoutService {
         revision: Int,
         now: Date = .now
     ) throws -> DailyReadinessCheck {
-        for muscle in MuscleGroup.allCases where inputs[muscle] == nil {
+        let enabledMuscles = program.muscleRules
+            .filter(\.isEnabled)
+            .sorted { $0.priorityRank < $1.priorityRank }
+            .map(\.muscle)
+        for muscle in enabledMuscles where inputs[muscle] == nil {
             throw AdaptiveWorkoutServiceError.incompleteReadiness(muscle)
         }
-        let responses = MuscleGroup.allCases.map { muscle in
+        let responses = enabledMuscles.map { muscle in
             let input = inputs[muscle]!
             return AdaptiveReadinessResponse(
                 muscle: muscle,

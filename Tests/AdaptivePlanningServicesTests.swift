@@ -2,6 +2,39 @@ import XCTest
 @testable import OpenLift
 
 final class AdaptivePlanningServicesTests: XCTestCase {
+    func testDisabledMusclesDoNotRequireReadiness() {
+        let chest = exercise("Chest", muscle: .chest)
+        let program = makeProgram(
+            movements: 1,
+            difficulty: 3,
+            enabled: [.chest],
+            complexes: [
+                makeComplex(
+                    id: uuid(1),
+                    position: 0,
+                    primary: .chest,
+                    components: [component(chest, sets: 2)]
+                )
+            ]
+        )
+        let result = AdaptivePlanService.generate(
+            program: program,
+            exercises: [chest],
+            readiness: [
+                .chest: MuscleReadinessInput(
+                    soreness: .none,
+                    connectiveTissuePain: .none,
+                    eagerness: .neutral
+                )
+            ],
+            ledger: recentLedger([.chest]),
+            now: now,
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(unwrapProposal(result).complexes.map(\.primaryMuscle), [.chest])
+    }
+
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     func testLedgerCountsOnlyCompletedLockedSetsAndIncludesAdHocAndSecondaryLoad() {

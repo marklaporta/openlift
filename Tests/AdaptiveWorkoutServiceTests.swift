@@ -3,6 +3,26 @@ import XCTest
 @testable import OpenLift
 
 final class AdaptiveWorkoutServiceTests: XCTestCase {
+    func testReadinessTracksOnlyEnabledMuscles() throws {
+        let (program, _) = makeProgram()
+        let chestInput = MuscleReadinessInput(
+            soreness: .none,
+            connectiveTissuePain: .none,
+            eagerness: .neutral
+        )
+
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: [.chest: chestInput],
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+
+        XCTAssertEqual(check.responses.map(\.muscle), [.chest])
+        XCTAssertFalse(check.responses.contains { $0.muscle == .abs || $0.muscle == .traps })
+    }
+
     func testOpeningWorkflowCreatesNoSessionBeforeProposalIsAccepted() throws {
         let (context, _) = makeContext()
         let (program, exercise) = makeProgram()

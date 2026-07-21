@@ -129,7 +129,7 @@ struct AdaptiveWorkoutView: View {
     @ViewBuilder
     private func readinessContent(program: AdaptiveProgram) -> some View {
         Section("Morning Readiness") {
-            Text("Answer every supported muscle. Missing answers are unknown, not recovered.")
+            Text("Answer every enabled muscle. Disabled muscles are not tracked or considered for recovery.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text("Soreness, connective-tissue pain, and eagerness are stored as raw choices; OpenLift derives eligibility locally.")
@@ -137,7 +137,7 @@ struct AdaptiveWorkoutView: View {
                 .foregroundStyle(.secondary)
         }
 
-        ForEach(MuscleGroup.allCases, id: \.self) { muscle in
+        ForEach(enabledMuscles(in: program), id: \.self) { muscle in
             Section(muscle.displayName) {
                 Picker("Soreness", selection: sorenessBinding(for: muscle)) {
                     ForEach(SorenessLevel.allCases, id: \.self) { value in
@@ -170,7 +170,7 @@ struct AdaptiveWorkoutView: View {
         if AppRuntime.isAdaptiveWorkflowUITesting {
             Section {
                 Button("Fill All-Clear Test Readiness") {
-                    readiness = Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map {
+                    readiness = Dictionary(uniqueKeysWithValues: enabledMuscles(in: program).map {
                         (
                             $0,
                             ReadinessSelection(
@@ -191,7 +191,7 @@ struct AdaptiveWorkoutView: View {
                 generateNewPlan(program: program)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!readinessIsComplete && !AppRuntime.isAdaptiveWorkflowUITesting)
+            .disabled(!readinessIsComplete(for: program) && !AppRuntime.isAdaptiveWorkflowUITesting)
             .accessibilityIdentifier("adaptive.generatePlan")
         }
     }
@@ -391,8 +391,15 @@ struct AdaptiveWorkoutView: View {
         }
     }
 
-    private var readinessIsComplete: Bool {
-        MuscleGroup.allCases.allSatisfy { readiness[$0]?.isComplete == true }
+    private func enabledMuscles(in program: AdaptiveProgram) -> [MuscleGroup] {
+        program.muscleRules
+            .filter(\.isEnabled)
+            .sorted { $0.priorityRank < $1.priorityRank }
+            .map(\.muscle)
+    }
+
+    private func readinessIsComplete(for program: AdaptiveProgram) -> Bool {
+        enabledMuscles(in: program).allSatisfy { readiness[$0]?.isComplete == true }
     }
 
     private func readinessInputs() -> [MuscleGroup: MuscleReadinessInput] {
