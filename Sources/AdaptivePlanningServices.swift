@@ -266,7 +266,7 @@ struct AdaptivePlanDecisionTrace: Equatable {
 }
 
 enum AdaptivePlanService {
-    static let plannerVersion = 2
+    static let plannerVersion = 3
 
     static func generate(
         program: AdaptiveProgram,
@@ -411,7 +411,7 @@ enum AdaptivePlanService {
 
         for rule in enabledRules {
             let load = ledger[rule.muscle]
-            let floorDeficit = max(0, rule.rollingSetFloor - load.lockedSetCount)
+            let exposureDue = rule.rollingSetFloor > 0 && load.lockedSetCount == 0
             let gapDue: Bool
             if let last = load.lastProductiveExposureAt,
                let dueDate = calendar.date(byAdding: .day, value: rule.maxRecoveredDayGap, to: last) {
@@ -419,9 +419,9 @@ enum AdaptivePlanService {
             } else {
                 gapDue = true
             }
-            guard floorDeficit > 0 || gapDue else { continue }
+            guard exposureDue || gapDue else { continue }
 
-            let target = max(floorDeficit, gapDue ? 1 : 0)
+            let target = 1
             while setDose[rule.muscle, default: 0] < target {
                 let eligibleQualifying = candidates
                     .filter {
@@ -436,13 +436,8 @@ enum AdaptivePlanService {
                     .sorted(by: floorFitOrder)
                 guard let fitting = options.first(where: { fitFailure(for: $0) == nil }) else {
                     let failures = options.compactMap(fitFailure(for:))
-                    // A rolling floor is a multi-day target, not a requirement
-                    // to erase the entire deficit in one workout. Once every
-                    // distinct qualifying complex that fits today has been
-                    // used, retain the remaining deficit for future recovered
-                    // exposures. This is especially important at cold start,
-                    // when every enabled muscle may have a zero-set baseline.
-                    //
+                    // The training-window floor is binary: one qualifying
+                    // completed exposure satisfies it regardless of set count.
                     // A due muscle with no usable dose at all because every
                     // candidate exceeds its per-exercise set cap remains a
                     // genuine configuration conflict.
@@ -459,7 +454,12 @@ enum AdaptivePlanService {
                     }
                     break
                 }
-                select(fitting, reason: floorDeficit > 0 ? "\(rule.muscle.rawValue)_floor_due" : "\(rule.muscle.rawValue)_gap_due")
+                select(
+                    fitting,
+                    reason: exposureDue
+                        ? "\(rule.muscle.rawValue)_exposure_due"
+                        : "\(rule.muscle.rawValue)_gap_due"
+                )
             }
         }
 

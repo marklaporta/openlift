@@ -131,7 +131,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(proposal.totalMovements, 2)
         XCTAssertEqual(proposal.muscleSetDose[.chest], 4)
         let trace = AdaptivePlanService.trace(for: result)
-        XCTAssertEqual(trace.plannerVersion, 2)
+        XCTAssertEqual(trace.plannerVersion, 3)
         XCTAssertEqual(trace.outcomeCode, "proposal")
         XCTAssertEqual(trace.selectedComplexDefinitionIds, [uuid(1)])
         XCTAssertNil(trace.conflictCode)
@@ -144,7 +144,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             movements: 1,
             difficulty: 3,
             enabled: [.chest, .back],
-            floors: [.back: 2],
+            floors: [.back: 1],
             complexes: [
                 makeComplex(id: uuid(1), position: 0, primary: .chest, components: [component(chest, sets: 2)]),
                 makeComplex(id: uuid(2), position: 1, primary: .back, components: [component(back, sets: 2)])
@@ -165,16 +165,16 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         )
 
         XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.back])
-        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["back_floor_due"])
+        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["back_exposure_due"])
     }
 
-    func testRollingFloorDeficitCarriesForwardWhenTodaysQualifyingDoseIsExhausted() {
+    func testBinaryTrainingWindowSchedulesOneQualifyingExposureWithoutCreatingASetQuota() {
         let back = exercise("Back", muscle: .back)
         let program = makeProgram(
             movements: 1,
             difficulty: 3,
             enabled: [.back],
-            floors: [.back: 4],
+            floors: [.back: 1],
             complexes: [
                 makeComplex(id: uuid(1), position: 0, primary: .back, components: [component(back, sets: 2)])
             ]
@@ -193,15 +193,15 @@ final class AdaptivePlanningServicesTests: XCTestCase {
 
         XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.back])
         XCTAssertEqual(proposal.muscleSetDose[.back], 2)
-        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["back_floor_due"])
+        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["back_exposure_due"])
     }
 
-    func testColdStartAcrossAllEnabledMusclesBuildsPrioritySlateInsteadOfRequiringFullFloors() {
+    func testColdStartAcrossAllEnabledMusclesBuildsPrioritySlateFromBinaryExposureRequirements() {
         let muscles = MuscleGroup.initialAdaptiveRankOrder
         let exercises = muscles.enumerated().map { index, muscle in
             exercise("Cold Start \(index)", muscle: muscle)
         }
-        let floors = Dictionary(uniqueKeysWithValues: muscles.map { ($0, 4) })
+        let floors = Dictionary(uniqueKeysWithValues: muscles.map { ($0, 1) })
         let complexes = zip(muscles.indices, zip(muscles, exercises)).map { index, pair in
             makeComplex(
                 id: uuid(index + 1),
@@ -232,7 +232,48 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(proposal.totalMovements, 4)
         XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), Array(muscles.prefix(4)))
         XCTAssertEqual(proposal.complexes.flatMap(\.components).map(\.prescribedSetCount), [2, 2, 2, 2])
-        XCTAssertFalse(proposal.rejections.contains { $0.code == "insufficient_floor_qualifying_dose" })
+        XCTAssertTrue(proposal.complexes.allSatisfy { $0.reasonCodes.first?.hasSuffix("_exposure_due") == true })
+    }
+
+    func testOneShoulderSetSatisfiesTrainingWindowButShouldersRemainEligibleOnNextDay() {
+        let shoulder = exercise("Shoulder", muscle: .sideDelts)
+        let program = makeProgram(
+            movements: 1,
+            difficulty: 3,
+            enabled: [.sideDelts],
+            floors: [.sideDelts: 1],
+            complexes: [
+                makeComplex(
+                    id: uuid(1),
+                    position: 0,
+                    primary: .sideDelts,
+                    components: [component(shoulder, sets: 2)]
+                )
+            ]
+        )
+        let yesterday = now.addingTimeInterval(-86_400)
+        let ledger = TrainingLoadLedger(
+            byMuscle: [
+                .sideDelts: MuscleLoadSummary(
+                    lockedSetCount: 1,
+                    lastProductiveExposureAt: yesterday,
+                    lastDirectProductiveExposureAt: yesterday
+                )
+            ]
+        )
+
+        let proposal = unwrapProposal(
+            AdaptivePlanService.generate(
+                program: program,
+                exercises: [shoulder],
+                readiness: readyInputs,
+                ledger: ledger,
+                now: now,
+                calendar: utcCalendar
+            )
+        )
+
+        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["sideDelts_priority"])
     }
 
     func testHamstringSetCapBeatsGlobalCapacity() {

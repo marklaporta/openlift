@@ -10,7 +10,6 @@ enum AdaptiveProgramValidationError: LocalizedError, Equatable {
     case invalidPriority(muscle: MuscleGroup, rank: Int)
     case duplicatePriority(Int)
     case invalidMuscleLimit(muscle: MuscleGroup, field: String, value: Int)
-    case infeasibleFloor(muscle: MuscleGroup, floor: Int, maximum: Int)
     case noEnabledComplexes
     case emptyComplexName(position: Int)
     case emptyComplex(name: String)
@@ -44,8 +43,6 @@ enum AdaptiveProgramValidationError: LocalizedError, Equatable {
             return "Priority rank \(rank) is assigned more than once. Ranks must be strict."
         case .invalidMuscleLimit(let muscle, let field, let value):
             return "\(muscle.displayName) has invalid \(field): \(value)."
-        case .infeasibleFloor(let muscle, let floor, let maximum):
-            return "\(muscle.displayName)'s \(floor)-set floor cannot fit its configured window and caps; maximum is \(maximum)."
         case .noEnabledComplexes:
             return "The profile needs at least one enabled exercise complex."
         case .emptyComplexName(let position):
@@ -73,7 +70,7 @@ enum AdaptiveProgramValidationError: LocalizedError, Equatable {
         case .complexDoesNotAttributePrimary(let name, let muscle):
             return "Complex '\(name)' does not attribute any component to its primary muscle, \(muscle.displayName)."
         case .noFloorQualifyingComplex(let muscle):
-            return "\(muscle.displayName) has no enabled complex marked to satisfy its floor/gap policy."
+            return "\(muscle.displayName) has no enabled complex marked to satisfy its training-window/gap policy."
         }
     }
 }
@@ -130,7 +127,7 @@ struct AdaptiveProgramDraft: Equatable {
                     id: UUID(),
                     muscle: muscle,
                     priorityRank: rank ?? 0,
-                    rollingSetFloor: 0,
+                    rollingSetFloor: rank == nil ? 0 : 1,
                     rollingWindowDays: 7,
                     maxRecoveredDayGap: 10,
                     maxExercisesPerExposure: 2,
@@ -170,7 +167,7 @@ struct AdaptiveProgramDraft: Equatable {
                     id: $0.id,
                     muscle: $0.muscle,
                     priorityRank: $0.priorityRank,
-                    rollingSetFloor: $0.rollingSetFloor,
+                    rollingSetFloor: $0.rollingSetFloor > 0 ? 1 : 0,
                     rollingWindowDays: $0.rollingWindowDays,
                     maxRecoveredDayGap: $0.maxRecoveredDayGap,
                     maxExercisesPerExposure: $0.maxExercisesPerExposure,
@@ -217,12 +214,24 @@ enum AdaptiveProgramService {
             .first
     }
 
+    @discardableResult
+    static func normalizeBinaryExposureRequirements(modelContext: ModelContext) throws -> Int {
+        let programs = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
+        var changed = 0
+        for rule in programs.flatMap(\.muscleRules) where rule.rollingSetFloor > 1 {
+            rule.rollingSetFloor = 1
+            changed += 1
+        }
+        if changed > 0 { try modelContext.save() }
+        return changed
+    }
+
     static func demoDraft(exercises: [Exercise]) -> AdaptiveProgramDraft {
         var draft = AdaptiveProgramDraft.blank
         draft.name = "Adaptive Demo — Review Required"
         draft.muscleRules = draft.muscleRules.map { rule in
             var copy = rule
-            copy.rollingSetFloor = copy.isEnabled ? 4 : 0
+            copy.rollingSetFloor = copy.isEnabled ? 1 : 0
             return copy
         }
         draft.complexes = draft.muscleRules.filter(\.isEnabled).compactMap { rule in
@@ -305,14 +314,6 @@ enum AdaptiveProgramService {
         }
 
         for rule in enabledRules {
-            let maximum = rule.maxExercisesPerExposure * rule.maxSetsPerExercise * rule.rollingWindowDays
-            if rule.rollingSetFloor > maximum {
-                throw AdaptiveProgramValidationError.infeasibleFloor(
-                    muscle: rule.muscle,
-                    floor: rule.rollingSetFloor,
-                    maximum: maximum
-                )
-            }
             let hasQualifyingComplex = enabledComplexes.contains {
                 $0.primaryMuscle == rule.muscle && $0.qualifiesForPrimaryFloor
             }
@@ -347,7 +348,7 @@ enum AdaptiveProgramService {
                 AdaptiveMuscleRule(
                     muscle: rule.muscle,
                     priorityRank: rule.priorityRank,
-                    rollingSetFloor: rule.rollingSetFloor,
+                    rollingSetFloor: rule.rollingSetFloor > 0 ? 1 : 0,
                     rollingWindowDays: rule.rollingWindowDays,
                     maxRecoveredDayGap: rule.maxRecoveredDayGap,
                     maxExercisesPerExposure: rule.maxExercisesPerExposure,
@@ -394,7 +395,7 @@ enum AdaptiveProgramService {
 
     private static func validate(rule: AdaptiveMuscleRuleDraft) throws {
         let fields: [(String, Int, ClosedRange<Int>)] = [
-            ("rolling set floor", rule.rollingSetFloor, 0...100),
+            ("rolling exposure requirement", rule.rollingSetFloor, 0...1),
             ("rolling window", rule.rollingWindowDays, 1...60),
             ("maximum recovered-day gap", rule.maxRecoveredDayGap, 1...60),
             ("exercise exposure cap", rule.maxExercisesPerExposure, 1...10),

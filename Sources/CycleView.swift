@@ -357,7 +357,7 @@ struct CycleView: View {
         Section("Muscle Scope") {
             Text("Initial rank: Chest, Back, Triceps, Biceps, Shoulders, Quads, Hamstrings, Forearms, Glutes, Calves.")
             Text("Your current shoulder exercise library is side-delt focused; future shoulder exercises use the same programming bucket.")
-            Text("Abs and Traps remain supported candidates but start disabled with no volume floor.")
+            Text("Abs and Traps remain supported candidates but start disabled with no training-window requirement.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

@@ -277,7 +277,7 @@ final class SwapExerciseUITests: XCTestCase {
         scrollToElement(generatePlan, in: app)
         generatePlan.tap()
 
-        let proposalSummary = app.staticTexts["4 component movement(s) · planner v2"]
+        let proposalSummary = app.staticTexts["4 component movement(s) · planner v3"]
         XCTAssertTrue(proposalSummary.waitForExistence(timeout: 10))
         for exercise in ["Flat Dumbbell Press", "Cable Row", "Bayesian Curl", "Cable Lateral Raise"] {
             XCTAssertTrue((proposalSummary.value as? String)?.contains(exercise) == true)

@@ -24,7 +24,7 @@ Ad hoc workout logging remains available regardless of active training mode.
 When an ad hoc session is completed during Adaptive mode, its locked completed
 sets contribute to the rebuildable training-load ledger. The next Adaptive plan
 must account for that work when evaluating recovery, recent exposure, rolling
-volume, floors, and eligibility.
+volume, binary training-window exposure, and eligibility.
 
 Ad hoc work is load and recovery evidence, but is not automatically comparable
 Adaptive-complex performance evidence. Drafts and unlocked sets never affect the
@@ -57,28 +57,29 @@ initial enabled priority is:
 9. Glutes
 10. Calves
 
-Abs and Traps are explicit candidates but start disabled, unranked, and with a
-zero volume floor. The persisted shoulder raw value remains `sideDelts` so old
+Abs and Traps are explicit candidates but start disabled, unranked, and without
+a training-window requirement. The persisted shoulder raw value remains `sideDelts` so old
 stores continue to decode; it is presented as the broader Shoulders bucket.
 The current catalog is side-delt focused, but future front- or rear-delt
 exercise variants may use the same bucket.
 
 Cycle contains the one Adaptive profile editor. A profile stores strict muscle
-priorities, rolling floor/window and recovered-gap policy, per-exposure and
+priorities, a binary training-window and recovered-gap policy, per-exposure and
 per-exercise caps, and an automatic component-movement target (four by default).
 Complexes are ordered atomic units with ordered component exercises, set counts,
 primary plus optional major-secondary attribution, and easy/moderate/hard recovery context.
-Rolling floors are multi-day targets rather than same-day quotas. A muscle with
-no recent baseline is due and receives floor priority, but the planner carries
-any dose that cannot safely fit today into future recovered exposures instead
-of rejecting the entire workout.
+The training-window requirement is binary: one or more qualifying locked working
+sets means the muscle was trained, regardless of set count. Set prescriptions
+are adjusted separately from volume feedback and repeat performance. A muscle
+with no qualifying exposure in its window is due and receives protection from
+starvation without turning the missing history into an invented set quota.
 The proposed slate remains editable: movements may be added, removed, or swapped
 before it is accepted, including beyond the automatic target.
 Saving an edit creates a new immutable profile and complex version. The demo is
 labelled as requiring review and cannot invent catalog exercises for a missing
 muscle.
 
-No production floor, cap, difficulty, or complex value is silently activated.
+No production training-window, cap, difficulty, or complex value is silently activated.
 The initial rank above is user-supplied, but G3 remains open until the entire
 production profile and complex library are explicitly reviewed.
 
