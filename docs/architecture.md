@@ -19,7 +19,6 @@ Main tabs:
 - Workout
 - History
 - Cycle
-- Import
 
 ## Core Data Model
 
@@ -161,6 +160,8 @@ Relevant code:
 Behavior:
 
 - completed sessions are deduped
+- exercise-name search combines Rotation, ad hoc, Adaptive, and export-recovery
+  history into a newest-first set timeline
 - cycle/day labels use snapshots first, then resolver-based fallback
 - failed exports can be retried from session detail
 

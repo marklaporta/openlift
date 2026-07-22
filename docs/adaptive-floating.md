@@ -88,6 +88,13 @@ for every regeneration. Execute remains structurally editable until completion,
 including locked-set correction or deletion. Both Design and Execute can append
 an absent muscle through Add Complex; a configured complex is reused when
 available and manual construction remains available when it is not.
+Because completion publishes the final workout export for external ingestion,
+Finish Adaptive Workout requires an explicit destructive confirmation. Cancelling
+the confirmation leaves the active workout editable and unchanged.
+After completion, the Workout tab shows a provisional prediction for tomorrow
+using the normal planner queue, completed load ledger, profile workout size, and
+an assumption of recovered readiness. The next day's actual readiness remains
+authoritative and may replace that prediction.
 
 Exercise continuity is configured per muscle rather than by a workout-wide
 rotation rule. `Pinned exercise` always proposes one foundation movement;

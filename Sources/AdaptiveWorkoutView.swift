@@ -28,6 +28,7 @@ struct AdaptiveWorkoutView: View {
     @State private var addMovementContext: AdaptiveAddMovementContext?
     @State private var addComplexContext: AdaptiveAddComplexContext?
     @State private var isEditingReadiness = false
+    @State private var pendingFinishPlanId: UUID?
 
     private var activeProgram: AdaptiveProgram? {
         AdaptiveProgramService.activeProgram(from: adaptivePrograms)
@@ -512,10 +513,27 @@ struct AdaptiveWorkoutView: View {
             }
 
             Section {
-                Button("Finish Adaptive Workout") { finish(plan: plan) }
+                Button("Finish Adaptive Workout") { pendingFinishPlanId = plan.id }
                     .buttonStyle(.borderedProminent)
                     .disabled(hasMissingFeedback(plan: plan, session: session))
                     .accessibilityIdentifier("adaptive.finishWorkout")
+                    .alert(
+                        "Finish Adaptive Workout?",
+                        isPresented: Binding(
+                            get: { pendingFinishPlanId == plan.id },
+                            set: { if !$0 { pendingFinishPlanId = nil } }
+                        )
+                    ) {
+                        Button("Finish Workout", role: .destructive) {
+                            pendingFinishPlanId = nil
+                            finish(plan: plan)
+                        }
+                        Button("Keep Editing", role: .cancel) {
+                            pendingFinishPlanId = nil
+                        }
+                    } message: {
+                        Text("Completion is final and exports this workout. Confirm only when you are finished editing sets, exercises, and feedback.")
+                    }
                 if hasMissingFeedback(plan: plan, session: session) {
                     Text("Rate every completed, non-skipped complex before finishing. Choose Not sure when appropriate.")
                         .font(.caption)
@@ -538,6 +556,27 @@ struct AdaptiveWorkoutView: View {
         Section {
             ContentUnavailableView {
                 Label("Adaptive Workout Complete", systemImage: "checkmark.circle")
+            }
+        }
+
+        if let program = activeProgram,
+           let prediction = tomorrowPrediction(program: program) {
+            Section {
+                Text("Assumes tomorrow's soreness, connective-tissue pain, and eagerness match normal recovery. Actual readiness can change the workout.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(prediction.complexes, id: \.definitionId) { complex in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(complex.primaryMuscle.displayName)
+                            .font(.headline)
+                        Text(complex.components.map(\.exerciseName).joined(separator: " + "))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Tomorrow · Expected")
+                    .accessibilityIdentifier("adaptive.tomorrowPrediction")
             }
         }
     }
@@ -772,6 +811,57 @@ struct AdaptiveWorkoutView: View {
             readinessCheck: readinessCheck,
             localDateKey: todayKey,
             timeZoneIdentifier: TimeZone.current.identifier
+        )
+    }
+
+    private func tomorrowPrediction(program: AdaptiveProgram) -> AdaptivePlanProposal? {
+        guard let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: .now) else {
+            return nil
+        }
+        let rotationEvidence = TrainingLoadLedgerService.storedEvidence(
+            sessions: rotationSessions,
+            setEntries: rotationSetEntries,
+            exercises: exercises,
+            adaptivePlans: generatedPlans,
+            occurrenceLinks: occurrenceLinks,
+            overrides: overrides
+        )
+        let adaptiveEvidence = TrainingLoadLedgerService.storedAdaptiveEvidence(
+            sessions: adaptiveSessions,
+            setEntries: adaptiveSetEntries,
+            plans: generatedPlans,
+            overrides: overrides,
+            exercises: exercises
+        )
+        let windows = Dictionary(uniqueKeysWithValues: program.muscleRules.map {
+            ($0.muscle, $0.rollingWindowDays)
+        })
+        let ledger = TrainingLoadLedgerService.build(
+            evidence: rotationEvidence + adaptiveEvidence,
+            asOf: tomorrow,
+            rollingWindowDays: windows
+        )
+        let target = min(
+            AdaptiveProgramService.defaultComplexCount(
+                for: program,
+                preferences: workoutSizePreferences
+            ),
+            enabledMuscles(in: program).count
+        )
+        return AdaptiveForecastService.expectedProposal(
+            program: program,
+            exercises: exercises,
+            ledger: ledger,
+            targetComplexCount: max(1, target),
+            exerciseSelections: AdaptiveExerciseSelectionService.recommendations(
+                exercises: exercises,
+                preferences: exerciseSelectionPreferences,
+                rotationSessions: rotationSessions,
+                rotationSetEntries: rotationSetEntries,
+                adaptiveSessions: adaptiveSessions,
+                adaptiveSetEntries: adaptiveSetEntries
+            ),
+            asOf: tomorrow
         )
     }
 

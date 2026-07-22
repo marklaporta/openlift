@@ -3,7 +3,7 @@ import SwiftData
 
 struct RootTabView: View {
     private enum Tab: Hashable {
-        case log, workout, history, cycle, `import`
+        case log, workout, history, cycle
     }
 
     @Environment(\.scenePhase) private var scenePhase
@@ -36,11 +36,6 @@ struct RootTabView: View {
                 }
                 .tag(Tab.cycle)
 
-            ImportView()
-                .tabItem {
-                    Label("Import", systemImage: "square.and.arrow.down")
-                }
-                .tag(Tab.import)
         }
         .task {
             _ = try? BootstrapDataService.ensureExerciseCatalog(modelContext: modelContext)

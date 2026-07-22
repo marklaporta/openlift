@@ -10,10 +10,12 @@ struct HistoryView: View {
     @Query private var setEntries: [SetEntry]
     @Query private var exercises: [Exercise]
     @Query(sort: \AdaptiveWorkoutSession.createdAt, order: .reverse) private var adaptiveSessions: [AdaptiveWorkoutSession]
+    @Query private var adaptiveSetEntries: [AdaptiveSetEntry]
     @Query private var generatedPlans: [GeneratedWorkoutPlan]
     @State private var exportedSessions: [ExportedSessionSummary] = []
     @State private var showingManualWorkout = false
     @State private var manualWorkoutError: String?
+    @State private var searchText = ""
 
     private var completedSessions: [Session] {
         let candidates = sessions.filter {
@@ -49,10 +51,58 @@ struct HistoryView: View {
         exercises.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    private var hasSearchQuery: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var exerciseSearchResults: [HistoryExerciseOccurrence] {
+        var results = HistoryExerciseSearchService.results(
+            query: searchText,
+            sessions: completedSessions,
+            setEntries: setEntries,
+            adaptiveSessions: completedAdaptiveSessions,
+            adaptiveSetEntries: adaptiveSetEntries,
+            exercises: exercises
+        )
+        let knownSessionIds = Set(completedSessions.map { $0.id.uuidString })
+            .union(completedAdaptiveSessions.map { $0.id.uuidString })
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        for exported in exportedSessions where !knownSessionIds.contains(exported.id) {
+            for exercise in exported.exercises where
+                exercise.exercise_name.localizedCaseInsensitiveContains(query) {
+                results.append(
+                    HistoryExerciseOccurrence(
+                        id: "exported-\(exported.id)-\(exercise.exercise_name)",
+                        date: exported.date,
+                        exerciseName: exercise.exercise_name,
+                        workoutName: exported.cycleName,
+                        sets: exercise.sets.sorted { $0.set_index < $1.set_index }.map {
+                            HistoryExerciseSet(weight: $0.weight, reps: $0.reps)
+                        }
+                    )
+                )
+            }
+        }
+        return results.sorted {
+            if $0.date != $1.date { return $0.date > $1.date }
+            return $0.id < $1.id
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                if completedSessions.isEmpty && completedAdaptiveSessions.isEmpty {
+                if hasSearchQuery {
+                    if exerciseSearchResults.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
+                    } else {
+                        Section("Exercise History") {
+                            ForEach(exerciseSearchResults) { occurrence in
+                                HistoryExerciseOccurrenceView(occurrence: occurrence)
+                            }
+                        }
+                    }
+                } else if completedSessions.isEmpty && completedAdaptiveSessions.isEmpty {
                     if exportedSessions.isEmpty {
                         ContentUnavailableView(
                             "No Completed Sessions",
@@ -104,6 +154,7 @@ struct HistoryView: View {
                 }
             }
             .navigationTitle("History")
+            .searchable(text: $searchText, prompt: "Search exercises")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -235,6 +286,124 @@ struct HistoryView: View {
             try? modelContext.save()
             throw error
         }
+    }
+}
+
+struct HistoryExerciseSet: Equatable {
+    let weight: Double
+    let reps: Int
+}
+
+struct HistoryExerciseOccurrence: Identifiable, Equatable {
+    let id: String
+    let date: Date
+    let exerciseName: String
+    let workoutName: String
+    let sets: [HistoryExerciseSet]
+}
+
+enum HistoryExerciseSearchService {
+    static func results(
+        query: String,
+        sessions: [Session],
+        setEntries: [SetEntry],
+        adaptiveSessions: [AdaptiveWorkoutSession],
+        adaptiveSetEntries: [AdaptiveSetEntry],
+        exercises: [Exercise]
+    ) -> [HistoryExerciseOccurrence] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        let matchingExercises = exercises.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+        }
+        let matchingIds = Set(matchingExercises.map(\.id))
+        let namesById = Dictionary(uniqueKeysWithValues: matchingExercises.map { ($0.id, $0.name) })
+        var results: [HistoryExerciseOccurrence] = []
+
+        for session in sessions where session.status == .completed {
+            let rowsByExercise = Dictionary(grouping: setEntries.filter {
+                $0.sessionId == session.id
+                    && matchingIds.contains($0.exerciseId)
+                    && $0.isLocked
+                    && $0.reps > 0
+            }, by: \.exerciseId)
+            for (exerciseId, rows) in rowsByExercise {
+                guard let name = namesById[exerciseId] else { continue }
+                results.append(
+                    HistoryExerciseOccurrence(
+                        id: "fixed-\(session.id.uuidString)-\(exerciseId.uuidString)",
+                        date: session.finishedAt ?? session.createdAt,
+                        exerciseName: name,
+                        workoutName: session.cycleNameSnapshot ?? session.dayLabelSnapshot ?? "Rotation",
+                        sets: rows.sorted { $0.setIndex < $1.setIndex }.map {
+                            HistoryExerciseSet(weight: $0.weight, reps: $0.reps)
+                        }
+                    )
+                )
+            }
+        }
+
+        for session in adaptiveSessions where session.status == .completed {
+            let rowsByExercise = Dictionary(grouping: adaptiveSetEntries.filter {
+                $0.adaptiveSessionId == session.id
+                    && matchingIds.contains($0.exerciseId)
+                    && $0.isLocked
+                    && $0.reps > 0
+            }, by: \.exerciseId)
+            for (exerciseId, rows) in rowsByExercise {
+                guard let name = namesById[exerciseId] else { continue }
+                results.append(
+                    HistoryExerciseOccurrence(
+                        id: "adaptive-\(session.id.uuidString)-\(exerciseId.uuidString)",
+                        date: session.finishedAt ?? session.createdAt,
+                        exerciseName: name,
+                        workoutName: "Adaptive Floating",
+                        sets: rows.sorted {
+                            if $0.occurrenceId != $1.occurrenceId {
+                                return $0.occurrenceId.uuidString < $1.occurrenceId.uuidString
+                            }
+                            return $0.setIndex < $1.setIndex
+                        }.map {
+                            HistoryExerciseSet(weight: $0.weight, reps: $0.reps)
+                        }
+                    )
+                )
+            }
+        }
+
+        return results.sorted {
+            if $0.date != $1.date { return $0.date > $1.date }
+            return $0.id < $1.id
+        }
+    }
+}
+
+private struct HistoryExerciseOccurrenceView: View {
+    let occurrence: HistoryExerciseOccurrence
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(occurrence.exerciseName)
+                    .font(.headline)
+                Spacer()
+                Text(occurrence.date, style: .date)
+                    .font(.subheadline)
+            }
+            Text(occurrence.workoutName)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(Array(occurrence.sets.enumerated()), id: \.offset) { index, set in
+                HStack {
+                    Text("Set \(index + 1)")
+                    Spacer()
+                    Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) × \(set.reps)")
+                        .monospacedDigit()
+                }
+                .font(.subheadline)
+            }
+        }
+        .padding(.vertical, 3)
     }
 }
 

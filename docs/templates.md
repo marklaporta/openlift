@@ -32,6 +32,9 @@ Published templates are JSON files discovered from:
 
 The app can import them from the Cycle tab.
 
+There is no separate Import tab. After placing a cycle JSON in this folder,
+open Cycle, tap Refresh, then choose Import or Import + Activate.
+
 Minimal shape:
 
 ```json

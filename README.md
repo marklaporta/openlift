@@ -71,6 +71,8 @@ That file is ignored by git. Start from:
 - Completed workouts export to `OpenLift/exports`.
 - Draft snapshots export to `OpenLift/exports/drafts`.
 - Published cycle JSON files are discovered from `OpenLift/cycles`.
+- History can be searched by exercise name for a newest-first set timeline.
+- Cycle and workout JSON import instructions live in the linked template and data documentation; there is no Import tab.
 
 ## For LLM Agents
 

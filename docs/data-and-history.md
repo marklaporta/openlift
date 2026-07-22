@@ -21,6 +21,11 @@ Core models live in [`Models.swift`](../Sources/Models.swift):
 
 The History tab primarily shows completed `Session` records plus their locked `SetEntry` values.
 
+History is searchable by exercise name. Search results combine Rotation, ad hoc,
+and Adaptive completed work into a newest-first timeline showing the workout
+date and every completed set's weight and reps. Incomplete or unlocked Adaptive
+rows are excluded.
+
 Ad hoc logging remains available in either training mode. Completed locked ad
 hoc sets will be load/recovery evidence for Adaptive planning, but they are not
 automatically same-complex performance evidence. Drafts and unlocked sets do
@@ -81,6 +86,34 @@ Bootstrap and recovery logic live in:
 
 - [`BootstrapDataService.swift`](../Sources/BootstrapDataService.swift)
 - [`WorkoutView.swift`](../Sources/WorkoutView.swift)
+
+## Importing Workout JSON
+
+There is no dedicated Import tab. To supply an off-schedule workout or recovery
+file, place its JSON in `iCloud Drive/OpenLift/exports`. OpenLift's normal
+bootstrap/recovery path deduplicates it by `session_id` and adds a missing
+completed history session without advancing the active cycle.
+
+Minimal off-schedule shape:
+
+```json
+{
+  "date": "2026-05-03T21:22:07Z",
+  "exercises": [
+    {
+      "exercise_name": "Incline Dumbbell Press",
+      "sets": [
+        { "weight": 75, "reps": 10 },
+        { "weight": 75, "reps": 9 }
+      ]
+    }
+  ]
+}
+```
+
+Optional fields are `session_id`, `cycle_name`, `cycle_day_index`, `muscle`, and
+`set_index`. When `session_id` is absent, OpenLift derives a stable identifier
+from the filename. Exercise names must match the local exercise catalog.
 
 ## Safe Ways To Change History
 

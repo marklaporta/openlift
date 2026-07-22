@@ -1405,4 +1405,101 @@ final class OpenLiftStateResolverTests: XCTestCase {
             .success
         )
     }
+
+    func testExerciseHistorySearchCombinesFixedAndAdaptiveWorkNewestFirst() {
+        let exercise = Exercise(
+            name: "Incline Dumbbell Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        let olderDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let newerDate = olderDate.addingTimeInterval(86_400)
+        let fixed = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            cycleNameSnapshot: "Upper A",
+            dayLabelSnapshot: "Day 1",
+            createdAt: olderDate.addingTimeInterval(-600),
+            finishedAt: olderDate,
+            status: .completed
+        )
+        let fixedRows = [
+            SetEntry(sessionId: fixed.id, exerciseId: exercise.id, setIndex: 1, weight: 70, reps: 10, isLocked: true),
+            SetEntry(sessionId: fixed.id, exerciseId: exercise.id, setIndex: 2, weight: 70, reps: 9, isLocked: true)
+        ]
+        let adaptive = AdaptiveWorkoutSession(
+            generatedPlanId: UUID(),
+            createdAt: newerDate.addingTimeInterval(-600),
+            finishedAt: newerDate,
+            status: .completed
+        )
+        let adaptiveRows = [
+            AdaptiveSetEntry(
+                adaptiveSessionId: adaptive.id,
+                occurrenceId: UUID(),
+                exerciseId: exercise.id,
+                setIndex: 1,
+                weight: 75,
+                reps: 8,
+                isLocked: true
+            )
+        ]
+
+        let results = HistoryExerciseSearchService.results(
+            query: "dumbbell press",
+            sessions: [fixed],
+            setEntries: fixedRows,
+            adaptiveSessions: [adaptive],
+            adaptiveSetEntries: adaptiveRows,
+            exercises: [exercise]
+        )
+
+        XCTAssertEqual(results.map(\.date), [newerDate, olderDate])
+        XCTAssertEqual(results.map(\.workoutName), ["Adaptive Floating", "Upper A"])
+        XCTAssertEqual(results[0].sets, [HistoryExerciseSet(weight: 75, reps: 8)])
+        XCTAssertEqual(
+            results[1].sets,
+            [HistoryExerciseSet(weight: 70, reps: 10), HistoryExerciseSet(weight: 70, reps: 9)]
+        )
+    }
+
+    func testExerciseHistorySearchExcludesDraftUnlockedAndZeroRepRows() {
+        let exercise = Exercise(
+            name: "Cable Lateral Raise",
+            primaryMuscle: .sideDelts,
+            type: .isolation,
+            equipment: .cable
+        )
+        let completed = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            finishedAt: Date(timeIntervalSince1970: 1_700_000_600),
+            status: .completed
+        )
+        let draft = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 1,
+            status: .draft
+        )
+        let rows = [
+            SetEntry(sessionId: completed.id, exerciseId: exercise.id, setIndex: 1, weight: 20, reps: 12, isLocked: true),
+            SetEntry(sessionId: completed.id, exerciseId: exercise.id, setIndex: 2, weight: 20, reps: 10, isLocked: false),
+            SetEntry(sessionId: completed.id, exerciseId: exercise.id, setIndex: 3, weight: 20, reps: 0, isLocked: true),
+            SetEntry(sessionId: draft.id, exerciseId: exercise.id, setIndex: 1, weight: 25, reps: 8, isLocked: true)
+        ]
+
+        let results = HistoryExerciseSearchService.results(
+            query: "LATERAL",
+            sessions: [draft, completed],
+            setEntries: rows,
+            adaptiveSessions: [],
+            adaptiveSetEntries: [],
+            exercises: [exercise]
+        )
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].sets, [HistoryExerciseSet(weight: 20, reps: 12)])
+    }
 }
