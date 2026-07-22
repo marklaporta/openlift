@@ -41,8 +41,8 @@
   <text x="196" y="638" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#FFFDF9">Import + Activate</text>
 
   <rect x="28" y="750" width="334" height="52" rx="18" fill="#1E2A24"/>
-  <text x="78" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#B8C4BD">Workout</text>
-  <text x="161" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#B8C4BD">History</text>
-  <text x="244" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#FFFDF9">Cycle</text>
-  <text x="327" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#B8C4BD">Import</text>
+  <text x="78" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#B8C4BD">Log</text>
+  <text x="161" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#B8C4BD">Workout</text>
+  <text x="244" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#B8C4BD">History</text>
+  <text x="327" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#FFFDF9">Cycle</text>
 </svg>

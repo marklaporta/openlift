@@ -666,6 +666,46 @@ enum AdaptivePlanService {
     }
 }
 
+/// A non-persistent look ahead through the same canonical planner used for the
+/// real workout. The only forecast assumption is recovered readiness; actual
+/// next-day answers remain authoritative.
+enum AdaptiveForecastService {
+    static func expectedProposal(
+        program: AdaptiveProgram,
+        exercises: [Exercise],
+        ledger: TrainingLoadLedger,
+        targetComplexCount: Int,
+        exerciseSelections: [AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation] = [:],
+        asOf date: Date,
+        calendar: Calendar = .current
+    ) -> AdaptivePlanProposal? {
+        let readiness = Dictionary(uniqueKeysWithValues: program.muscleRules
+            .filter(\.isEnabled)
+            .map {
+                (
+                    $0.muscle,
+                    MuscleReadinessInput(
+                        soreness: .none,
+                        connectiveTissuePain: .none,
+                        eagerness: .eager
+                    )
+                )
+            })
+        let result = AdaptivePlanService.generate(
+            program: program,
+            exercises: exercises,
+            readiness: readiness,
+            ledger: ledger,
+            targetComplexCount: targetComplexCount,
+            exerciseSelections: exerciseSelections,
+            now: date,
+            calendar: calendar
+        )
+        guard case .proposal(let proposal) = result else { return nil }
+        return proposal
+    }
+}
+
 enum AdaptiveDoseEvidenceService {
     static func recommendations(
         program: AdaptiveProgram,

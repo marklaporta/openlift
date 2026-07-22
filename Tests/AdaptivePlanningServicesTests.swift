@@ -128,6 +128,46 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(unwrapProposal(result).complexes.map(\.primaryMuscle), [.chest])
     }
 
+    func testTomorrowForecastUsesRecoveredReadinessButStillHonorsObservationWindow() {
+        let chest = exercise("Chest Press", muscle: .chest)
+        let back = exercise("Cable Row", muscle: .back)
+        let shoulders = exercise("Lateral Raise", muscle: .sideDelts, type: .isolation)
+        let program = makeProgram(
+            movements: 2,
+            difficulty: 20,
+            enabled: [.chest, .back, .sideDelts],
+            complexes: [
+                makeComplex(id: uuid(850), position: 0, primary: .chest, components: [component(chest)]),
+                makeComplex(id: uuid(851), position: 1, primary: .back, components: [component(back)]),
+                makeComplex(id: uuid(852), position: 2, primary: .sideDelts, components: [component(shoulders)])
+            ]
+        )
+        let ledger = TrainingLoadLedger(byMuscle: [
+            .chest: MuscleLoadSummary(
+                lockedSetCount: 2,
+                lastProductiveExposureAt: now,
+                lastDirectProductiveExposureAt: now
+            ),
+            .sideDelts: MuscleLoadSummary(
+                lockedSetCount: 2,
+                lastProductiveExposureAt: now,
+                lastDirectProductiveExposureAt: now
+            )
+        ])
+        let tomorrow = utcCalendar.date(byAdding: .day, value: 1, to: now)!
+
+        let prediction = AdaptiveForecastService.expectedProposal(
+            program: program,
+            exercises: [chest, back, shoulders],
+            ledger: ledger,
+            targetComplexCount: 2,
+            asOf: tomorrow,
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(prediction?.complexes.map(\.primaryMuscle), [.back, .sideDelts])
+    }
+
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     func testLedgerCountsOnlyCompletedLockedSetsAndIncludesAdHocAndSecondaryLoad() {

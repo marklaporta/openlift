@@ -19,11 +19,11 @@ Resources/        reference exercise notes
 |---|---|
 | `OpenLiftApp.swift` | App entry; SwiftData container init with resilient in-memory fallback |
 | `Models.swift` | All SwiftData models and supporting enums |
-| `RootTabView.swift` | Four-tab navigation root (Workout / History / Cycle / Import) |
+| `RootTabView.swift` | Four-tab navigation root (Log / Workout / History / Cycle) |
 | `WorkoutView.swift` | Draft session, set entry, prefill, workout completion, draft export |
 | `HistoryView.swift` | Completed session display, deduplication, export recovery |
 | `CycleView.swift` | Template listing, editing, cloning, activation, published import |
-| `ImportView.swift` | Instructional UI for adding published cycles via iCloud |
+| `ImportView.swift` | Legacy, non-tab import UI retained while import guidance lives in `docs/` |
 | `OpenLiftStateResolver.swift` | Centralised active-template / cycle / draft selection logic |
 | `OpenLiftValidator.swift` | Model validation for all SwiftData types |
 | `CycleOrdering.swift` | Day/slot ordering by position, with legacy label-based fallback |

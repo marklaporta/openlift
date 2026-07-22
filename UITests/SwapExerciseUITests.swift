@@ -125,6 +125,7 @@ final class SwapExerciseUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.tabBars.buttons["Cycle"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.tabBars.buttons["Import"].exists)
         app.tabBars.buttons["Cycle"].tap()
         dismissExpectedICloudCycleAlertIfPresent(in: app)
 
@@ -313,12 +314,27 @@ final class SwapExerciseUITests: XCTestCase {
         let finish = app.buttons["adaptive.finishWorkout"]
         scrollToElement(finish, in: app)
         finish.tap()
+        let finishConfirmation = app.buttons["Finish Workout"]
+        XCTAssertTrue(finishConfirmation.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Adaptive Workout Complete"].exists)
+        app.buttons["Keep Editing"].tap()
+        XCTAssertTrue(finish.waitForExistence(timeout: 5))
+
+        finish.tap()
+        XCTAssertTrue(finishConfirmation.waitForExistence(timeout: 5))
+        finishConfirmation.tap()
         XCTAssertTrue(app.staticTexts["Adaptive Workout Complete"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["adaptive.tomorrowPrediction"].waitForExistence(timeout: 5))
 
         app.tabBars.buttons["History"].tap()
         XCTAssertTrue(app.staticTexts["Adaptive Workouts"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Adaptive Floating"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Adaptive"].waitForExistence(timeout: 5))
+        let historySearch = app.searchFields["Search exercises"]
+        XCTAssertTrue(historySearch.waitForExistence(timeout: 5))
+        historySearch.tap()
+        historySearch.typeText("Incline Curl")
+        XCTAssertTrue(app.staticTexts["Incline Curl"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["60 × 10"].waitForExistence(timeout: 5))
     }
 
     func testAdaptiveProposalUsesHistoryForNextDoseAndPrefill() throws {
