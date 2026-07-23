@@ -331,6 +331,59 @@ enum AdaptiveProgramService {
         return changed
     }
 
+    /// Applies a targeted equipment-eligibility correction without replacing
+    /// the active profile. Keeping the profile identity stable preserves links
+    /// from today's completed plan and all historical snapshots.
+    @discardableResult
+    static func disableMuscleProgramming(
+        _ muscle: MuscleGroup,
+        modelContext: ModelContext
+    ) throws -> Int {
+        let programs = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
+        guard let program = activeProgram(from: programs) else { return 0 }
+        var changed = 0
+
+        if let rule = program.muscleRules.first(where: { $0.muscle == muscle }) {
+            if rule.isEnabled {
+                rule.isEnabled = false
+                changed += 1
+            }
+            if rule.priorityRank != 0 {
+                rule.priorityRank = 0
+                changed += 1
+            }
+            if rule.rollingSetFloor != 0 {
+                rule.rollingSetFloor = 0
+                changed += 1
+            }
+        }
+
+        for complex in program.complexes where complex.isEnabled {
+            let includesMuscle = complex.primaryMuscle == muscle
+                || complex.components.contains { $0.primaryMuscle == muscle }
+            if includesMuscle {
+                complex.isEnabled = false
+                changed += 1
+            }
+        }
+
+        let enabledRules = program.muscleRules
+            .filter(\.isEnabled)
+            .sorted {
+                if $0.priorityRank != $1.priorityRank {
+                    return $0.priorityRank < $1.priorityRank
+                }
+                return $0.muscle.rawValue < $1.muscle.rawValue
+            }
+        for (offset, rule) in enabledRules.enumerated() where rule.priorityRank != offset + 1 {
+            rule.priorityRank = offset + 1
+            changed += 1
+        }
+
+        if changed > 0 { try modelContext.save() }
+        return changed
+    }
+
     static func demoDraft(exercises: [Exercise]) -> AdaptiveProgramDraft {
         var draft = AdaptiveProgramDraft.blank
         draft.name = "Adaptive Starter — Review Required"

@@ -46,6 +46,17 @@ struct RootTabView: View {
             _ = try? AdaptiveProgramService.normalizeOpenPlanExerciseCategories(
                 modelContext: modelContext
             )
+            if AppRuntime.shouldDisableGluteProgramming {
+                do {
+                    let changed = try AdaptiveProgramService.disableMuscleProgramming(
+                        .glutes,
+                        modelContext: modelContext
+                    )
+                    print("OPENLIFT_DISABLE_GLUTE_PROGRAMMING_RESULT changes=\(changed)")
+                } catch {
+                    print("OPENLIFT_DISABLE_GLUTE_PROGRAMMING_FAILED")
+                }
+            }
             _ = try? AdaptiveExerciseSelectionPreferenceService.ensureRequestedDefaults(
                 modelContext: modelContext
             )

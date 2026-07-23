@@ -8,6 +8,9 @@ enum AppRuntime {
     static let shouldPrepareAdaptiveRollout = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_PREPARE_ADAPTIVE_ROLLOUT"
     )
+    static let shouldDisableGluteProgramming = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_DISABLE_GLUTE_PROGRAMMING"
+    )
     static let isAdaptiveWorkflowUITesting = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW"
     )

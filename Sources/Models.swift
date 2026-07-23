@@ -33,7 +33,6 @@ enum MuscleGroup: String, Codable, CaseIterable {
         .quads,
         .hamstrings,
         .forearms,
-        .glutes,
         .calves
     ]
 }
