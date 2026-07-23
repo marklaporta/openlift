@@ -296,15 +296,6 @@ struct AdaptiveWorkoutView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            Text("\(complexes.count) proposed exposure\(complexes.count == 1 ? "" : "s")")
-                .font(.subheadline)
-                .accessibilityValue(
-                    complexes
-                        .flatMap(\.exercises)
-                        .sorted { $0.position < $1.position }
-                        .map(\.exerciseName)
-                        .joined(separator: ", ")
-                )
             Button {
                 loadReadiness(from: plan)
                 isEditingReadiness = true
@@ -562,9 +553,6 @@ struct AdaptiveWorkoutView: View {
         if let program = activeProgram,
            let prediction = tomorrowPrediction(program: program) {
             Section {
-                Text("Assumes tomorrow's soreness, connective-tissue pain, and eagerness match normal recovery. Actual readiness can change the workout.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 ForEach(prediction.complexes, id: \.definitionId) { complex in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(complex.primaryMuscle.displayName)

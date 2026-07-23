@@ -15,17 +15,13 @@ struct CycleView: View {
     @Query private var setEntries: [SetEntry]
     @Query private var trainingPreferences: [TrainingPreference]
     @Query private var adaptivePrograms: [AdaptiveProgram]
-    @Query private var exerciseSelectionPreferences: [AdaptiveExerciseSelectionPreference]
     @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
 
     @State private var presentingNewTemplate = false
     @State private var editingTemplate: CycleTemplate?
     @State private var errorMessage: String?
-    @State private var pendingActivationTemplate: CycleTemplate?
-    @State private var showingActivationConfirmation = false
+    @State private var pendingMutation: PendingCycleMutation?
     @State private var publishedCycles: [PublishedCycleFile] = []
-    @State private var lastPublishedRefreshAt: Date?
-    @State private var lastPublishedCount: Int = 0
     @State private var refreshTimer = Timer.publish(every: 8, on: .main, in: .common).autoconnect()
     @State private var debugTapCount: Int = 0
     @State private var debugUnlocked: Bool = false
@@ -63,12 +59,6 @@ struct CycleView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-
-                    if trainingMode == .adaptive {
-                        Text("Adaptive Floating is selected. Your fixed-cycle draft and position remain saved.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 } header: {
                     Text("Training Mode")
                 }
@@ -86,14 +76,6 @@ struct CycleView: View {
                     }
                 } header: {
                     Text("Active Cycle")
-                } footer: {
-                    if debugUnlocked {
-                        Text("Debug tools unlocked")
-                            .font(.caption2)
-                    } else {
-                        Text(" ")
-                            .font(.caption2)
-                    }
                 }
                 .onTapGesture {
                     debugTapCount += 1
@@ -136,12 +118,12 @@ struct CycleView: View {
                                 .buttonStyle(.bordered)
 
                                 Button("Clone") {
-                                    clone(template: template)
+                                    pendingMutation = .clone(templateId: template.id, name: template.name)
                                 }
                                 .buttonStyle(.bordered)
 
                                 Button("Activate") {
-                                    requestActivation(of: template)
+                                    pendingMutation = .activate(templateId: template.id, name: template.name)
                                 }
                                 .buttonStyle(.borderedProminent)
                             }
@@ -152,14 +134,8 @@ struct CycleView: View {
                 }
 
                 Section("Published Cycles (iCloud)") {
-                    if let lastPublishedRefreshAt {
-                        Text("Last refresh: \(lastPublishedRefreshAt.formatted(date: .abbreviated, time: .standard)) • \(lastPublishedCount) file(s)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
                     if publishedCycles.isEmpty {
-                        Text("No published cycle files found in iCloud Drive/OpenLift/cycles")
+                        Text("No published cycles")
                             .foregroundStyle(.secondary)
                     }
 
@@ -175,12 +151,12 @@ struct CycleView: View {
 
                             HStack {
                                 Button("Import") {
-                                    importPublishedCycle(published, activateAfterImport: false)
+                                    pendingMutation = .importCycle(published, activateAfterImport: false)
                                 }
                                 .buttonStyle(.bordered)
 
                                 Button("Import + Activate") {
-                                    importPublishedCycle(published, activateAfterImport: true)
+                                    pendingMutation = .importCycle(published, activateAfterImport: true)
                                 }
                                 .buttonStyle(.borderedProminent)
                             }
@@ -257,23 +233,24 @@ struct CycleView: View {
             }, message: {
                 Text(errorMessage ?? "Unknown error")
             })
-            .confirmationDialog(
-                "Replace Active Cycle?",
-                isPresented: $showingActivationConfirmation,
-                titleVisibility: .visible
+            .alert(
+                pendingMutation?.title ?? "Confirm Change",
+                isPresented: Binding(
+                    get: { pendingMutation != nil },
+                    set: { if !$0 { pendingMutation = nil } }
+                )
             ) {
-                if let pendingActivationTemplate {
-                    Button("Activate \(pendingActivationTemplate.name)", role: .destructive) {
-                        activate(template: pendingActivationTemplate)
-                        self.pendingActivationTemplate = nil
+                if let pendingMutation {
+                    Button(pendingMutation.confirmationLabel, role: pendingMutation.role) {
+                        confirm(pendingMutation)
                     }
                 }
                 Button("Cancel", role: .cancel) {
-                    pendingActivationTemplate = nil
+                    pendingMutation = nil
                 }
             } message: {
-                if let activeTemplate {
-                    Text("This will replace '\(activeTemplate.name)' and discard its in-progress session state.")
+                if let pendingMutation {
+                    Text(pendingMutation.message)
                 }
             }
             .onReceive(refreshTimer) { _ in
@@ -287,19 +264,7 @@ struct CycleView: View {
                 }
             }
             .task {
-                do {
-                    let currentExercises = try ensureExerciseCatalog()
-                    if trainingMode == .rotation {
-                        _ = try BootstrapDataService.importPreferredPublishedTemplateIfNeeded(
-                            modelContext: modelContext,
-                            existingTemplates: templates,
-                            exercises: currentExercises
-                        )
-                        reloadPublishedCycles()
-                    }
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
+                if trainingMode == .rotation { reloadPublishedCycles() }
             }
         }
     }
@@ -308,15 +273,8 @@ struct CycleView: View {
         Binding(
             get: { trainingMode },
             set: { newMode in
-                do {
-                    _ = try TrainingModeService.setMode(
-                        newMode,
-                        preferences: trainingPreferences,
-                        modelContext: modelContext
-                    )
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
+                guard newMode != trainingMode else { return }
+                pendingMutation = .switchMode(newMode)
             }
         )
     }
@@ -336,12 +294,11 @@ struct CycleView: View {
                     )
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Label(
-                        program.isReviewedForUse ? "Reviewed for use" : "Review required before real use",
-                        systemImage: program.isReviewedForUse ? "checkmark.seal" : "exclamationmark.triangle"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(program.isReviewedForUse ? .green : .orange)
+                    if !program.isReviewedForUse {
+                        Label("Review required", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
 
                 Button("Edit Profile and Complexes") {
@@ -349,8 +306,6 @@ struct CycleView: View {
                 }
                 .accessibilityIdentifier("adaptive.editProfile")
             } else {
-                Text("Create an Adaptive profile to generate workouts from readiness.")
-                    .foregroundStyle(.secondary)
                 Button("Create Adaptive Profile") {
                     presentingNewAdaptiveProgram = true
                 }
@@ -360,42 +315,12 @@ struct CycleView: View {
         }
 
         Section("Exercise Selection") {
-            Text("Choose how each muscle reuses exercises and which equipment is available.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            ForEach([MuscleGroup.chest, .quads, .hamstrings], id: \.self) { muscle in
-                if let preference = exerciseSelectionPreferences.first(where: { $0.muscle == muscle }) {
-                    HStack {
-                        Text(muscle.displayName)
-                        Spacer()
-                        Text(preference.mode.displayName)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
             Button("Exercise Selection & Equipment") {
                 presentingExerciseSelection = true
             }
             .accessibilityIdentifier("adaptive.exerciseSelection")
         }
 
-        if let program = activeAdaptiveProgram {
-            Section("Enabled Complexes") {
-                let enabled = program.complexes.filter(\.isEnabled).sorted { $0.position < $1.position }
-                if enabled.isEmpty {
-                    Text("No enabled complexes")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(enabled, id: \.id) { complex in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(complex.name)
-                        Text("\(complex.primaryMuscle.displayName) · \(complex.components.count) movement(s)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
     }
 
     private func ensureExerciseCatalog() throws -> [Exercise] {
@@ -405,8 +330,6 @@ struct CycleView: View {
     private func reloadPublishedCycles() {
         do {
             publishedCycles = try PublishedCycleService.listPublishedCycles()
-            lastPublishedCount = publishedCycles.count
-            lastPublishedRefreshAt = .now
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -419,6 +342,10 @@ struct CycleView: View {
 
             let draft = try PublishedCycleService.parseTemplate(at: published.url, exercises: currentExercises)
             if let existing = templates.first(where: { $0.name.caseInsensitiveCompare(draft.name) == .orderedSame }) {
+                if !activateAfterImport, existing.id == activeTemplate?.id {
+                    errorMessage = "This cycle is active. Use Import + Activate to replace it."
+                    return
+                }
                 let oldDays = existing.days
                 let oldPools = existing.rotationPools
 
@@ -429,55 +356,24 @@ struct CycleView: View {
                 for day in oldDays { modelContext.delete(day) }
                 for pool in oldPools { modelContext.delete(pool) }
 
-                try modelContext.save()
-
                 if activateAfterImport {
-                    requestActivation(of: existing)
+                    activate(template: existing)
+                } else {
+                    try modelContext.save()
                 }
             } else {
                 let template = CycleTemplate(name: draft.name, days: draft.days, rotationPools: draft.rotationPools)
                 modelContext.insert(template)
-                try modelContext.save()
-
                 if activateAfterImport {
-                    requestActivation(of: template)
+                    activate(template: template)
+                } else {
+                    try modelContext.save()
                 }
             }
         } catch {
+            modelContext.rollback()
             errorMessage = error.localizedDescription
         }
-    }
-
-    private func requestActivation(of template: CycleTemplate) {
-        if shouldConfirmActivation(of: template) {
-            pendingActivationTemplate = template
-            showingActivationConfirmation = true
-            return
-        }
-        activate(template: template)
-    }
-
-    private func shouldConfirmActivation(of template: CycleTemplate) -> Bool {
-        let activeCycle = OpenLiftStateResolver.activeCycle(
-            activeCycles: activeCycles,
-            templates: templates,
-            sessions: sessions,
-            latestExport: nil,
-            preferredTemplateId: UserDefaults.standard.string(forKey: "openlift.lastActivatedTemplateId")
-                .flatMap(UUID.init(uuidString:))
-        )
-        return shouldConfirmActivation(
-            activeTemplateId: activeCycle?.templateId,
-            requestedTemplateId: template.id
-        )
-    }
-
-    fileprivate func shouldConfirmActivation(
-        activeTemplateId: UUID?,
-        requestedTemplateId: UUID
-    ) -> Bool {
-        guard let activeTemplateId else { return false }
-        return activeTemplateId != requestedTemplateId
     }
 
     private func activate(template: CycleTemplate) {
@@ -500,11 +396,11 @@ struct CycleView: View {
             let cycle = ActiveCycleInstance(templateId: template.id, currentDayIndex: 0, rotationIndices: rotationIndices)
             try cycle.validate(template: template)
             modelContext.insert(cycle)
+            try modelContext.save()
             UserDefaults.standard.set(template.id.uuidString, forKey: "openlift.lastActivatedTemplateId")
             UserDefaults.standard.set(template.name, forKey: "openlift.lastActivatedTemplateName")
-
-            try modelContext.save()
         } catch {
+            modelContext.rollback()
             errorMessage = error.localizedDescription
         }
     }
@@ -530,24 +426,124 @@ struct CycleView: View {
         do {
             try modelContext.save()
         } catch {
+            modelContext.rollback()
             errorMessage = error.localizedDescription
         }
     }
 
     private func deleteTemplates(at offsets: IndexSet) {
-        for index in offsets {
-            let template = templates[index]
-            if activeTemplate?.id == template.id {
-                errorMessage = "Cannot delete the active template. Activate another template first."
-                continue
-            }
-            modelContext.delete(template)
+        let requested = offsets.compactMap { templates.indices.contains($0) ? templates[$0] : nil }
+        guard !requested.isEmpty else { return }
+        if requested.contains(where: { $0.id == activeTemplate?.id }) {
+            errorMessage = "Cannot delete the active template. Activate another template first."
+            return
         }
+        pendingMutation = .deleteTemplates(
+            ids: requested.map(\.id),
+            names: requested.map(\.name)
+        )
+    }
 
-        do {
-            try modelContext.save()
-        } catch {
-            errorMessage = error.localizedDescription
+    private func confirm(_ mutation: PendingCycleMutation) {
+        pendingMutation = nil
+        switch mutation {
+        case .switchMode(let mode):
+            do {
+                _ = try TrainingModeService.setMode(
+                    mode,
+                    preferences: trainingPreferences,
+                    modelContext: modelContext
+                )
+            } catch {
+                modelContext.rollback()
+                errorMessage = error.localizedDescription
+            }
+        case .activate(let templateId, _):
+            guard let template = templates.first(where: { $0.id == templateId }) else { return }
+            activate(template: template)
+        case .clone(let templateId, _):
+            guard let template = templates.first(where: { $0.id == templateId }) else { return }
+            clone(template: template)
+        case .importCycle(let published, let activateAfterImport):
+            importPublishedCycle(published, activateAfterImport: activateAfterImport)
+        case .deleteTemplates(let ids, _):
+            let requestedIds = Set(ids)
+            for template in templates where requestedIds.contains(template.id) {
+                modelContext.delete(template)
+            }
+            do {
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+private enum PendingCycleMutation {
+    case switchMode(TrainingMode)
+    case activate(templateId: UUID, name: String)
+    case clone(templateId: UUID, name: String)
+    case importCycle(PublishedCycleFile, activateAfterImport: Bool)
+    case deleteTemplates(ids: [UUID], names: [String])
+
+    var title: String {
+        switch self {
+        case .switchMode:
+            return "Change Training Mode?"
+        case .activate:
+            return "Reset Fixed Cycle?"
+        case .clone:
+            return "Clone Template?"
+        case .importCycle(_, let activateAfterImport):
+            return activateAfterImport ? "Import and Activate?" : "Import Cycle?"
+        case .deleteTemplates:
+            return "Delete Template?"
+        }
+    }
+
+    var confirmationLabel: String {
+        switch self {
+        case .switchMode(let mode):
+            return "Use \(mode.displayName)"
+        case .activate(_, let name):
+            return "Activate \(name)"
+        case .clone:
+            return "Create Copy"
+        case .importCycle(_, let activateAfterImport):
+            return activateAfterImport ? "Import and Activate" : "Import"
+        case .deleteTemplates(_, let names):
+            return names.count == 1 ? "Delete \(names[0])" : "Delete \(names.count) Templates"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .switchMode(let mode):
+            return "Workout will use \(mode.displayName). Progress in the other mode remains saved."
+        case .activate(_, let name):
+            return "\(name) will restart at day 1 and replace any in-progress Fixed Cycle draft."
+        case .clone(_, let name):
+            return "Creates \(name) Copy without activating it."
+        case .importCycle(let published, let activateAfterImport):
+            if activateAfterImport {
+                return "Imports \(published.name), restarts it at day 1, and replaces any in-progress Fixed Cycle draft."
+            }
+            return "Imports \(published.name). A same-named template will be replaced."
+        case .deleteTemplates(_, let names):
+            return names.count == 1
+                ? "Deletes \(names[0])."
+                : "Deletes \(names.count) templates."
+        }
+    }
+
+    var role: ButtonRole? {
+        switch self {
+        case .activate, .importCycle(_, true), .deleteTemplates:
+            return .destructive
+        default:
+            return nil
         }
     }
 }
@@ -558,16 +554,12 @@ private struct AdaptiveExerciseSelectionEditorView: View {
 
     @Query private var exercises: [Exercise]
     @Query private var preferences: [AdaptiveExerciseSelectionPreference]
+    @State private var drafts: [MuscleGroup: ExerciseSelectionDraft] = [:]
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Text("Configure one muscle at a time.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 ForEach(MuscleGroup.allCases, id: \.self) { muscle in
                     DisclosureGroup {
                         Picker("Selection policy", selection: modeBinding(for: muscle)) {
@@ -575,11 +567,11 @@ private struct AdaptiveExerciseSelectionEditorView: View {
                                 Text(mode.displayName).tag(mode)
                             }
                         }
-                        Text(selectionModeHelp(preference(for: muscle)?.mode ?? .repeatLast))
+                        Text(selectionModeHelp(draft(for: muscle).mode))
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        if preference(for: muscle)?.mode == .pinned {
+                        if draft(for: muscle).mode == .pinned {
                             Picker("Foundation exercise", selection: pinnedBinding(for: muscle)) {
                                 Text("Choose exercise").tag(Optional<UUID>.none)
                                 ForEach(compoundExercises(for: muscle), id: \.id) { exercise in
@@ -592,7 +584,7 @@ private struct AdaptiveExerciseSelectionEditorView: View {
                                 Toggle(isOn: eligibilityBinding(exercise: exercise, muscle: muscle)) {
                                     exerciseAvailabilityLabel(exercise)
                                 }
-                                .disabled(preference(for: muscle)?.pinnedExerciseId == exercise.id)
+                                .disabled(draft(for: muscle).pinnedExerciseId == exercise.id)
                             }
                         } else {
                             Text("Available with current equipment")
@@ -607,7 +599,7 @@ private struct AdaptiveExerciseSelectionEditorView: View {
                         HStack {
                             Text(muscle.displayName)
                             Spacer()
-                            Text(preference(for: muscle)?.mode.displayName ?? "Repeat latest")
+                            Text(draft(for: muscle).mode.displayName)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -617,14 +609,26 @@ private struct AdaptiveExerciseSelectionEditorView: View {
             .navigationTitle("Exercise Selection")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Save") { save() }
                 }
             }
-            .task {
-                _ = try? AdaptiveExerciseSelectionPreferenceService.ensureRequestedDefaults(
-                    modelContext: modelContext
+            .onAppear {
+                if drafts.isEmpty { loadDrafts() }
+            }
+            .alert(
+                "Cannot Save Exercise Selection",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
                 )
+            ) {
+                Button("OK") { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "Unknown error")
             }
         }
     }
@@ -660,60 +664,116 @@ private struct AdaptiveExerciseSelectionEditorView: View {
         }
     }
 
-    private func ensurePreference(for muscle: MuscleGroup) -> AdaptiveExerciseSelectionPreference {
-        if let existing = preference(for: muscle) { return existing }
-        let created = AdaptiveExerciseSelectionPreference(muscle: muscle, mode: .repeatLast)
-        modelContext.insert(created)
-        return created
+    private func draft(for muscle: MuscleGroup) -> ExerciseSelectionDraft {
+        drafts[muscle] ?? ExerciseSelectionDraft(
+            mode: .repeatLast,
+            pinnedExerciseId: nil,
+            eligibleExerciseIds: Set(activeExercises(for: muscle).map(\.id))
+        )
     }
 
     private func modeBinding(for muscle: MuscleGroup) -> Binding<AdaptiveExerciseSelectionMode> {
         Binding(
-            get: { preference(for: muscle)?.mode ?? .repeatLast },
+            get: { draft(for: muscle).mode },
             set: { mode in
-                let preference = ensurePreference(for: muscle)
-                preference.mode = mode
-                if mode == .pinned, preference.pinnedExerciseId == nil {
-                    preference.pinnedExerciseId = compoundExercises(for: muscle).first?.id
+                var value = draft(for: muscle)
+                value.mode = mode
+                if mode == .pinned, value.pinnedExerciseId == nil {
+                    value.pinnedExerciseId = compoundExercises(for: muscle).first?.id
+                    if let pinnedExerciseId = value.pinnedExerciseId {
+                        value.eligibleExerciseIds.insert(pinnedExerciseId)
+                    }
                 }
-                try? modelContext.save()
+                drafts[muscle] = value
             }
         )
     }
 
     private func pinnedBinding(for muscle: MuscleGroup) -> Binding<UUID?> {
         Binding(
-            get: { preference(for: muscle)?.pinnedExerciseId },
+            get: { draft(for: muscle).pinnedExerciseId },
             set: { exerciseId in
-                let preference = ensurePreference(for: muscle)
-                preference.pinnedExerciseId = exerciseId
-                if let exerciseId, !preference.eligibleExerciseIds.contains(exerciseId) {
-                    preference.eligibleExerciseIds.append(exerciseId)
+                var value = draft(for: muscle)
+                value.pinnedExerciseId = exerciseId
+                if let exerciseId {
+                    value.eligibleExerciseIds.insert(exerciseId)
                 }
-                try? modelContext.save()
+                drafts[muscle] = value
             }
         )
     }
 
     private func eligibilityBinding(exercise: Exercise, muscle: MuscleGroup) -> Binding<Bool> {
         Binding(
-            get: { preference(for: muscle)?.eligibleExerciseIds.contains(exercise.id) == true },
+            get: { draft(for: muscle).eligibleExerciseIds.contains(exercise.id) },
             set: { isEligible in
-                let preference = ensurePreference(for: muscle)
-                if !isEligible, preference.mode == .pinned, preference.pinnedExerciseId == exercise.id {
+                var value = draft(for: muscle)
+                if !isEligible, value.mode == .pinned, value.pinnedExerciseId == exercise.id {
                     return
                 }
                 if isEligible {
-                    if !preference.eligibleExerciseIds.contains(exercise.id) {
-                        preference.eligibleExerciseIds.append(exercise.id)
-                    }
+                    value.eligibleExerciseIds.insert(exercise.id)
                 } else {
-                    preference.eligibleExerciseIds.removeAll { $0 == exercise.id }
+                    value.eligibleExerciseIds.remove(exercise.id)
                 }
-                try? modelContext.save()
+                drafts[muscle] = value
             }
         )
     }
+
+    private func loadDrafts() {
+        drafts = Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map { muscle in
+            if let preference = preference(for: muscle) {
+                return (
+                    muscle,
+                    ExerciseSelectionDraft(
+                        mode: preference.mode,
+                        pinnedExerciseId: preference.pinnedExerciseId,
+                        eligibleExerciseIds: Set(preference.eligibleExerciseIds)
+                    )
+                )
+            }
+            return (
+                muscle,
+                ExerciseSelectionDraft(
+                    mode: .repeatLast,
+                    pinnedExerciseId: nil,
+                    eligibleExerciseIds: Set(activeExercises(for: muscle).map(\.id))
+                )
+            )
+        })
+    }
+
+    private func save() {
+        do {
+            for muscle in MuscleGroup.allCases {
+                let value = draft(for: muscle)
+                let savedPreference: AdaptiveExerciseSelectionPreference
+                if let existing = preference(for: muscle) {
+                    savedPreference = existing
+                } else {
+                    savedPreference = AdaptiveExerciseSelectionPreference(muscle: muscle, mode: value.mode)
+                    modelContext.insert(savedPreference)
+                }
+                savedPreference.mode = value.mode
+                savedPreference.pinnedExerciseId = value.pinnedExerciseId
+                savedPreference.eligibleExerciseIds = value.eligibleExerciseIds.sorted {
+                    $0.uuidString < $1.uuidString
+                }
+            }
+            try modelContext.save()
+            dismiss()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct ExerciseSelectionDraft {
+    var mode: AdaptiveExerciseSelectionMode
+    var pinnedExerciseId: UUID?
+    var eligibleExerciseIds: Set<UUID>
 }
 
 private struct TemplateEditorView: View {
@@ -813,9 +873,6 @@ private struct TemplateEditorView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Text("Informational only")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -940,6 +997,7 @@ private struct TemplateEditorView: View {
             try modelContext.save()
             dismiss()
         } catch {
+            modelContext.rollback()
             errorMessage = error.localizedDescription
         }
     }

@@ -445,6 +445,7 @@ struct AdaptiveProgramEditorView: View {
             )
             dismiss()
         } catch {
+            modelContext.rollback()
             errorMessage = error.localizedDescription
         }
     }

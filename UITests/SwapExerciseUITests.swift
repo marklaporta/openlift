@@ -104,6 +104,15 @@ final class SwapExerciseUITests: XCTestCase {
         let adaptiveMode = app.buttons["Adaptive Floating"]
         XCTAssertTrue(adaptiveMode.waitForExistence(timeout: 5))
         adaptiveMode.tap()
+        XCTAssertTrue(app.buttons["Use Adaptive Floating"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Cancel"].firstMatch.tap()
+
+        app.tabBars.buttons["Workout"].tap()
+        XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
+
+        app.tabBars.buttons["Cycle"].tap()
+        dismissExpectedICloudCycleAlertIfPresent(in: app)
+        confirmTrainingMode("Adaptive Floating", in: app)
 
         app.tabBars.buttons["Workout"].tap()
         XCTAssertTrue(app.staticTexts["No Adaptive Profile"].waitForExistence(timeout: 5))
@@ -113,10 +122,38 @@ final class SwapExerciseUITests: XCTestCase {
         dismissExpectedICloudCycleAlertIfPresent(in: app)
         let fixedMode = app.buttons["Fixed Cycle"]
         XCTAssertTrue(fixedMode.waitForExistence(timeout: 5))
-        fixedMode.tap()
+        confirmTrainingMode("Fixed Cycle", in: app)
 
         app.tabBars.buttons["Workout"].tap()
         XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
+    }
+
+    func testCycleTemplateMutationsRequireConfirmation() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["OPENLIFT_UI_TESTING"]
+        app.launch()
+
+        app.tabBars.buttons["Cycle"].tap()
+        dismissExpectedICloudCycleAlertIfPresent(in: app)
+
+        let cloneButtons = app.buttons.matching(NSPredicate(format: "label == 'Clone'"))
+        XCTAssertGreaterThan(cloneButtons.count, 0)
+        let originalCloneCount = cloneButtons.count
+        cloneButtons.firstMatch.tap()
+        XCTAssertTrue(app.alerts["Clone Template?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Create Copy"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertEqual(
+            app.buttons.matching(NSPredicate(format: "label == 'Clone'")).count,
+            originalCloneCount
+        )
+
+        let activate = app.buttons["Activate"].firstMatch
+        XCTAssertTrue(activate.waitForExistence(timeout: 5))
+        activate.tap()
+        XCTAssertTrue(app.alerts["Reset Fixed Cycle?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Activate '")).firstMatch.exists)
+        app.buttons["Cancel"].tap()
     }
 
     func testAdaptiveCycleSurfaceOpensProfileEditorAndLoadsExplicitStarter() throws {
@@ -124,14 +161,15 @@ final class SwapExerciseUITests: XCTestCase {
         app.launchArguments += ["OPENLIFT_UI_TESTING"]
         app.launch()
 
+        XCTAssertTrue(app.tabBars.buttons["Log"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["History"].tap()
+        XCTAssertFalse(app.buttons["Log Workout"].exists)
         XCTAssertTrue(app.tabBars.buttons["Cycle"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.tabBars.buttons["Import"].exists)
         app.tabBars.buttons["Cycle"].tap()
         dismissExpectedICloudCycleAlertIfPresent(in: app)
 
-        let adaptiveMode = app.buttons["Adaptive Floating"]
-        XCTAssertTrue(adaptiveMode.waitForExistence(timeout: 5))
-        adaptiveMode.tap()
+        confirmTrainingMode("Adaptive Floating", in: app)
         XCTAssertTrue(app.staticTexts["Adaptive Profile"].waitForExistence(timeout: 5))
 
         let selection = app.buttons["adaptive.exerciseSelection"]
@@ -140,7 +178,7 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Exercise Selection"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Alternate recent"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Pinned exercise"].firstMatch.exists)
-        app.buttons["Done"].tap()
+        app.buttons["Cancel"].tap()
 
         let createProfile = app.buttons["New Adaptive Profile"]
         XCTAssertTrue(createProfile.waitForExistence(timeout: 5))
@@ -165,9 +203,7 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["Cycle"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Cycle"].tap()
         dismissExpectedICloudCycleAlertIfPresent(in: app)
-        let adaptiveMode = app.buttons["Adaptive Floating"]
-        XCTAssertTrue(adaptiveMode.waitForExistence(timeout: 5))
-        adaptiveMode.tap()
+        confirmTrainingMode("Adaptive Floating", in: app)
 
         app.tabBars.buttons["Workout"].tap()
         XCTAssertTrue(app.navigationBars["Workout"].waitForExistence(timeout: 5))
@@ -325,10 +361,14 @@ final class SwapExerciseUITests: XCTestCase {
         finishConfirmation.tap()
         XCTAssertTrue(app.staticTexts["Adaptive Workout Complete"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["adaptive.tomorrowPrediction"].waitForExistence(timeout: 5))
+        XCTAssertFalse(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", "Actual readiness can change")
+            ).firstMatch.exists
+        )
 
         app.tabBars.buttons["History"].tap()
         XCTAssertTrue(app.staticTexts["Adaptive Workouts"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Adaptive Floating"].waitForExistence(timeout: 5))
         let historySearch = app.searchFields["Search exercises"]
         XCTAssertTrue(historySearch.waitForExistence(timeout: 5))
         historySearch.tap()
@@ -348,9 +388,7 @@ final class SwapExerciseUITests: XCTestCase {
 
         app.tabBars.buttons["Cycle"].tap()
         dismissExpectedICloudCycleAlertIfPresent(in: app)
-        let adaptiveMode = app.buttons["Adaptive Floating"]
-        XCTAssertTrue(adaptiveMode.waitForExistence(timeout: 5))
-        adaptiveMode.tap()
+        confirmTrainingMode("Adaptive Floating", in: app)
 
         app.tabBars.buttons["Workout"].tap()
         let generatePlan = app.buttons["adaptive.generatePlan"]
@@ -362,10 +400,8 @@ final class SwapExerciseUITests: XCTestCase {
             app.swipeDown()
         }
         XCTAssertTrue(proposedPlan.waitForExistence(timeout: 5))
-        let proposalSummary = app.staticTexts["4 proposed exposures"]
-        XCTAssertTrue(proposalSummary.waitForExistence(timeout: 5))
         for exercise in ["Flat Dumbbell Press", "Cable Row", "Bayesian Curl", "Cable Lateral Raise"] {
-            XCTAssertTrue((proposalSummary.value as? String)?.contains(exercise) == true)
+            XCTAssertTrue(app.staticTexts[exercise].waitForExistence(timeout: 5))
         }
 
         let increasedDose = app.staticTexts["2 sets"]
@@ -425,6 +461,15 @@ final class SwapExerciseUITests: XCTestCase {
         guard alert.waitForExistence(timeout: 2) else { return }
         XCTAssertTrue(alert.staticTexts["Could not access the OpenLift cycles folder in iCloud Drive."].exists)
         alert.buttons["OK"].tap()
+    }
+
+    private func confirmTrainingMode(_ name: String, in app: XCUIApplication) {
+        let mode = app.buttons[name]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        mode.tap()
+        let confirmation = app.buttons["Use \(name)"].firstMatch
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.tap()
     }
 
     private func scrollToElement(_ element: XCUIElement, in app: XCUIApplication) {
