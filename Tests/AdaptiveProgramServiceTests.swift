@@ -3,26 +3,99 @@ import XCTest
 @testable import OpenLift
 
 final class AdaptiveProgramServiceTests: XCTestCase {
-    func testBlankDraftUsesRequestedPriorityAndLeavesAbsAndTrapsDisabled() {
+    func testBlankDraftUsesRequestedPriorityAndLeavesUnsupportedMusclesDisabled() {
         let draft = AdaptiveProgramDraft.blank
         let enabled = draft.muscleRules
             .filter(\.isEnabled)
             .sorted { $0.priorityRank < $1.priorityRank }
 
         XCTAssertEqual(enabled.map(\.muscle), MuscleGroup.initialAdaptiveRankOrder)
-        XCTAssertEqual(enabled.map(\.priorityRank), Array(1...10))
+        XCTAssertEqual(enabled.map(\.priorityRank), Array(1...MuscleGroup.initialAdaptiveRankOrder.count))
         XCTAssertEqual(enabled[4].muscle, .sideDelts)
         XCTAssertEqual(draft.globalMaxMovements, 4)
         XCTAssertEqual(draft.defaultComplexCount, 4)
         XCTAssertEqual(draft.maxDifficultyCost, 60)
         XCTAssertTrue(enabled.allSatisfy { $0.rollingSetFloor == 1 })
 
-        for muscle in [MuscleGroup.abs, .traps] {
+        for muscle in [MuscleGroup.glutes, .abs, .traps] {
             let rule = draft.muscleRules.first { $0.muscle == muscle }
             XCTAssertEqual(rule?.priorityRank, 0)
             XCTAssertEqual(rule?.rollingSetFloor, 0)
             XCTAssertEqual(rule?.isEnabled, false)
         }
+    }
+
+    func testTargetedEquipmentCorrectionDisablesMuscleAndComplexWithoutReplacingProfile() throws {
+        var exercises = makeRankedExercises()
+        let gluteExercise = makeExercise(for: .glutes)
+        exercises.append(gluteExercise)
+        var draft = AdaptiveProgramService.demoDraft(exercises: exercises)
+        let gluteRuleIndex = try XCTUnwrap(draft.muscleRules.firstIndex { $0.muscle == .glutes })
+        draft.muscleRules[gluteRuleIndex].isEnabled = true
+        draft.muscleRules[gluteRuleIndex].priorityRank = draft.muscleRules.filter(\.isEnabled).count
+        draft.muscleRules[gluteRuleIndex].rollingSetFloor = 1
+        draft.complexes.append(
+            AdaptiveExerciseComplexDraft(
+                id: UUID(),
+                definitionId: UUID(),
+                sourceVersion: 0,
+                name: "Glutes",
+                primaryMuscle: .glutes,
+                qualifiesForPrimaryFloor: true,
+                isEnabled: true,
+                components: [
+                    AdaptiveComplexComponentDraft(
+                        id: UUID(),
+                        exerciseId: gluteExercise.id,
+                        prescribedSetCount: 2,
+                        primaryMuscle: .glutes,
+                        secondaryMuscle: nil,
+                        difficulty: .easy
+                    )
+                ]
+            )
+        )
+        let (context, _) = makeContext()
+        let program = try AdaptiveProgramService.saveVersion(
+            draft: draft,
+            replacing: nil,
+            allPrograms: [],
+            exercises: exercises,
+            modelContext: context
+        )
+        let originalId = program.id
+        let originalVersion = program.version
+
+        XCTAssertGreaterThan(
+            try AdaptiveProgramService.disableMuscleProgramming(.glutes, modelContext: context),
+            0
+        )
+
+        XCTAssertEqual(program.id, originalId)
+        XCTAssertEqual(program.version, originalVersion)
+        let gluteRule = try XCTUnwrap(program.muscleRules.first { $0.muscle == .glutes })
+        XCTAssertFalse(gluteRule.isEnabled)
+        XCTAssertEqual(gluteRule.priorityRank, 0)
+        XCTAssertEqual(gluteRule.rollingSetFloor, 0)
+        XCTAssertTrue(program.complexes.filter { $0.primaryMuscle == .glutes }.allSatisfy { !$0.isEnabled })
+        let enabledRules = program.muscleRules
+            .filter(\.isEnabled)
+            .sorted { $0.priorityRank < $1.priorityRank }
+        XCTAssertEqual(enabledRules.map(\.priorityRank), Array(1...enabledRules.count))
+        let proposal = try XCTUnwrap(
+            AdaptiveForecastService.expectedProposal(
+                program: program,
+                exercises: exercises,
+                ledger: TrainingLoadLedger(byMuscle: [:]),
+                targetComplexCount: 4,
+                asOf: Date(timeIntervalSince1970: 1_800_000_000)
+            )
+        )
+        XCTAssertFalse(proposal.complexes.contains { $0.primaryMuscle == .glutes })
+        XCTAssertEqual(
+            try AdaptiveProgramService.disableMuscleProgramming(.glutes, modelContext: context),
+            0
+        )
     }
 
     func testDemoDraftDoesNotInventExercisesForMissingMuscles() {
@@ -56,7 +129,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertTrue(saved.isActiveVersion)
         XCTAssertFalse(saved.isReviewedForUse)
         XCTAssertEqual(saved.muscleRules.count, MuscleGroup.allCases.count)
-        XCTAssertEqual(saved.complexes.count, 10)
+        XCTAssertEqual(saved.complexes.count, MuscleGroup.initialAdaptiveRankOrder.count)
         XCTAssertEqual(AdaptiveProgramService.activeProgram(from: [saved])?.id, saved.id)
         let sizePreference = try XCTUnwrap(
             context.fetch(FetchDescriptor<AdaptiveWorkoutSizePreference>()).first

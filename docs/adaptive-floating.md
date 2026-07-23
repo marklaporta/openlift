@@ -54,11 +54,12 @@ initial enabled priority is:
 6. Quads
 7. Hamstrings
 8. Forearms
-9. Glutes
-10. Calves
+9. Calves
 
-Abs and Traps are explicit candidates but start disabled, unranked, and without
-a training-window requirement. The persisted shoulder raw value remains `sideDelts` so old
+Glutes, Abs, and Traps are explicit candidates but start disabled, unranked, and
+without a training-window requirement. Glutes are excluded from the current
+equipment profile because available glute work is better represented by its quad
+movements. The persisted shoulder raw value remains `sideDelts` so old
 stores continue to decode; it is presented as the broader Shoulders bucket.
 The current catalog is side-delt focused, but future front- or rear-delt
 exercise variants may use the same bucket.
@@ -112,8 +113,9 @@ accessory. Stiff-Leg Deadlift is the currently available pinned heavy hamstring
 foundation. Reverse Hyper starts as an available light hamstring accessory.
 Glute-Ham Raise remains a candidate heavy foundation movement but starts unavailable
 until the user is ready to perform it. Chest, back, triceps, biceps, shoulders, and forearms
-alternate available recent movements. Glutes and calves repeat the latest
-available movement until explicitly changed.
+alternate available recent movements. Calves repeat the latest available movement
+until explicitly changed. Glutes remain disabled unless the profile is deliberately
+revised after suitable equipment becomes available.
 Exercise category is the single source of truth for recovery role: compounds are
 hard/core movements and isolations are light/accessory movements. This applies to
 automatic proposals, manual additions, and substitutions; a stored complex cannot
