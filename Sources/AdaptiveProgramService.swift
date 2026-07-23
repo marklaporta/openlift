@@ -22,7 +22,6 @@ enum AdaptiveProgramValidationError: LocalizedError, Equatable {
     case duplicateExerciseOccurrence(complex: String, exercise: String)
     case invalidSecondaryMuscle(exercise: String)
     case invalidComponentSets(exercise: String, count: Int, cap: Int)
-    case complexExceedsMuscleExerciseCap(name: String, muscle: MuscleGroup, count: Int, cap: Int)
     case complexDoesNotAttributePrimary(name: String, muscle: MuscleGroup)
     case noFloorQualifyingComplex(MuscleGroup)
 
@@ -68,8 +67,6 @@ enum AdaptiveProgramValidationError: LocalizedError, Equatable {
             return "\(exercise)'s secondary muscle must differ from its primary muscle."
         case .invalidComponentSets(let exercise, let count, let cap):
             return "\(exercise) prescribes \(count) sets, exceeding its muscle cap of \(cap)."
-        case .complexExceedsMuscleExerciseCap(let name, let muscle, let count, let cap):
-            return "Complex '\(name)' uses \(count) \(muscle.displayName) exercises, exceeding that exposure cap of \(cap)."
         case .complexDoesNotAttributePrimary(let name, let muscle):
             return "Complex '\(name)' does not attribute any component to its primary muscle, \(muscle.displayName)."
         case .noFloorQualifyingComplex(let muscle):
@@ -135,7 +132,7 @@ struct AdaptiveProgramDraft: Equatable {
                     rollingSetFloor: rank == nil ? 0 : 1,
                     rollingWindowDays: 7,
                     maxRecoveredDayGap: 10,
-                    maxExercisesPerExposure: 2,
+                    maxExercisesPerExposure: 4,
                     maxSetsPerExercise: 3,
                     isEnabled: rank != nil
                 )
@@ -394,11 +391,23 @@ enum AdaptiveProgramService {
         }
         draft.complexes = draft.muscleRules.filter(\.isEnabled).compactMap { rule in
             let muscle = rule.muscle
-            guard let exercise = exercises
+            let available = exercises
                 .filter({ $0.isActive && $0.primaryMuscle == muscle })
                 .sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
-                .first else {
+            guard let exercise = available.first else {
                 return nil
+            }
+            let selectedExercises: [Exercise]
+            if muscle == .back,
+               let verticalPull = available.first(where: {
+                   BackMovementPatternService.pattern(for: $0) == .verticalPull
+               }),
+               let horizontalPull = available.first(where: {
+                   BackMovementPatternService.pattern(for: $0) == .horizontalPull
+               }) {
+                selectedExercises = [verticalPull, horizontalPull]
+            } else {
+                selectedExercises = [exercise]
             }
             return AdaptiveExerciseComplexDraft(
                 id: UUID(),
@@ -408,16 +417,16 @@ enum AdaptiveProgramService {
                 primaryMuscle: muscle,
                 qualifiesForPrimaryFloor: true,
                 isEnabled: true,
-                components: [
+                components: selectedExercises.map {
                     AdaptiveComplexComponentDraft(
                         id: UUID(),
-                        exerciseId: exercise.id,
+                        exerciseId: $0.id,
                         prescribedSetCount: 2,
-                        primaryMuscle: exercise.primaryMuscle,
+                        primaryMuscle: $0.primaryMuscle,
                         secondaryMuscle: nil,
-                        difficulty: AdaptiveExerciseRoleService.difficulty(for: exercise)
+                        difficulty: AdaptiveExerciseRoleService.difficulty(for: $0)
                     )
-                ]
+                }
             )
         }
         return draft
@@ -569,7 +578,6 @@ enum AdaptiveProgramService {
             ("rolling exposure requirement", rule.rollingSetFloor, 0...1),
             ("rolling window", rule.rollingWindowDays, 1...60),
             ("maximum recovered-day gap", rule.maxRecoveredDayGap, 1...60),
-            ("exercise exposure cap", rule.maxExercisesPerExposure, 1...10),
             ("sets per exercise cap", rule.maxSetsPerExercise, 1...10)
         ]
         for (field, value, range) in fields where !range.contains(value) {
@@ -600,7 +608,6 @@ enum AdaptiveProgramService {
         }
 
         var seenExerciseIds = Set<UUID>()
-        var componentCounts: [MuscleGroup: Int] = [:]
         var attributesComplexPrimary = false
         for component in complex.components {
             guard let exercise = exercisesById[component.exerciseId] else {
@@ -635,21 +642,8 @@ enum AdaptiveProgramService {
                     cap: rule.maxSetsPerExercise
                 )
             }
-            componentCounts[component.primaryMuscle, default: 0] += 1
             if component.primaryMuscle == complex.primaryMuscle || component.secondaryMuscle == complex.primaryMuscle {
                 attributesComplexPrimary = true
-            }
-        }
-
-        for (muscle, count) in componentCounts {
-            guard let rule = rulesByMuscle[muscle] else { continue }
-            if count > rule.maxExercisesPerExposure {
-                throw AdaptiveProgramValidationError.complexExceedsMuscleExerciseCap(
-                    name: name,
-                    muscle: muscle,
-                    count: count,
-                    cap: rule.maxExercisesPerExposure
-                )
             }
         }
         if !attributesComplexPrimary {

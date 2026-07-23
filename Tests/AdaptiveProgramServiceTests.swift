@@ -109,6 +109,37 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         }
     }
 
+    func testDemoDraftBuildsComplementaryBackPairAndIgnoresLegacyExerciseCap() throws {
+        let exercises = makeRankedExercises() + [
+            Exercise(
+                name: "Lat Pulldown",
+                primaryMuscle: .back,
+                type: .compound,
+                equipment: .machine
+            ),
+            Exercise(
+                name: "Cable Row",
+                primaryMuscle: .back,
+                type: .compound,
+                equipment: .cable
+            )
+        ]
+        var draft = AdaptiveProgramService.demoDraft(exercises: exercises)
+        let backComplex = try XCTUnwrap(draft.complexes.first { $0.primaryMuscle == .back })
+        XCTAssertEqual(
+            backComplex.components.compactMap { component in
+                exercises.first(where: { $0.id == component.exerciseId })
+            }.compactMap(BackMovementPatternService.pattern(for:)),
+            [.verticalPull, .horizontalPull]
+        )
+
+        let backRuleIndex = try XCTUnwrap(
+            draft.muscleRules.firstIndex { $0.muscle == .back }
+        )
+        draft.muscleRules[backRuleIndex].maxExercisesPerExposure = 1
+        XCTAssertNoThrow(try AdaptiveProgramService.validate(draft, exercises: exercises))
+    }
+
     func testValidDraftSavesAndBecomesActive() throws {
         let exercises = makeRankedExercises()
         let draft = AdaptiveProgramService.demoDraft(exercises: exercises)
