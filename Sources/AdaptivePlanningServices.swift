@@ -261,6 +261,32 @@ enum AdaptiveExerciseRoleService {
     }
 }
 
+enum BackMovementPattern: String, CaseIterable {
+    case verticalPull
+    case horizontalPull
+}
+
+enum BackMovementPatternService {
+    static func pattern(for exercise: Exercise) -> BackMovementPattern? {
+        guard exercise.primaryMuscle == .back else { return nil }
+        let name = exercise.name
+            .lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+        if name.contains("row") {
+            return .horizontalPull
+        }
+        if name.contains("pulldown")
+            || name.contains("pull down")
+            || name.contains("pull up")
+            || name.contains("pullup")
+            || name.contains("chin up")
+            || name.contains("chinup") {
+            return .verticalPull
+        }
+        return nil
+    }
+}
+
 struct AdaptivePlanDecisionTrace: Equatable {
     var plannerVersion: Int
     var outcomeCode: String
@@ -272,7 +298,7 @@ struct AdaptivePlanDecisionTrace: Equatable {
 }
 
 enum AdaptivePlanService {
-    static let plannerVersion = 5
+    static let plannerVersion = 6
 
     static func generate(
         program: AdaptiveProgram,
@@ -325,7 +351,8 @@ enum AdaptivePlanService {
                     }
                     let componentKey = AdaptiveExerciseSelectionKey(
                         muscle: component.primaryMuscle,
-                        type: componentTypes[component.position] ?? exercise.type
+                        type: componentTypes[component.position] ?? exercise.type,
+                        backPattern: BackMovementPatternService.pattern(for: exercise)
                     )
                     let coreFallbackKey = AdaptiveExerciseSelectionKey(
                         muscle: component.primaryMuscle,
@@ -343,9 +370,12 @@ enum AdaptivePlanService {
                         }
                         return nil
                     }()
-                    let selection = selectedKey.flatMap { key in
+                    let availableSelection = selectedKey.flatMap { key in
                         appliedSelectionKeys.contains(key) ? nil : exerciseSelections[key]
                     }
+                    let selection = availableSelection?.canReplaceConfigured == false
+                        ? nil
+                        : availableSelection
                     let selectedExercise = selection?.exercise ?? exercise
                     if let selection, let selectedKey {
                         appliedSelectionKeys.insert(selectedKey)
@@ -370,6 +400,47 @@ enum AdaptivePlanService {
                                 .prescribedSetCount ?? component.prescribedSetCount
                         )
                     )
+                }
+                if complex.primaryMuscle == .back,
+                   planned.count < program.globalMaxMovements {
+                    let backCompounds = planned.compactMap { component -> (AdaptivePlannedComponent, BackMovementPattern)? in
+                        guard exercisesById[component.exerciseId]?.type == .compound,
+                              let exercise = exercisesById[component.exerciseId],
+                              let pattern = BackMovementPatternService.pattern(for: exercise) else {
+                            return nil
+                        }
+                        return (component, pattern)
+                    }
+                    if backCompounds.count == 1,
+                       let missingPattern = BackMovementPattern.allCases.first(where: {
+                           $0 != backCompounds[0].1
+                       }),
+                       let complementary = exerciseSelections[
+                           AdaptiveExerciseSelectionKey(
+                               muscle: .back,
+                               type: .compound,
+                               backPattern: missingPattern
+                           )
+                       ],
+                       !planned.contains(where: { $0.exerciseId == complementary.exercise.id }) {
+                        planned.append(
+                            AdaptivePlannedComponent(
+                                exerciseId: complementary.exercise.id,
+                                exerciseName: complementary.exercise.name,
+                                position: (planned.map(\.position).max() ?? -1) + 1,
+                                primaryMuscle: .back,
+                                secondaryMuscle: nil,
+                                difficulty: AdaptiveExerciseRoleService.difficulty(
+                                    for: complementary.exercise
+                                ),
+                                prescribedSetCount: backCompounds[0].0.prescribedSetCount
+                            )
+                        )
+                        attributedMuscles.insert(.back)
+                        selectionReasonCodes.append(
+                            "back_\(missingPattern.rawValue)_coverage"
+                        )
+                    }
                 }
                 if attributedMuscles.contains(where: { readiness[$0]?.isHardBlocked == true }) {
                     rejections.append(.init(complexDefinitionId: complex.definitionId, code: "held_for_recovery"))
@@ -409,36 +480,23 @@ enum AdaptivePlanService {
         var selectedMuscles = Set<MuscleGroup>()
         var movements = 0
         var difficulty = 0
-        var exerciseCounts: [MuscleGroup: Int] = [:]
         var setDose: [MuscleGroup: Int] = [:]
 
         func fitFailure(for candidate: AdaptivePlannedComplex) -> String? {
             if selected.count >= exposureTarget { return "daily_exposure_target" }
             if selectedMuscles.contains(candidate.primaryMuscle) { return "muscle_already_selected" }
             let combinedComponents = selected.flatMap(\.components) + candidate.components
-            var compoundCounts: [MuscleGroup: Int] = [:]
-            for component in combinedComponents
-                where exercisesById[component.exerciseId]?.type == .compound {
-                compoundCounts[component.primaryMuscle, default: 0] += 1
-            }
-            if compoundCounts.values.contains(where: { $0 > 1 }) {
+            if hasRedundantSameMuscleCompounds(
+                combinedComponents,
+                exercisesById: exercisesById
+            ) {
                 return "multiple_compounds_same_muscle"
             }
 
-            var addedExerciseCounts: [MuscleGroup: Int] = [:]
             for component in candidate.components {
                 guard let primaryRule = rules[component.primaryMuscle],
                       component.prescribedSetCount <= primaryRule.maxSetsPerExercise else {
                     return "sets_per_exercise_cap"
-                }
-                for muscle in attributedMuscles(of: component) {
-                    addedExerciseCounts[muscle, default: 0] += 1
-                }
-            }
-            for (muscle, added) in addedExerciseCounts {
-                guard let rule = rules[muscle] else { continue }
-                if exerciseCounts[muscle, default: 0] + added > rule.maxExercisesPerExposure {
-                    return "muscle_exercise_cap"
                 }
             }
             return nil
@@ -454,7 +512,6 @@ enum AdaptivePlanService {
             difficulty += candidate.components.reduce(0) { $0 + $1.difficulty.cost }
             for component in candidate.components {
                 for muscle in attributedMuscles(of: component) {
-                    exerciseCounts[muscle, default: 0] += 1
                     setDose[muscle, default: 0] += component.prescribedSetCount
                 }
             }
@@ -622,6 +679,26 @@ enum AdaptivePlanService {
         case .chest, .back, .quads, .hamstrings: return true
         default: return false
         }
+    }
+
+    private static func hasRedundantSameMuscleCompounds(
+        _ components: [AdaptivePlannedComponent],
+        exercisesById: [UUID: Exercise]
+    ) -> Bool {
+        let compoundComponents = components.filter {
+            exercisesById[$0.exerciseId]?.type == .compound
+        }
+        let grouped = Dictionary(grouping: compoundComponents, by: \.primaryMuscle)
+        for (muscle, muscleComponents) in grouped where muscleComponents.count > 1 {
+            guard muscle == .back, muscleComponents.count == 2 else { return true }
+            let patterns = muscleComponents.compactMap {
+                exercisesById[$0.exerciseId].flatMap(BackMovementPatternService.pattern(for:))
+            }
+            if Set(patterns) != Set(BackMovementPattern.allCases) {
+                return true
+            }
+        }
+        return false
     }
 
     private static func stableComplexOrder(_ left: AdaptiveExerciseComplex, _ right: AdaptiveExerciseComplex) -> Bool {
@@ -806,11 +883,33 @@ enum AdaptiveDoseEvidenceService {
 struct AdaptiveExerciseSelectionRecommendation {
     var exercise: Exercise
     var reasonCodeSuffix: String
+    var canReplaceConfigured: Bool
+
+    init(
+        exercise: Exercise,
+        reasonCodeSuffix: String,
+        canReplaceConfigured: Bool = true
+    ) {
+        self.exercise = exercise
+        self.reasonCodeSuffix = reasonCodeSuffix
+        self.canReplaceConfigured = canReplaceConfigured
+    }
 }
 
 struct AdaptiveExerciseSelectionKey: Hashable {
     var muscle: MuscleGroup
     var type: ExerciseType
+    var backPattern: BackMovementPattern?
+
+    init(
+        muscle: MuscleGroup,
+        type: ExerciseType,
+        backPattern: BackMovementPattern? = nil
+    ) {
+        self.muscle = muscle
+        self.type = type
+        self.backPattern = backPattern
+    }
 }
 
 enum AdaptiveExerciseSelectionService {
@@ -910,33 +1009,91 @@ enum AdaptiveExerciseSelectionService {
                 let mode = preference?.mode == .pinned && type == .isolation
                     ? AdaptiveExerciseSelectionMode.rotateRecent
                     : (preference?.mode ?? .repeatLast)
-                switch mode {
-                case .repeatLast:
-                    if let exercise = recent.first {
-                        result[key] = .init(exercise: exercise, reasonCodeSuffix: "exercise_repeat")
-                    }
-                case .rotateRecent:
-                    let exercise = recent.dropFirst().first
-                        ?? recent.first.flatMap { latest in
-                            eligibleAlternatives.first { $0.id != latest.id }
+                if let recommendation = recommendation(
+                    mode: mode,
+                    muscle: muscle,
+                    type: type,
+                    recent: recent,
+                    eligibleAlternatives: eligibleAlternatives,
+                    pinnedExerciseId: preference?.pinnedExerciseId,
+                    activeExercises: activeExercises
+                ) {
+                    result[key] = recommendation
+                }
+
+                if muscle == .back, type == .compound {
+                    for pattern in BackMovementPattern.allCases {
+                        let patternKey = AdaptiveExerciseSelectionKey(
+                            muscle: muscle,
+                            type: type,
+                            backPattern: pattern
+                        )
+                        let patternRecent = recent.filter {
+                            BackMovementPatternService.pattern(for: $0) == pattern
                         }
-                        ?? recent.first
-                    if let exercise {
-                        result[key] = .init(exercise: exercise, reasonCodeSuffix: "exercise_rotation")
-                    }
-                case .pinned:
-                    if let pinnedId = preference?.pinnedExerciseId,
-                       let exercise = activeExercises[pinnedId],
-                       exercise.primaryMuscle == muscle,
-                       exercise.type == type {
-                        result[key] = .init(exercise: exercise, reasonCodeSuffix: "exercise_pinned")
-                    } else if let exercise = recent.first {
-                        result[key] = .init(exercise: exercise, reasonCodeSuffix: "exercise_repeat")
+                        let patternAlternatives = eligibleAlternatives.filter {
+                            BackMovementPatternService.pattern(for: $0) == pattern
+                        }
+                        if let recommendation = recommendation(
+                            mode: mode,
+                            muscle: muscle,
+                            type: type,
+                            recent: patternRecent,
+                            eligibleAlternatives: patternAlternatives,
+                            pinnedExerciseId: preference?.pinnedExerciseId,
+                            activeExercises: activeExercises
+                        ) {
+                            result[patternKey] = recommendation
+                        } else if mode != .pinned,
+                                  let fallback = patternAlternatives.first {
+                            result[patternKey] = .init(
+                                exercise: fallback,
+                                reasonCodeSuffix: "exercise_available",
+                                canReplaceConfigured: false
+                            )
+                        }
                     }
                 }
             }
         }
         return result
+    }
+
+    private static func recommendation(
+        mode: AdaptiveExerciseSelectionMode,
+        muscle: MuscleGroup,
+        type: ExerciseType,
+        recent: [Exercise],
+        eligibleAlternatives: [Exercise],
+        pinnedExerciseId: UUID?,
+        activeExercises: [UUID: Exercise]
+    ) -> AdaptiveExerciseSelectionRecommendation? {
+        switch mode {
+        case .repeatLast:
+            return recent.first.map {
+                .init(exercise: $0, reasonCodeSuffix: "exercise_repeat")
+            }
+        case .rotateRecent:
+            let exercise = recent.dropFirst().first
+                ?? recent.first.flatMap { latest in
+                    eligibleAlternatives.first { $0.id != latest.id }
+                }
+                ?? recent.first
+            return exercise.map {
+                .init(exercise: $0, reasonCodeSuffix: "exercise_rotation")
+            }
+        case .pinned:
+            if let pinnedExerciseId,
+               let exercise = activeExercises[pinnedExerciseId],
+               exercise.primaryMuscle == muscle,
+               exercise.type == type,
+               eligibleAlternatives.contains(where: { $0.id == exercise.id }) {
+                return .init(exercise: exercise, reasonCodeSuffix: "exercise_pinned")
+            }
+            return recent.first.map {
+                .init(exercise: $0, reasonCodeSuffix: "exercise_repeat")
+            }
+        }
     }
 }
 

@@ -65,8 +65,8 @@ The current catalog is side-delt focused, but future front- or rear-delt
 exercise variants may use the same bucket.
 
 Cycle contains the one Adaptive profile editor. A profile stores strict muscle
-priorities, a binary training-window and recovered-gap policy, per-exposure and
-per-exercise caps, and a default muscle-group exposure target (four by default).
+priorities, a binary training-window and recovered-gap policy, per-exercise set
+caps, and a default muscle-group exposure target (four by default).
 Complexes are ordered atomic units with ordered component exercises, set counts,
 primary plus optional major-secondary attribution, and easy/moderate/hard recovery context.
 The training-window requirement is binary: one or more qualifying locked working
@@ -121,9 +121,13 @@ hard/core movements and isolations are light/accessory movements. This applies t
 automatic proposals, manual additions, and substitutions; a stored complex cannot
 override the category with a different difficulty. Presses and rows are compound,
 while flyes, curls, lateral raises, and analogous single-joint work are isolation.
-Automatic plans include at most one compound for any muscle in a workout. A
-compound-plus-isolation complex (for example, Incline Press plus Chest Fly) is
-valid and remains atomic; two compounds for the same muscle are not proposed.
+Automatic plans include at most one compound for a muscle except Back. Back is
+pattern-aware and may pair exactly one vertical pull with one horizontal pull in
+the same atomic complex; pattern-specific continuity prevents a row from replacing
+a pulldown or vice versa. A compound-plus-isolation complex (for example, Incline
+Press plus Chest Fly) is also valid. The legacy per-muscle exercise-count field is
+retained for store compatibility but no longer limits explicitly authored complexes;
+the complex component boundary and per-exercise set caps remain authoritative.
 Manual slate editing remains an explicit escape hatch.
 Saving an edit creates a new immutable profile and complex version. The starter is
 labelled as requiring review and cannot invent catalog exercises for a missing

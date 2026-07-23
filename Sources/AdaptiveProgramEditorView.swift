@@ -151,11 +151,6 @@ struct AdaptiveProgramEditorView: View {
                             in: 1...60
                         )
                         Stepper(
-                            "Exercises per exposure: \(rule.maxExercisesPerExposure)",
-                            value: $draft.muscleRules[index].maxExercisesPerExposure,
-                            in: 1...10
-                        )
-                        Stepper(
                             "Sets per exercise: \(rule.maxSetsPerExercise)",
                             value: $draft.muscleRules[index].maxSetsPerExercise,
                             in: 1...10
@@ -215,7 +210,7 @@ struct AdaptiveProgramEditorView: View {
 
             Button("Add Component") { addComponent(to: complexIndex) }
                 .disabled(activeExercises.isEmpty)
-            Text("Default: one compound plus one isolation. Automatic plans will not pair two compounds.")
+            Text("Back may pair one vertical pull with one horizontal pull. Other muscles use at most one compound.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

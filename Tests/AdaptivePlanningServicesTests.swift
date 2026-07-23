@@ -2,6 +2,187 @@ import XCTest
 @testable import OpenLift
 
 final class AdaptivePlanningServicesTests: XCTestCase {
+    func testBackMovementPatternsDistinguishVerticalPullsFromRows() {
+        for name in ["Lat Pulldown", "Assisted Pull-Up", "Chin Up"] {
+            XCTAssertEqual(
+                BackMovementPatternService.pattern(for: exercise(name, muscle: .back)),
+                .verticalPull
+            )
+        }
+        for name in ["Cable Row", "Chest Supported Row", "Single-Arm Dumbbell Row"] {
+            XCTAssertEqual(
+                BackMovementPatternService.pattern(for: exercise(name, muscle: .back)),
+                .horizontalPull
+            )
+        }
+        XCTAssertNil(
+            BackMovementPatternService.pattern(
+                for: exercise("Dumbbell Pullover", muscle: .back)
+            )
+        )
+    }
+
+    func testPlannerAllowsComplementaryBackCompoundsButRejectsRedundantBackCompounds() {
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
+        let cableRow = exercise("Cable Row", muscle: .back)
+        let chestSupportedRow = exercise("Chest Supported Row", muscle: .back)
+        let complementary = makeComplex(
+            id: uuid(910),
+            position: 0,
+            primary: .back,
+            components: [
+                component(pulldown, position: 0, sets: 2),
+                component(cableRow, position: 1, sets: 2)
+            ]
+        )
+        let redundant = makeComplex(
+            id: uuid(911),
+            position: 0,
+            primary: .back,
+            components: [
+                component(cableRow, position: 0, sets: 2),
+                component(chestSupportedRow, position: 1, sets: 2)
+            ]
+        )
+
+        let allowed = unwrapProposal(AdaptivePlanService.generate(
+            program: makeProgram(
+                movements: 4,
+                difficulty: 60,
+                enabled: [.back],
+                exerciseCaps: [.back: 1],
+                complexes: [complementary]
+            ),
+            exercises: [pulldown, cableRow, chestSupportedRow],
+            readiness: readyInputs,
+            ledger: recentLedger([.back]),
+            targetComplexCount: 1,
+            now: now,
+            calendar: utcCalendar
+        ))
+        XCTAssertEqual(
+            allowed.complexes.first?.components.map(\.exerciseName),
+            ["Lat Pulldown", "Cable Row"]
+        )
+        XCTAssertEqual(allowed.muscleSetDose[.back], 4)
+
+        let rejected = unwrapProposal(AdaptivePlanService.generate(
+            program: makeProgram(
+                movements: 4,
+                difficulty: 60,
+                enabled: [.back],
+                complexes: [redundant]
+            ),
+            exercises: [pulldown, cableRow, chestSupportedRow],
+            readiness: readyInputs,
+            ledger: recentLedger([.back]),
+            targetComplexCount: 1,
+            now: now,
+            calendar: utcCalendar
+        ))
+        XCTAssertTrue(rejected.complexes.isEmpty)
+        XCTAssertTrue(rejected.rejections.contains {
+            $0.complexDefinitionId == uuid(911)
+                && $0.code == "multiple_compounds_same_muscle"
+        })
+    }
+
+    func testBackExerciseSelectionContinuityIsPatternSpecific() {
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
+        let assistedPullUp = exercise("Assisted Pull-Up", muscle: .back)
+        let cableRow = exercise("Cable Row", muscle: .back)
+        let chestSupportedRow = exercise("Chest Supported Row", muscle: .back)
+        let session = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            createdAt: now,
+            finishedAt: now,
+            status: .completed
+        )
+        let entries = [
+            SetEntry(
+                sessionId: session.id,
+                exerciseId: pulldown.id,
+                setIndex: 1,
+                weight: 100,
+                reps: 10,
+                isLocked: true
+            ),
+            SetEntry(
+                sessionId: session.id,
+                exerciseId: cableRow.id,
+                setIndex: 1,
+                weight: 100,
+                reps: 10,
+                isLocked: true
+            )
+        ]
+        let preference = AdaptiveExerciseSelectionPreference(
+            muscle: .back,
+            mode: .repeatLast,
+            eligibleExerciseIds: [
+                pulldown.id,
+                assistedPullUp.id,
+                cableRow.id,
+                chestSupportedRow.id
+            ]
+        )
+
+        let recommendations = AdaptiveExerciseSelectionService.recommendations(
+            exercises: [pulldown, assistedPullUp, cableRow, chestSupportedRow],
+            preferences: [preference],
+            rotationSessions: [session],
+            rotationSetEntries: entries,
+            adaptiveSessions: [],
+            adaptiveSetEntries: []
+        )
+
+        XCTAssertEqual(
+            recommendations[
+                .init(muscle: .back, type: .compound, backPattern: .verticalPull)
+            ]?.exercise.id,
+            pulldown.id
+        )
+        XCTAssertEqual(
+            recommendations[
+                .init(muscle: .back, type: .compound, backPattern: .horizontalPull)
+            ]?.exercise.id,
+            cableRow.id
+        )
+
+        let proposal = unwrapProposal(AdaptivePlanService.generate(
+            program: makeProgram(
+                movements: 4,
+                difficulty: 60,
+                enabled: [.back],
+                complexes: [
+                    makeComplex(
+                        id: uuid(912),
+                        position: 0,
+                        primary: .back,
+                        components: [component(pulldown, sets: 2)]
+                    )
+                ]
+            ),
+            exercises: [pulldown, assistedPullUp, cableRow, chestSupportedRow],
+            readiness: readyInputs,
+            ledger: recentLedger([.back]),
+            targetComplexCount: 1,
+            exerciseSelections: recommendations,
+            now: now,
+            calendar: utcCalendar
+        ))
+        XCTAssertEqual(
+            proposal.complexes.first?.components.map(\.exerciseName),
+            ["Lat Pulldown", "Cable Row"]
+        )
+        XCTAssertTrue(
+            proposal.complexes.first?.reasonCodes.contains(
+                "back_horizontalPull_coverage"
+            ) == true
+        )
+    }
+
     func testKnownLowerBodyRolesDistinguishHeavyFoundationsFromLightAccessories() {
         for name in ["Belt Squat", "Safety Squat Bar Squat", "Leg Press", "Hack Squat"] {
             XCTAssertEqual(
@@ -264,7 +445,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(proposal.totalMovements, 2)
         XCTAssertEqual(proposal.muscleSetDose[.chest], 4)
         let trace = AdaptivePlanService.trace(for: result)
-        XCTAssertEqual(trace.plannerVersion, 5)
+        XCTAssertEqual(trace.plannerVersion, 6)
         XCTAssertEqual(trace.outcomeCode, "proposal")
         XCTAssertEqual(trace.selectedComplexDefinitionIds, [uuid(1)])
         XCTAssertNil(trace.conflictCode)
