@@ -5,6 +5,7 @@ enum AdaptiveProgramValidationError: LocalizedError, Equatable {
     case emptyProgramName
     case invalidGlobalMovementCap(Int)
     case invalidDefaultComplexCount(Int)
+    case invalidWorkoutLimit(field: String, value: Int)
     case invalidDifficultyBudget(Int)
     case missingMuscleRule(MuscleGroup)
     case duplicateMuscleRule(MuscleGroup)
@@ -33,6 +34,8 @@ enum AdaptiveProgramValidationError: LocalizedError, Equatable {
             return "Maximum exercises per complex must be between 1 and 20. Got \(value)."
         case .invalidDefaultComplexCount(let value):
             return "Default muscle-group count must be between 1 and 12. Got \(value)."
+        case .invalidWorkoutLimit(let field, let value):
+            return "\(field) has an invalid value: \(value)."
         case .invalidDifficultyBudget(let value):
             return "Daily difficulty budget must be between 1 and 60. Got \(value)."
         case .missingMuscleRule(let muscle):
@@ -85,6 +88,35 @@ struct AdaptiveMuscleRuleDraft: Identifiable, Equatable {
     var maxExercisesPerExposure: Int
     var maxSetsPerExercise: Int
     var isEnabled: Bool
+    var weeklySetTarget: Int
+    var dailySetCap: Int
+
+    init(
+        id: UUID,
+        muscle: MuscleGroup,
+        priorityRank: Int,
+        rollingSetFloor: Int,
+        rollingWindowDays: Int,
+        maxRecoveredDayGap: Int,
+        maxExercisesPerExposure: Int,
+        maxSetsPerExercise: Int,
+        isEnabled: Bool,
+        weeklySetTarget: Int? = nil,
+        dailySetCap: Int = 4
+    ) {
+        self.id = id
+        self.muscle = muscle
+        self.priorityRank = priorityRank
+        self.rollingSetFloor = rollingSetFloor
+        self.rollingWindowDays = rollingWindowDays
+        self.maxRecoveredDayGap = maxRecoveredDayGap
+        self.maxExercisesPerExposure = maxExercisesPerExposure
+        self.maxSetsPerExercise = maxSetsPerExercise
+        self.isEnabled = isEnabled
+        self.weeklySetTarget = weeklySetTarget
+            ?? AdaptiveVolumeControllerService.defaultWeeklyTarget(for: muscle)
+        self.dailySetCap = dailySetCap
+    }
 }
 
 struct AdaptiveComplexComponentDraft: Identifiable, Equatable {
@@ -111,6 +143,9 @@ struct AdaptiveProgramDraft: Equatable {
     var name: String
     var isReviewedForUse: Bool
     var defaultComplexCount: Int
+    var maxExerciseCount: Int
+    var maxExercisesPerMuscle: Int
+    var maxWorkingSetCount: Int
     var globalMaxMovements: Int
     var maxDifficultyCost: Int
     var muscleRules: [AdaptiveMuscleRuleDraft]
@@ -120,7 +155,10 @@ struct AdaptiveProgramDraft: Equatable {
         AdaptiveProgramDraft(
             name: "New Adaptive Profile",
             isReviewedForUse: false,
-            defaultComplexCount: 4,
+            defaultComplexCount: 5,
+            maxExerciseCount: 7,
+            maxExercisesPerMuscle: 2,
+            maxWorkingSetCount: 20,
             globalMaxMovements: 4,
             maxDifficultyCost: 60,
             muscleRules: MuscleGroup.allCases.map { muscle in
@@ -133,8 +171,10 @@ struct AdaptiveProgramDraft: Equatable {
                     rollingWindowDays: 7,
                     maxRecoveredDayGap: 10,
                     maxExercisesPerExposure: 4,
-                    maxSetsPerExercise: 3,
-                    isEnabled: rank != nil
+                    maxSetsPerExercise: 4,
+                    isEnabled: rank != nil,
+                    weeklySetTarget: AdaptiveVolumeControllerService.defaultWeeklyTarget(for: muscle),
+                    dailySetCap: 4
                 )
             },
             complexes: []
@@ -145,6 +185,9 @@ struct AdaptiveProgramDraft: Equatable {
         name: String,
         isReviewedForUse: Bool,
         defaultComplexCount: Int? = nil,
+        maxExerciseCount: Int = 7,
+        maxExercisesPerMuscle: Int = 2,
+        maxWorkingSetCount: Int = 20,
         globalMaxMovements: Int,
         maxDifficultyCost: Int,
         muscleRules: [AdaptiveMuscleRuleDraft],
@@ -153,6 +196,9 @@ struct AdaptiveProgramDraft: Equatable {
         self.name = name
         self.isReviewedForUse = isReviewedForUse
         self.defaultComplexCount = defaultComplexCount ?? globalMaxMovements
+        self.maxExerciseCount = maxExerciseCount
+        self.maxExercisesPerMuscle = maxExercisesPerMuscle
+        self.maxWorkingSetCount = maxWorkingSetCount
         self.globalMaxMovements = globalMaxMovements
         self.maxDifficultyCost = maxDifficultyCost
         self.muscleRules = muscleRules
@@ -162,7 +208,10 @@ struct AdaptiveProgramDraft: Equatable {
     init(existing: AdaptiveProgram) {
         name = existing.name
         isReviewedForUse = existing.isReviewedForUse
-        defaultComplexCount = max(1, min(existing.globalMaxMovements, 12))
+        defaultComplexCount = 5
+        maxExerciseCount = 7
+        maxExercisesPerMuscle = 2
+        maxWorkingSetCount = 20
         globalMaxMovements = existing.globalMaxMovements
         maxDifficultyCost = existing.maxDifficultyCost
         muscleRules = existing.muscleRules
@@ -177,7 +226,9 @@ struct AdaptiveProgramDraft: Equatable {
                     maxRecoveredDayGap: $0.maxRecoveredDayGap,
                     maxExercisesPerExposure: $0.maxExercisesPerExposure,
                     maxSetsPerExercise: $0.maxSetsPerExercise,
-                    isEnabled: $0.isEnabled
+                    isEnabled: $0.isEnabled,
+                    weeklySetTarget: AdaptiveVolumeControllerService.defaultWeeklyTarget(for: $0.muscle),
+                    dailySetCap: 4
                 )
             }
         complexes = existing.complexes
@@ -442,6 +493,15 @@ enum AdaptiveProgramService {
         guard (1...12).contains(draft.defaultComplexCount) else {
             throw AdaptiveProgramValidationError.invalidDefaultComplexCount(draft.defaultComplexCount)
         }
+        let workoutLimits = [
+            ("Maximum muscle groups", draft.defaultComplexCount, 1...12),
+            ("Maximum exercises", draft.maxExerciseCount, 1...30),
+            ("Maximum exercises per muscle", draft.maxExercisesPerMuscle, 1...5),
+            ("Maximum working sets", draft.maxWorkingSetCount, 1...100)
+        ]
+        for (field, value, range) in workoutLimits where !range.contains(value) {
+            throw AdaptiveProgramValidationError.invalidWorkoutLimit(field: field, value: value)
+        }
         guard (1...60).contains(draft.maxDifficultyCost) else {
             throw AdaptiveProgramValidationError.invalidDifficultyBudget(draft.maxDifficultyCost)
         }
@@ -563,6 +623,34 @@ enum AdaptiveProgramService {
                 updatedAt: now
             )
         )
+        for rule in draft.muscleRules {
+            modelContext.insert(
+                AdaptiveMuscleVolumeTarget(
+                    adaptiveProgramId: program.id,
+                    lineageId: program.lineageId,
+                    muscle: rule.muscle,
+                    weeklySetTarget: rule.isEnabled ? rule.weeklySetTarget : 0,
+                    dailySetCap: rule.dailySetCap,
+                    effectiveAt: now
+                )
+            )
+        }
+        modelContext.insert(
+            AdaptiveWorkoutCapacityPreference(
+                adaptiveProgramId: program.id,
+                maxMuscleGroupCount: draft.defaultComplexCount,
+                maxExerciseCount: draft.maxExerciseCount,
+                maxExercisesPerMuscle: draft.maxExercisesPerMuscle,
+                maxWorkingSetCount: draft.maxWorkingSetCount,
+                maxSetsPerExercise: 4,
+                updatedAt: now
+            )
+        )
+        _ = try AdaptiveVolumeControllerService.ensureStoredConfiguration(
+            modelContext: modelContext,
+            now: now,
+            saveChanges: false
+        )
 
         do {
             try modelContext.save()
@@ -578,7 +666,9 @@ enum AdaptiveProgramService {
             ("rolling exposure requirement", rule.rollingSetFloor, 0...1),
             ("rolling window", rule.rollingWindowDays, 1...60),
             ("maximum recovered-day gap", rule.maxRecoveredDayGap, 1...60),
-            ("sets per exercise cap", rule.maxSetsPerExercise, 1...10)
+            ("sets per exercise cap", rule.maxSetsPerExercise, 1...10),
+            ("weekly set target", rule.weeklySetTarget, 0...100),
+            ("daily set cap", rule.dailySetCap, 1...20)
         ]
         for (field, value, range) in fields where !range.contains(value) {
             throw AdaptiveProgramValidationError.invalidMuscleLimit(
@@ -632,14 +722,14 @@ enum AdaptiveProgramService {
             if component.secondaryMuscle == component.primaryMuscle {
                 throw AdaptiveProgramValidationError.invalidSecondaryMuscle(exercise: exercise.name)
             }
-            guard let rule = rulesByMuscle[component.primaryMuscle] else {
+            guard rulesByMuscle[component.primaryMuscle] != nil else {
                 throw AdaptiveProgramValidationError.missingMuscleRule(component.primaryMuscle)
             }
-            if component.prescribedSetCount < 1 || component.prescribedSetCount > rule.maxSetsPerExercise {
+            if component.prescribedSetCount < 1 || component.prescribedSetCount > 4 {
                 throw AdaptiveProgramValidationError.invalidComponentSets(
                     exercise: exercise.name,
                     count: component.prescribedSetCount,
-                    cap: rule.maxSetsPerExercise
+                    cap: 4
                 )
             }
             if component.primaryMuscle == complex.primaryMuscle || component.secondaryMuscle == complex.primaryMuscle {

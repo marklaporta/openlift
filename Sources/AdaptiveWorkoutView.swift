@@ -19,6 +19,9 @@ struct AdaptiveWorkoutView: View {
     @Query private var exerciseSelectionPreferences: [AdaptiveExerciseSelectionPreference]
     @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
     @Query private var planDesignStates: [AdaptivePlanDesignState]
+    @Query private var volumeTargets: [AdaptiveMuscleVolumeTarget]
+    @Query private var capacityPreferences: [AdaptiveWorkoutCapacityPreference]
+    @Query private var volumeAnchors: [AdaptiveMuscleVolumeAnchor]
 
     @State private var readiness: [MuscleGroup: ReadinessSelection] = Dictionary(
         uniqueKeysWithValues: MuscleGroup.allCases.map { ($0, ReadinessSelection()) }
@@ -188,6 +191,11 @@ struct AdaptiveWorkoutView: View {
 
         ForEach(enabledMuscles(in: program), id: \.self) { muscle in
             Section(muscle.displayName) {
+                if let status = volumeStatuses(program: program, asOf: .now)[muscle] {
+                    Text(volumePaceText(status))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Muscle soreness")
                         .font(.subheadline.weight(.semibold))
@@ -290,7 +298,12 @@ struct AdaptiveWorkoutView: View {
                 Button { updateTodayTarget(plan: plan, target: target + 1) } label: {
                     Image(systemName: "plus")
                 }
-                .disabled(target >= enabledMuscles(in: activeProgram!).count)
+                .disabled(
+                    target >= min(
+                        enabledMuscles(in: activeProgram!).count,
+                        capacity(for: activeProgram!).maxMuscleGroupCount
+                    )
+                )
                 .accessibilityLabel("Increase today's muscle-group target")
                 .accessibilityIdentifier("adaptive.increaseTarget")
             }
@@ -576,6 +589,52 @@ struct AdaptiveWorkoutView: View {
             .map(\.muscle)
     }
 
+    private func capacity(for program: AdaptiveProgram) -> AdaptiveWorkoutCapacity {
+        AdaptiveVolumeControllerService.capacity(
+            for: program,
+            preferences: capacityPreferences
+        )
+    }
+
+    private func volumeStatuses(
+        program: AdaptiveProgram,
+        asOf: Date
+    ) -> [MuscleGroup: AdaptiveMuscleVolumeStatus] {
+        let evidence = TrainingLoadLedgerService.storedEvidence(
+            sessions: rotationSessions,
+            setEntries: rotationSetEntries,
+            exercises: exercises,
+            adaptivePlans: generatedPlans,
+            occurrenceLinks: occurrenceLinks,
+            overrides: overrides
+        ) + TrainingLoadLedgerService.storedAdaptiveEvidence(
+            sessions: adaptiveSessions,
+            setEntries: adaptiveSetEntries,
+            plans: generatedPlans,
+            overrides: overrides,
+            exercises: exercises
+        )
+        return AdaptiveVolumeControllerService.statuses(
+            program: program,
+            allTargets: volumeTargets,
+            anchors: volumeAnchors,
+            evidence: evidence,
+            asOf: asOf
+        )
+    }
+
+    private func volumePaceText(_ status: AdaptiveMuscleVolumeStatus) -> String {
+        let pace: String
+        if status.setsBehind >= 0.05 {
+            pace = "\(String(format: "%.1f", status.setsBehind)) behind"
+        } else if status.balance >= 0.05 {
+            pace = "\(String(format: "%.1f", status.balance)) ahead"
+        } else {
+            pace = "on pace"
+        }
+        return "\(status.weeklySetTarget) sets/week · \(pace) · max \(status.dailySetCap) today"
+    }
+
     private func loadReadiness(from plan: GeneratedWorkoutPlan) {
         guard let check = readinessChecks.first(where: { $0.id == plan.readinessCheckId }) else { return }
         readiness = Dictionary(uniqueKeysWithValues: check.responses.map {
@@ -699,7 +758,16 @@ struct AdaptiveWorkoutView: View {
                     for: program,
                     preferences: workoutSizePreferences
                 )
-            let target = max(1, min(requestedTarget, enabledMuscles(in: program).count))
+            let target = max(
+                1,
+                min(
+                    requestedTarget,
+                    min(
+                        enabledMuscles(in: program).count,
+                        capacity(for: program).maxMuscleGroupCount
+                    )
+                )
+            )
             let candidate = try makePlan(
                 program: program,
                 readinessCheck: check,
@@ -780,6 +848,14 @@ struct AdaptiveWorkoutView: View {
             readiness: AdaptiveWorkoutService.readinessInputs(from: readinessCheck),
             ledger: ledger,
             targetComplexCount: targetComplexCount,
+            volumeStatuses: AdaptiveVolumeControllerService.statuses(
+                program: program,
+                allTargets: volumeTargets,
+                anchors: volumeAnchors,
+                evidence: rotationEvidence + adaptiveEvidence,
+                asOf: .now
+            ),
+            capacity: capacity(for: program),
             doseRecommendations: AdaptiveDoseEvidenceService.recommendations(
                 program: program,
                 plans: generatedPlans,
@@ -834,13 +910,24 @@ struct AdaptiveWorkoutView: View {
                 for: program,
                 preferences: workoutSizePreferences
             ),
-            enabledMuscles(in: program).count
+            min(
+                enabledMuscles(in: program).count,
+                capacity(for: program).maxMuscleGroupCount
+            )
         )
         return AdaptiveForecastService.expectedProposal(
             program: program,
             exercises: exercises,
             ledger: ledger,
             targetComplexCount: max(1, target),
+            volumeStatuses: AdaptiveVolumeControllerService.statuses(
+                program: program,
+                allTargets: volumeTargets,
+                anchors: volumeAnchors,
+                evidence: rotationEvidence + adaptiveEvidence,
+                asOf: tomorrow
+            ),
+            capacity: capacity(for: program),
             exerciseSelections: AdaptiveExerciseSelectionService.recommendations(
                 exercises: exercises,
                 preferences: exerciseSelectionPreferences,
@@ -907,7 +994,16 @@ struct AdaptiveWorkoutView: View {
                     for: program,
                     preferences: workoutSizePreferences
                 )
-            let target = max(1, min(requestedTarget, enabledMuscles(in: program).count))
+            let target = max(
+                1,
+                min(
+                    requestedTarget,
+                    min(
+                        enabledMuscles(in: program).count,
+                        capacity(for: program).maxMuscleGroupCount
+                    )
+                )
+            )
             if let oldDesignState { modelContext.delete(oldDesignState) }
             try AdaptiveWorkoutService.discardForRegeneration(
                 plan: plan,
@@ -943,7 +1039,16 @@ struct AdaptiveWorkoutView: View {
         guard let program = activeProgram,
               let check = readinessChecks.first(where: { $0.id == plan.readinessCheckId }) else { return }
         do {
-            let boundedTarget = max(1, min(target, enabledMuscles(in: program).count))
+            let boundedTarget = max(
+                1,
+                min(
+                    target,
+                    min(
+                        enabledMuscles(in: program).count,
+                        capacity(for: program).maxMuscleGroupCount
+                    )
+                )
+            )
             let proposed = try makePlan(
                 program: program,
                 readinessCheck: check,

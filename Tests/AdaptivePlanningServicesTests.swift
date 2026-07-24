@@ -445,7 +445,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(proposal.totalMovements, 2)
         XCTAssertEqual(proposal.muscleSetDose[.chest], 4)
         let trace = AdaptivePlanService.trace(for: result)
-        XCTAssertEqual(trace.plannerVersion, 6)
+        XCTAssertEqual(trace.plannerVersion, 7)
         XCTAssertEqual(trace.outcomeCode, "proposal")
         XCTAssertEqual(trace.selectedComplexDefinitionIds, [uuid(1)])
         XCTAssertNil(trace.conflictCode)
@@ -1291,6 +1291,310 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(one.complexes.count, 1)
         XCTAssertEqual(one.complexes.first?.components.count, 2)
         XCTAssertEqual(two.complexes.map(\.primaryMuscle), [.chest, .back])
+    }
+
+    func testVolumeControllerCountsOnlyPrimarySetsAndCapsDebtAtOneWeek() {
+        let program = makeProgram(
+            movements: 1,
+            difficulty: 10,
+            enabled: [.chest, .triceps],
+            complexes: []
+        )
+        let targetTime = now
+        let targets = [MuscleGroup.chest, .triceps].map {
+            AdaptiveMuscleVolumeTarget(
+                adaptiveProgramId: program.id,
+                lineageId: program.lineageId,
+                muscle: $0,
+                weeklySetTarget: 7,
+                dailySetCap: 4,
+                effectiveAt: targetTime
+            )
+        }
+        let anchors = [MuscleGroup.chest, .triceps].map {
+            AdaptiveMuscleVolumeAnchor(
+                lineageId: program.lineageId,
+                muscle: $0,
+                activatedAt: targetTime,
+                initialBalance: 0
+            )
+        }
+        let evidence = TrainingLoadEvidence(
+            sessionId: UUID(),
+            setEntryId: UUID(),
+            exerciseId: UUID(),
+            completedAt: targetTime.addingTimeInterval(43_200),
+            muscles: [.chest, .triceps],
+            weight: 100,
+            reps: 8,
+            isSessionCompleted: true,
+            isLocked: true,
+            kind: .rotation,
+            complexDefinitionId: nil,
+            componentPosition: nil
+        )
+
+        let afterOneDay = AdaptiveVolumeControllerService.statuses(
+            program: program,
+            allTargets: targets,
+            anchors: anchors,
+            evidence: [evidence],
+            asOf: targetTime.addingTimeInterval(86_400)
+        )
+        XCTAssertEqual(afterOneDay[.chest]?.balance ?? .nan, 0, accuracy: 0.001)
+        XCTAssertEqual(afterOneDay[.triceps]?.balance ?? .nan, -1, accuracy: 0.001)
+
+        let afterTwentyDays = AdaptiveVolumeControllerService.statuses(
+            program: program,
+            allTargets: targets,
+            anchors: anchors,
+            evidence: [],
+            asOf: targetTime.addingTimeInterval(20 * 86_400)
+        )
+        XCTAssertEqual(afterTwentyDays[.chest]?.balance ?? .nan, -7, accuracy: 0.001)
+    }
+
+    func testVolumeControllerAppliesTargetChangesProspectively() {
+        let first = makeProgram(
+            movements: 1,
+            difficulty: 10,
+            enabled: [.chest],
+            complexes: []
+        )
+        let second = AdaptiveProgram(
+            lineageId: first.lineageId,
+            version: 2,
+            name: "Edited",
+            createdAt: now.addingTimeInterval(7 * 86_400),
+            isActiveVersion: true,
+            isReviewedForUse: true,
+            globalMaxMovements: 1,
+            maxDifficultyCost: 10,
+            muscleRules: first.muscleRules,
+            complexes: []
+        )
+        let targets = [
+            AdaptiveMuscleVolumeTarget(
+                adaptiveProgramId: first.id,
+                lineageId: first.lineageId,
+                muscle: .chest,
+                weeklySetTarget: 7,
+                dailySetCap: 4,
+                effectiveAt: now
+            ),
+            AdaptiveMuscleVolumeTarget(
+                adaptiveProgramId: second.id,
+                lineageId: second.lineageId,
+                muscle: .chest,
+                weeklySetTarget: 14,
+                dailySetCap: 6,
+                effectiveAt: now.addingTimeInterval(7 * 86_400)
+            )
+        ]
+        let status = AdaptiveVolumeControllerService.statuses(
+            program: second,
+            allTargets: targets,
+            anchors: [
+                AdaptiveMuscleVolumeAnchor(
+                    lineageId: first.lineageId,
+                    muscle: .chest,
+                    activatedAt: now,
+                    initialBalance: 0
+                )
+            ],
+            evidence: [],
+            asOf: now.addingTimeInterval(8 * 86_400)
+        )[.chest]
+
+        XCTAssertEqual(status?.weeklySetTarget, 14)
+        XCTAssertEqual(status?.dailySetCap, 6)
+        XCTAssertEqual(status?.balance ?? .nan, -9, accuracy: 0.001)
+    }
+
+    func testVolumeControllerIncludesHistoryHydratedAfterAnchorCreation() {
+        let program = makeProgram(
+            movements: 1,
+            difficulty: 10,
+            enabled: [.chest],
+            complexes: []
+        )
+        let target = AdaptiveMuscleVolumeTarget(
+            adaptiveProgramId: program.id,
+            lineageId: program.lineageId,
+            muscle: .chest,
+            weeklySetTarget: 9,
+            dailySetCap: 4,
+            effectiveAt: now
+        )
+        let lateHistory = (1...2).map { offset in
+            TrainingLoadEvidence(
+                sessionId: UUID(),
+                setEntryId: UUID(),
+                exerciseId: UUID(),
+                completedAt: now.addingTimeInterval(-Double(offset) * 86_400),
+                muscles: [.chest],
+                weight: 100,
+                reps: 8,
+                isSessionCompleted: true,
+                isLocked: true,
+                kind: offset == 1 ? .adHoc : .adaptiveComparable,
+                complexDefinitionId: nil,
+                componentPosition: nil
+            )
+        }
+        let status = AdaptiveVolumeControllerService.statuses(
+            program: program,
+            allTargets: [target],
+            anchors: [
+                AdaptiveMuscleVolumeAnchor(
+                    lineageId: program.lineageId,
+                    muscle: .chest,
+                    activatedAt: now,
+                    initialBalance: -9,
+                    seededDirectSetEntryIds: []
+                )
+            ],
+            evidence: lateHistory,
+            asOf: now
+        )[.chest]
+
+        XCTAssertEqual(status?.balance ?? .nan, -7, accuracy: 0.001)
+    }
+
+    func testVolumePlannerPrioritizesNormalizedDebtAndSplitsBackDose() {
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
+        let row = exercise("Chest Supported Row", muscle: .back)
+        let press = exercise("Press", muscle: .chest)
+        let program = makeProgram(
+            movements: 2,
+            difficulty: 20,
+            enabled: [.back, .chest],
+            complexes: [
+                makeComplex(
+                    id: uuid(401),
+                    position: 0,
+                    primary: .back,
+                    components: [component(pulldown, sets: 2), component(row, position: 1, sets: 2)]
+                ),
+                makeComplex(
+                    id: uuid(402),
+                    position: 1,
+                    primary: .chest,
+                    components: [component(press, sets: 2)]
+                )
+            ]
+        )
+        let statuses: [MuscleGroup: AdaptiveMuscleVolumeStatus] = [
+            .back: .init(muscle: .back, weeklySetTarget: 12, dailySetCap: 4, balance: -4),
+            .chest: .init(muscle: .chest, weeklySetTarget: 9, dailySetCap: 4, balance: -4)
+        ]
+        let first = unwrapProposal(AdaptivePlanService.generate(
+            program: program,
+            exercises: [pulldown, row, press],
+            readiness: readyInputs,
+            ledger: TrainingLoadLedger(byMuscle: [:]),
+            targetComplexCount: 1,
+            volumeStatuses: statuses,
+            capacity: .initial,
+            now: now,
+            calendar: utcCalendar
+        ))
+        XCTAssertEqual(first.complexes.map(\.primaryMuscle), [.chest])
+        XCTAssertEqual(first.complexes.first?.components.first?.prescribedSetCount, 4)
+
+        var backOnly = statuses
+        backOnly[.chest]?.balance = 1
+        let back = unwrapProposal(AdaptivePlanService.generate(
+            program: program,
+            exercises: [pulldown, row, press],
+            readiness: readyInputs,
+            ledger: TrainingLoadLedger(byMuscle: [:]),
+            targetComplexCount: 1,
+            volumeStatuses: backOnly,
+            capacity: .initial,
+            now: now,
+            calendar: utcCalendar
+        ))
+        XCTAssertEqual(back.complexes.map(\.primaryMuscle), [.back])
+        XCTAssertEqual(back.complexes.first?.components.map(\.prescribedSetCount), [2, 2])
+        XCTAssertEqual(back.muscleSetDose[.back], 4)
+        XCTAssertNil(back.muscleSetDose[.biceps])
+    }
+
+    func testInitialWorkoutCapacityProducesAtMostFiveGroupsSevenExercisesAndTwentySets() {
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
+        let row = exercise("Cable Row", muscle: .back)
+        let press = exercise("Chest Press", muscle: .chest)
+        let fly = exercise("Cable Fly", muscle: .chest, type: .isolation)
+        let curl = exercise("Curl", muscle: .biceps, type: .isolation)
+        let tricepsExtension = exercise("Extension", muscle: .triceps, type: .isolation)
+        let squat = exercise("Belt Squat", muscle: .quads)
+        let hinge = exercise("Stiff-Leg Deadlift", muscle: .hamstrings)
+        let allExercises = [pulldown, row, press, fly, curl, tricepsExtension, squat, hinge]
+        let program = makeProgram(
+            movements: 6,
+            difficulty: 60,
+            enabled: [.back, .chest, .biceps, .triceps, .quads, .hamstrings],
+            complexes: [
+                makeComplex(
+                    id: uuid(501),
+                    position: 0,
+                    primary: .back,
+                    components: [component(pulldown), component(row, position: 1)]
+                ),
+                makeComplex(
+                    id: uuid(502),
+                    position: 1,
+                    primary: .chest,
+                    components: [component(press), component(fly, position: 1)]
+                ),
+                makeComplex(id: uuid(503), position: 2, primary: .biceps, components: [component(curl)]),
+                makeComplex(
+                    id: uuid(504),
+                    position: 3,
+                    primary: .triceps,
+                    components: [component(tricepsExtension)]
+                ),
+                makeComplex(id: uuid(505), position: 4, primary: .quads, components: [component(squat)]),
+                makeComplex(id: uuid(506), position: 5, primary: .hamstrings, components: [component(hinge)])
+            ]
+        )
+        let statuses = Dictionary(uniqueKeysWithValues: [
+            MuscleGroup.back, .chest, .biceps, .triceps, .quads, .hamstrings
+        ].map {
+            (
+                $0,
+                AdaptiveMuscleVolumeStatus(
+                    muscle: $0,
+                    weeklySetTarget: 8,
+                    dailySetCap: 4,
+                    balance: -4
+                )
+            )
+        })
+        let proposal = unwrapProposal(AdaptivePlanService.generate(
+            program: program,
+            exercises: allExercises,
+            readiness: readyInputs,
+            ledger: TrainingLoadLedger(byMuscle: [:]),
+            targetComplexCount: 6,
+            volumeStatuses: statuses,
+            capacity: .initial,
+            now: now,
+            calendar: utcCalendar
+        ))
+        let components = proposal.complexes.flatMap(\.components)
+        let directSetsByMuscle = Dictionary(grouping: components, by: \.primaryMuscle)
+            .mapValues { $0.reduce(0) { $0 + $1.prescribedSetCount } }
+
+        XCTAssertEqual(proposal.complexes.count, 5)
+        XCTAssertEqual(components.count, 7)
+        XCTAssertEqual(components.reduce(0) { $0 + $1.prescribedSetCount }, 20)
+        XCTAssertTrue(Dictionary(grouping: components, by: \.primaryMuscle).values.allSatisfy {
+            $0.count <= 2
+        })
+        XCTAssertTrue(components.allSatisfy { $0.prescribedSetCount <= 4 })
+        XCTAssertTrue(directSetsByMuscle.values.allSatisfy { $0 <= 4 })
     }
 
     private func makeComplex(

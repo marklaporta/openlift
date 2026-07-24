@@ -10,6 +10,13 @@ plan used to open the production store. The v1 declaration uses the existing
 model types and therefore preserves the entity identities and checksum of stores
 created by the former unversioned `Schema([...])` call.
 
+Later schemas remain additive: V4 adds exercise-selection preferences, V5 adds
+export diagnostics, V6 adds workout-size/design state, and V7 adds parallel
+per-version volume targets, workout capacity, and lineage volume anchors.
+The V7 lightweight migration does not alter legacy sessions, completed Adaptive
+snapshots, or export records. Controller rows are initialized only after the
+store opens successfully.
+
 ## Startup failure contract
 
 The app attempts to open the persistent store once. If SwiftData rejects the

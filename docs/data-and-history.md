@@ -9,6 +9,8 @@ Core models live in [`Models.swift`](../Sources/Models.swift):
 - `TrainingPreference`
 - `Exercise`
 - versioned Adaptive program, muscle-rule, complex, and component records
+- versioned per-muscle volume targets, workout-capacity preferences, and
+  lineage-scoped volume anchors
 - raw daily readiness and generated/frozen plan snapshots
 - Adaptive occurrence links, complex feedback, and explicit override events
 - `CycleTemplate`
@@ -27,9 +29,10 @@ date and every completed set's weight and reps. Incomplete or unlocked Adaptive
 rows are excluded.
 
 Ad hoc logging remains available in either training mode. Completed locked ad
-hoc sets will be load/recovery evidence for Adaptive planning, but they are not
-automatically same-complex performance evidence. Drafts and unlocked sets do
-not count.
+hoc sets will be load/recovery evidence for Adaptive planning. Direct sets count
+toward the exercise primary muscle's set-rate target; secondary muscles receive
+recovery context but no target credit. Ad hoc work is not automatically
+same-complex performance evidence. Drafts and unlocked sets do not count.
 
 Legacy Rotation `Session` and `SetEntry` shapes remain unchanged for copied-store
 migration safety. Adaptive planning/execution provenance lives in parallel

@@ -16,6 +16,7 @@ struct CycleView: View {
     @Query private var trainingPreferences: [TrainingPreference]
     @Query private var adaptivePrograms: [AdaptiveProgram]
     @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
+    @Query private var capacityPreferences: [AdaptiveWorkoutCapacityPreference]
 
     @State private var presentingNewTemplate = false
     @State private var editingTemplate: CycleTemplate?
@@ -290,7 +291,7 @@ struct CycleView: View {
                         Spacer()
                     }
                     Text(
-                        "Default workout: \(AdaptiveProgramService.defaultComplexCount(for: program, preferences: workoutSizePreferences)) muscle groups"
+                        "Up to \(AdaptiveVolumeControllerService.capacity(for: program, preferences: capacityPreferences).maxMuscleGroupCount) muscle groups · \(AdaptiveVolumeControllerService.capacity(for: program, preferences: capacityPreferences).maxExerciseCount) exercises · \(AdaptiveVolumeControllerService.capacity(for: program, preferences: capacityPreferences).maxWorkingSetCount) sets"
                     )
                         .font(.caption)
                         .foregroundStyle(.secondary)

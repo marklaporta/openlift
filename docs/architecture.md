@@ -28,6 +28,8 @@ The main SwiftData models are defined in [`Models.swift`](../Sources/Models.swif
 - `TrainingPreference`
 - `AdaptiveProgram`, `AdaptiveMuscleRule`
 - `AdaptiveExerciseComplex`, `AdaptiveComplexComponent`
+- `AdaptiveMuscleVolumeTarget`, `AdaptiveWorkoutCapacityPreference`,
+  `AdaptiveMuscleVolumeAnchor`
 - `DailyReadinessCheck`, `AdaptiveReadinessResponse`
 - `GeneratedWorkoutPlan`, `PlannedComplexSnapshot`, `PlannedExerciseSnapshot`
 - `AdaptiveSetOccurrenceLink`, `ComplexFeedback`, `AdaptiveOverrideEvent`
@@ -118,6 +120,10 @@ Adaptive Workout is one tab with three service-backed phases: Readiness, Design,
 and Execute. Readiness is committed locally before its distinct asynchronous
 iCloud mirror begins. Design stores a per-plan muscle-group exposure target in
 parallel migration-safe metadata; the profile default remains independent.
+The set-rate controller derives per-muscle credit/debt from immutable completed
+set evidence plus versioned target changes. Only primary-muscle sets receive
+volume credit. Automatic planning applies the profile's muscle-group, exercise,
+per-muscle exercise, total-set, daily-muscle-set, and per-exercise caps.
 Difficulty is recovery context rather than a global point budget. The canonical
 planner strongly deprioritizes a hard quad plus hard hamstring pairing but does
 not make it infeasible, and it cannot route an easier exercise to a muscle that

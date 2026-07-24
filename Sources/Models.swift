@@ -265,6 +265,104 @@ final class AdaptivePlanDesignState {
     }
 }
 
+/// Version-scoped volume settings are stored beside, rather than inside, the
+/// original AdaptiveProgram graph so older stores and completed snapshots keep
+/// their existing schema identity.
+@Model
+final class AdaptiveMuscleVolumeTarget {
+    @Attribute(.unique) var key: String
+    var adaptiveProgramId: UUID
+    var lineageId: UUID
+    var muscle: MuscleGroup
+    var weeklySetTarget: Int
+    var dailySetCap: Int
+    var effectiveAt: Date
+
+    init(
+        adaptiveProgramId: UUID,
+        lineageId: UUID,
+        muscle: MuscleGroup,
+        weeklySetTarget: Int,
+        dailySetCap: Int,
+        effectiveAt: Date
+    ) {
+        self.key = Self.key(programId: adaptiveProgramId, muscle: muscle)
+        self.adaptiveProgramId = adaptiveProgramId
+        self.lineageId = lineageId
+        self.muscle = muscle
+        self.weeklySetTarget = weeklySetTarget
+        self.dailySetCap = dailySetCap
+        self.effectiveAt = effectiveAt
+    }
+
+    static func key(programId: UUID, muscle: MuscleGroup) -> String {
+        "\(programId.uuidString)|\(muscle.rawValue)"
+    }
+}
+
+/// Per-version workout time/capacity limits. These are planner limits, not
+/// restrictions on manual logging.
+@Model
+final class AdaptiveWorkoutCapacityPreference {
+    @Attribute(.unique) var adaptiveProgramId: UUID
+    var maxMuscleGroupCount: Int
+    var maxExerciseCount: Int
+    var maxExercisesPerMuscle: Int
+    var maxWorkingSetCount: Int
+    var maxSetsPerExercise: Int
+    var updatedAt: Date
+
+    init(
+        adaptiveProgramId: UUID,
+        maxMuscleGroupCount: Int = 5,
+        maxExerciseCount: Int = 7,
+        maxExercisesPerMuscle: Int = 2,
+        maxWorkingSetCount: Int = 20,
+        maxSetsPerExercise: Int = 4,
+        updatedAt: Date = .now
+    ) {
+        self.adaptiveProgramId = adaptiveProgramId
+        self.maxMuscleGroupCount = maxMuscleGroupCount
+        self.maxExerciseCount = maxExerciseCount
+        self.maxExercisesPerMuscle = maxExercisesPerMuscle
+        self.maxWorkingSetCount = maxWorkingSetCount
+        self.maxSetsPerExercise = maxSetsPerExercise
+        self.updatedAt = updatedAt
+    }
+}
+
+/// A one-time starting balance for a profile lineage. The balance is seeded
+/// from direct completed work in the preceding seven days; later balances are
+/// derived from immutable history and versioned target changes.
+@Model
+final class AdaptiveMuscleVolumeAnchor {
+    @Attribute(.unique) var key: String
+    var lineageId: UUID
+    var muscle: MuscleGroup
+    var activatedAt: Date
+    var initialBalance: Double
+    var seededDirectSetEntryIds: [UUID]
+
+    init(
+        lineageId: UUID,
+        muscle: MuscleGroup,
+        activatedAt: Date,
+        initialBalance: Double,
+        seededDirectSetEntryIds: [UUID] = []
+    ) {
+        self.key = Self.key(lineageId: lineageId, muscle: muscle)
+        self.lineageId = lineageId
+        self.muscle = muscle
+        self.activatedAt = activatedAt
+        self.initialBalance = initialBalance
+        self.seededDirectSetEntryIds = seededDirectSetEntryIds
+    }
+
+    static func key(lineageId: UUID, muscle: MuscleGroup) -> String {
+        "\(lineageId.uuidString)|\(muscle.rawValue)"
+    }
+}
+
 enum AdaptiveExerciseSelectionMode: String, Codable, CaseIterable, Hashable {
     case repeatLast
     case rotateRecent

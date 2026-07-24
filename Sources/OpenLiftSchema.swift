@@ -88,6 +88,19 @@ enum OpenLiftSchemaV6: VersionedSchema {
     ]
 }
 
+/// Adds the set-rate controller as parallel configuration and anchor records.
+/// Existing program graphs, sessions, set rows, and export snapshots are not
+/// modified by this migration.
+enum OpenLiftSchemaV7: VersionedSchema {
+    static let versionIdentifier = Schema.Version(7, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV6.models + [
+        AdaptiveMuscleVolumeTarget.self,
+        AdaptiveWorkoutCapacityPreference.self,
+        AdaptiveMuscleVolumeAnchor.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
@@ -95,7 +108,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV3.self,
         OpenLiftSchemaV4.self,
         OpenLiftSchemaV5.self,
-        OpenLiftSchemaV6.self
+        OpenLiftSchemaV6.self,
+        OpenLiftSchemaV7.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -118,6 +132,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV5.self,
             toVersion: OpenLiftSchemaV6.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV6.self,
+            toVersion: OpenLiftSchemaV7.self
         )
     ]
 }
