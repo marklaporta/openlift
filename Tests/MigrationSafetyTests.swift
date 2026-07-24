@@ -40,6 +40,88 @@ private enum UnsupportedMigrationPlan: SchemaMigrationPlan {
 }
 
 final class MigrationSafetyTests: XCTestCase {
+    func testV6StoreMigratesToV7WithoutChangingWorkoutOrDesignData() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let storeURL = fixture.working.appendingPathComponent("default.store")
+        let programId = UUID()
+        let lineageId = UUID()
+        let planId = UUID()
+
+        do {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
+            let container = try ModelContainer(
+                for: schema,
+                configurations: [
+                    ModelConfiguration(
+                        "V6VolumeControllerFixture",
+                        schema: schema,
+                        url: storeURL,
+                        cloudKitDatabase: .none
+                    )
+                ]
+            )
+            let context = ModelContext(container)
+            context.insert(
+                AdaptiveProgram(
+                    id: programId,
+                    lineageId: lineageId,
+                    version: 4,
+                    name: "Existing Adaptive Profile",
+                    isReviewedForUse: true,
+                    globalMaxMovements: 4,
+                    maxDifficultyCost: 60,
+                    muscleRules: [],
+                    complexes: []
+                )
+            )
+            context.insert(
+                AdaptiveWorkoutSizePreference(
+                    adaptiveProgramId: programId,
+                    defaultComplexCount: 4
+                )
+            )
+            context.insert(
+                AdaptivePlanDesignState(
+                    generatedPlanId: planId,
+                    targetComplexCount: 3,
+                    readinessRevision: 2,
+                    canonicalSignature: "existing-signature"
+                )
+            )
+            try context.save()
+        }
+
+        let schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
+        let startup = OpenLiftModelContainerFactory.makePersistent(
+            schema: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: ModelConfiguration(
+                "V7VolumeControllerFixture",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+        )
+
+        XCTAssertNil(startup.issue)
+        let context = ModelContext(startup.container)
+        let program = try XCTUnwrap(context.fetch(FetchDescriptor<AdaptiveProgram>()).first)
+        XCTAssertEqual(program.id, programId)
+        XCTAssertEqual(program.lineageId, lineageId)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<AdaptiveWorkoutSizePreference>()).first?.defaultComplexCount,
+            4
+        )
+        let design = try XCTUnwrap(context.fetch(FetchDescriptor<AdaptivePlanDesignState>()).first)
+        XCTAssertEqual(design.generatedPlanId, planId)
+        XCTAssertEqual(design.targetComplexCount, 3)
+        XCTAssertEqual(design.canonicalSignature, "existing-signature")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveMuscleVolumeTarget>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutCapacityPreference>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveMuscleVolumeAnchor>()), 0)
+    }
+
     func testV5StoreMigratesToV6WithoutChangingWorkoutOrExportData() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -291,12 +373,12 @@ final class MigrationSafetyTests: XCTestCase {
         )
         let legacyCounts = try legacyEntityCounts(in: legacyContainer)
 
-        let v5Schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
+        let v5Schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
         let startup = OpenLiftModelContainerFactory.makePersistent(
             schema: v5Schema,
             migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configuration: ModelConfiguration(
-                "CopiedDeviceV6Readback",
+                "CopiedDeviceV7Readback",
                 schema: v5Schema,
                 url: fixture.working.appendingPathComponent("default.store"),
                 cloudKitDatabase: .none
@@ -313,7 +395,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try persistentStoreManifest(in: suppliedBackup), suppliedManifestBefore)
     }
 
-    func testUnversionedV1FixtureMigratesToV6AndRollsBack() throws {
+    func testUnversionedV1FixtureMigratesToV7AndRollsBack() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
@@ -324,7 +406,7 @@ final class MigrationSafetyTests: XCTestCase {
         let sourceManifestBefore = try persistentStoreManifest(in: fixture.source)
         XCTAssertFalse(sourceManifestBefore.isEmpty)
 
-        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV6.self)
+        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV7.self)
         let workingStoreURL = fixture.working.appendingPathComponent("default.store")
         let workingConfiguration = ModelConfiguration(
             "MigrationFixture",
@@ -426,6 +508,9 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ExportDiagnostic>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutSizePreference>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptivePlanDesignState>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveMuscleVolumeTarget>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutCapacityPreference>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveMuscleVolumeAnchor>()), 0)
     }
 
     private func createUnversionedV1Fixture(at storeURL: URL) throws {

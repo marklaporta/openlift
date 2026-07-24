@@ -39,7 +39,6 @@ struct RootTabView: View {
         }
         .task {
             _ = try? BootstrapDataService.ensureExerciseCatalog(modelContext: modelContext)
-            _ = try? AdaptiveProgramService.normalizeBinaryExposureRequirements(modelContext: modelContext)
             _ = try? AdaptiveProgramService.normalizeLegacyDemoLabels(modelContext: modelContext)
             _ = try? AdaptiveProgramService.ensureWorkoutSizePreferences(modelContext: modelContext)
             _ = try? AdaptiveProgramService.ensurePlanDesignStates(modelContext: modelContext)
@@ -62,6 +61,9 @@ struct RootTabView: View {
             )
             retryPendingExports()
             importAvailableWorkoutExportsIfRequested()
+            _ = try? AdaptiveVolumeControllerService.ensureStoredConfiguration(
+                modelContext: modelContext
+            )
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {

@@ -1287,7 +1287,7 @@ final class OpenLiftStateResolverTests: XCTestCase {
 
     @MainActor
     func testPendingReadinessMirrorRetriesToUploaded() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let check = DailyReadinessCheck(
@@ -1342,7 +1342,7 @@ final class OpenLiftStateResolverTests: XCTestCase {
 
     @MainActor
     func testReadinessEnqueueCommitsPendingBeforeCloudWriteCompletes() async throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let check = DailyReadinessCheck(

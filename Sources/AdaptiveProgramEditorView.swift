@@ -8,6 +8,8 @@ struct AdaptiveProgramEditorView: View {
     @Query private var exercises: [Exercise]
     @Query private var programs: [AdaptiveProgram]
     @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
+    @Query private var volumeTargets: [AdaptiveMuscleVolumeTarget]
+    @Query private var capacityPreferences: [AdaptiveWorkoutCapacityPreference]
 
     let existingProgram: AdaptiveProgram?
 
@@ -61,11 +63,31 @@ struct AdaptiveProgramEditorView: View {
                 Text(errorMessage ?? "Unknown error")
             }
             .task {
-                guard let existingProgram,
-                      let stored = workoutSizePreferences.first(where: {
-                          $0.adaptiveProgramId == existingProgram.id
-                      }) else { return }
-                draft.defaultComplexCount = stored.defaultComplexCount
+                guard let existingProgram else { return }
+                if let stored = workoutSizePreferences.first(where: {
+                    $0.adaptiveProgramId == existingProgram.id
+                }) {
+                    draft.defaultComplexCount = stored.defaultComplexCount
+                }
+                let targets = AdaptiveVolumeControllerService.targets(
+                    for: existingProgram,
+                    allTargets: volumeTargets
+                )
+                for index in draft.muscleRules.indices {
+                    let muscle = draft.muscleRules[index].muscle
+                    if let target = targets[muscle] {
+                        draft.muscleRules[index].weeklySetTarget = target.weeklySetTarget
+                        draft.muscleRules[index].dailySetCap = target.dailySetCap
+                    }
+                }
+                if let capacity = capacityPreferences.first(where: {
+                    $0.adaptiveProgramId == existingProgram.id
+                }) {
+                    draft.defaultComplexCount = capacity.maxMuscleGroupCount
+                    draft.maxExerciseCount = capacity.maxExerciseCount
+                    draft.maxExercisesPerMuscle = capacity.maxExercisesPerMuscle
+                    draft.maxWorkingSetCount = capacity.maxWorkingSetCount
+                }
             }
         }
         .sheet(isPresented: $presentingNewExercise) {
@@ -83,11 +105,26 @@ struct AdaptiveProgramEditorView: View {
             TextField("Profile Name", text: $draft.name)
                 .accessibilityIdentifier("adaptive.profileName")
             Stepper(
-                "Default muscle groups: \(draft.defaultComplexCount)",
+                "Maximum muscle groups: \(draft.defaultComplexCount)",
                 value: $draft.defaultComplexCount,
                 in: 1...12
             )
-            Text("Each muscle-group complex counts once, regardless of its exercise or set count.")
+            Stepper(
+                "Maximum exercises: \(draft.maxExerciseCount)",
+                value: $draft.maxExerciseCount,
+                in: 1...30
+            )
+            Stepper(
+                "Exercises per muscle: \(draft.maxExercisesPerMuscle)",
+                value: $draft.maxExercisesPerMuscle,
+                in: 1...5
+            )
+            Stepper(
+                "Maximum working sets: \(draft.maxWorkingSetCount)",
+                value: $draft.maxWorkingSetCount,
+                in: 1...100
+            )
+            Text("The planner also limits each exercise to 4 working sets.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Toggle("Reviewed for real use", isOn: $draft.isReviewedForUse)
@@ -130,33 +167,18 @@ struct AdaptiveProgramEditorView: View {
                             }
                         }
 
-                        Toggle(
-                            "Require training within window",
-                            isOn: Binding(
-                                get: { draft.muscleRules[index].rollingSetFloor > 0 },
-                                set: { draft.muscleRules[index].rollingSetFloor = $0 ? 1 : 0 }
-                            )
+                        Stepper(
+                            "Weekly set target: \(rule.weeklySetTarget)",
+                            value: $draft.muscleRules[index].weeklySetTarget,
+                            in: 0...100
                         )
                         Stepper(
-                            "Training window: \(rule.rollingWindowDays) days",
-                            value: $draft.muscleRules[index].rollingWindowDays,
-                            in: 1...60
-                        )
-                        Text("Any qualifying completed work counts as trained.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Stepper(
-                            "Maximum recovered gap: \(rule.maxRecoveredDayGap) days",
-                            value: $draft.muscleRules[index].maxRecoveredDayGap,
-                            in: 1...60
-                        )
-                        Stepper(
-                            "Sets per exercise: \(rule.maxSetsPerExercise)",
-                            value: $draft.muscleRules[index].maxSetsPerExercise,
-                            in: 1...10
+                            "Maximum sets today: \(rule.dailySetCap)",
+                            value: $draft.muscleRules[index].dailySetCap,
+                            in: 1...20
                         )
                     } else {
-                        Text("Candidate only · no priority or training-window requirement")
+                        Text("Not recommended automatically")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -289,7 +311,7 @@ struct AdaptiveProgramEditorView: View {
             Stepper(
                 "Prescribed working sets: \(component.prescribedSetCount)",
                 value: $draft.complexes[complexIndex].components[componentIndex].prescribedSetCount,
-                in: 1...10
+                in: 1...4
             )
 
             HStack {
@@ -324,6 +346,14 @@ struct AdaptiveProgramEditorView: View {
 
     private func setRuleEnabled(at index: Int, enabled: Bool) {
         draft.muscleRules[index].isEnabled = enabled
+        if enabled && draft.muscleRules[index].weeklySetTarget == 0 {
+            draft.muscleRules[index].weeklySetTarget = max(
+                1,
+                AdaptiveVolumeControllerService.defaultWeeklyTarget(
+                    for: draft.muscleRules[index].muscle
+                )
+            )
+        }
         normalizePriorities()
     }
 

@@ -23,8 +23,8 @@ implementation must not create competing user-facing Workout pages.
 Ad hoc workout logging remains available regardless of active training mode.
 When an ad hoc session is completed during Adaptive mode, its locked completed
 sets contribute to the rebuildable training-load ledger. The next Adaptive plan
-must account for that work when evaluating recovery, recent exposure, rolling
-volume, binary training-window exposure, and eligibility.
+must account for that work when evaluating recovery, direct-set pace, and
+eligibility.
 
 Ad hoc work is load and recovery evidence, but is not automatically comparable
 Adaptive-complex performance evidence. Drafts and unlocked sets never affect the
@@ -57,7 +57,7 @@ initial enabled priority is:
 9. Calves
 
 Glutes, Abs, and Traps are explicit candidates but start disabled, unranked, and
-without a training-window requirement. Glutes are excluded from the current
+without a set target. Glutes are excluded from the current
 equipment profile because available glute work is better represented by its quad
 movements. The persisted shoulder raw value remains `sideDelts` so old
 stores continue to decode; it is presented as the broader Shoulders bucket.
@@ -65,15 +65,28 @@ The current catalog is side-delt focused, but future front- or rear-delt
 exercise variants may use the same bucket.
 
 Cycle contains the one Adaptive profile editor. A profile stores strict muscle
-priorities, a binary training-window and recovered-gap policy, per-exercise set
-caps, and a default muscle-group exposure target (four by default).
+priorities, editable weekly-equivalent direct-set targets, editable per-muscle
+daily caps, and workout capacity. The initial capacity is five muscle groups,
+seven exercises, no more than two exercises per muscle, and twenty working sets.
+The automatic planner never prescribes more than four sets for one exercise.
 Complexes are ordered atomic units with ordered component exercises, set counts,
 primary plus optional major-secondary attribution, and easy/moderate/hard recovery context.
-The training-window requirement is binary: one or more qualifying locked working
-sets means the muscle was trained, regardless of set count. Set prescriptions
-are adjusted separately from volume feedback and repeat performance. A muscle
-with no qualifying exposure in its window is due and receives protection from
-starvation without turning the missing history into an invented set quota.
+
+Only completed, locked sets with reps count toward the volume target, and only
+for the exercise's primary muscle. Secondary attribution remains recovery
+context but receives no target credit. Each target accrues continuously at its
+weekly value divided by seven. Credit and debt are each capped at one weekly
+target; recovered muscles with the greatest normalized debt are considered
+first. Prescriptions approach the accumulated debt within the muscle, exercise,
+and workout caps, distributing work across complementary configured movements
+before piling sets onto one movement.
+
+Initial weekly targets are Back 12, Shoulders 12, Chest 9, Biceps 9, Triceps 9,
+Quads 6, Forearms 6, Calves 6, and Hamstrings 4. The initial per-muscle daily cap
+is four. On first activation the controller seeds each balance from direct sets
+completed in the preceding seven days across Adaptive, Fixed Cycle, and ad hoc
+history. Target edits create a new immutable profile version and apply
+prospectively; they do not rewrite old work or previously elapsed target rates.
 The proposed slate remains editable: movements may be added, removed, swapped,
 or reordered before it is accepted, including beyond the automatic target.
 Exercises may also be added to a specific complex before or after the workout is
@@ -125,17 +138,17 @@ Automatic plans include at most one compound for a muscle except Back. Back is
 pattern-aware and may pair exactly one vertical pull with one horizontal pull in
 the same atomic complex; pattern-specific continuity prevents a row from replacing
 a pulldown or vice versa. A compound-plus-isolation complex (for example, Incline
-Press plus Chest Fly) is also valid. The legacy per-muscle exercise-count field is
-retained for store compatibility but no longer limits explicitly authored complexes;
-the complex component boundary and per-exercise set caps remain authoritative.
+Press plus Chest Fly) is also valid. The legacy binary-window and per-muscle
+exercise-count fields are retained for store compatibility but do not drive the
+set-rate planner. The two-exercise automatic limit, global four-set exercise cap,
+and complex component boundary remain authoritative for automatic proposals.
 Manual slate editing remains an explicit escape hatch.
 Saving an edit creates a new immutable profile and complex version. The starter is
 labelled as requiring review and cannot invent catalog exercises for a missing
 muscle.
 
-No production training-window, cap, difficulty, or complex value is silently activated.
-The initial rank above is user-supplied, but G3 remains open until the entire
-production profile and complex library are explicitly reviewed.
+The volume settings and capacity are user-editable. Saving always creates a new
+profile version; existing completed plans and exports retain their snapshots.
 
 ## Readiness before difficulty
 

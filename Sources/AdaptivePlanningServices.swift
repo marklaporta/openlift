@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 struct MuscleReadinessInput: Equatable {
     var soreness: SorenessLevel
@@ -211,6 +212,356 @@ enum TrainingLoadLedgerService {
     }
 }
 
+struct AdaptiveWorkoutCapacity: Equatable {
+    var maxMuscleGroupCount: Int
+    var maxExerciseCount: Int
+    var maxExercisesPerMuscle: Int
+    var maxWorkingSetCount: Int
+    var maxSetsPerExercise: Int
+
+    static let initial = AdaptiveWorkoutCapacity(
+        maxMuscleGroupCount: 5,
+        maxExerciseCount: 7,
+        maxExercisesPerMuscle: 2,
+        maxWorkingSetCount: 20,
+        maxSetsPerExercise: 4
+    )
+    static let legacy = AdaptiveWorkoutCapacity(
+        maxMuscleGroupCount: 12,
+        maxExerciseCount: 100,
+        maxExercisesPerMuscle: 20,
+        maxWorkingSetCount: 1_000,
+        maxSetsPerExercise: 10
+    )
+
+    init(
+        maxMuscleGroupCount: Int,
+        maxExerciseCount: Int,
+        maxExercisesPerMuscle: Int,
+        maxWorkingSetCount: Int,
+        maxSetsPerExercise: Int
+    ) {
+        self.maxMuscleGroupCount = maxMuscleGroupCount
+        self.maxExerciseCount = maxExerciseCount
+        self.maxExercisesPerMuscle = maxExercisesPerMuscle
+        self.maxWorkingSetCount = maxWorkingSetCount
+        self.maxSetsPerExercise = maxSetsPerExercise
+    }
+
+    init(_ preference: AdaptiveWorkoutCapacityPreference) {
+        self.init(
+            maxMuscleGroupCount: preference.maxMuscleGroupCount,
+            maxExerciseCount: preference.maxExerciseCount,
+            maxExercisesPerMuscle: preference.maxExercisesPerMuscle,
+            maxWorkingSetCount: preference.maxWorkingSetCount,
+            maxSetsPerExercise: preference.maxSetsPerExercise
+        )
+    }
+}
+
+struct AdaptiveMuscleVolumeStatus: Equatable {
+    var muscle: MuscleGroup
+    var weeklySetTarget: Int
+    var dailySetCap: Int
+    /// Positive values are accumulated credit; negative values are debt.
+    var balance: Double
+
+    var setsBehind: Double { max(0, -balance) }
+    var normalizedDebt: Double {
+        guard weeklySetTarget > 0 else { return 0 }
+        return setsBehind / Double(weeklySetTarget)
+    }
+}
+
+enum AdaptiveVolumeControllerService {
+    static func defaultWeeklyTarget(for muscle: MuscleGroup) -> Int {
+        switch muscle {
+        case .back, .sideDelts: return 12
+        case .chest, .biceps, .triceps: return 9
+        case .quads, .forearms, .calves: return 6
+        case .hamstrings: return 4
+        case .glutes, .abs, .traps: return 0
+        }
+    }
+
+    static func capacity(
+        for program: AdaptiveProgram,
+        preferences: [AdaptiveWorkoutCapacityPreference]
+    ) -> AdaptiveWorkoutCapacity {
+        preferences.first { $0.adaptiveProgramId == program.id }
+            .map(AdaptiveWorkoutCapacity.init) ?? .initial
+    }
+
+    static func targets(
+        for program: AdaptiveProgram,
+        allTargets: [AdaptiveMuscleVolumeTarget]
+    ) -> [MuscleGroup: AdaptiveMuscleVolumeTarget] {
+        Dictionary(
+            uniqueKeysWithValues: allTargets
+                .filter { $0.adaptiveProgramId == program.id }
+                .map { ($0.muscle, $0) }
+        )
+    }
+
+    /// Creates only missing V7 rows. The first anchor for an active lineage is
+    /// seeded from all completed direct work in the previous seven days,
+    /// regardless of whether it came from Adaptive, Fixed Cycle, or Log.
+    @discardableResult
+    static func ensureStoredConfiguration(
+        modelContext: ModelContext,
+        now: Date = .now,
+        saveChanges: Bool = true
+    ) throws -> Int {
+        let programs = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
+        guard let activeProgram = AdaptiveProgramService.activeProgram(from: programs) else { return 0 }
+        var allTargets = try modelContext.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
+        var capacities = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutCapacityPreference>())
+        var anchors = try modelContext.fetch(FetchDescriptor<AdaptiveMuscleVolumeAnchor>())
+        var inserted = 0
+
+        for muscle in MuscleGroup.allCases where !allTargets.contains(where: {
+            $0.adaptiveProgramId == activeProgram.id && $0.muscle == muscle
+        }) {
+            let target = AdaptiveMuscleVolumeTarget(
+                adaptiveProgramId: activeProgram.id,
+                lineageId: activeProgram.lineageId,
+                muscle: muscle,
+                weeklySetTarget: defaultWeeklyTarget(for: muscle),
+                dailySetCap: 4,
+                effectiveAt: now
+            )
+            modelContext.insert(target)
+            allTargets.append(target)
+            inserted += 1
+        }
+
+        if !capacities.contains(where: { $0.adaptiveProgramId == activeProgram.id }) {
+            let capacity = AdaptiveWorkoutCapacityPreference(adaptiveProgramId: activeProgram.id)
+            modelContext.insert(capacity)
+            capacities.append(capacity)
+            inserted += 1
+
+            // V6 had only this single workout-size default. Adopt the new
+            // explicitly requested five-muscle starting capacity once when the
+            // V7 configuration is first created.
+            let sizePreferences = try modelContext.fetch(
+                FetchDescriptor<AdaptiveWorkoutSizePreference>()
+            )
+            if let size = sizePreferences.first(where: {
+                $0.adaptiveProgramId == activeProgram.id
+            }) {
+                size.defaultComplexCount = min(
+                    AdaptiveWorkoutCapacity.initial.maxMuscleGroupCount,
+                    max(1, activeProgram.muscleRules.filter(\.isEnabled).count)
+                )
+                size.updatedAt = now
+            }
+        }
+
+        let missingAnchorMuscles = MuscleGroup.allCases.filter { muscle in
+            !anchors.contains {
+                $0.lineageId == activeProgram.lineageId && $0.muscle == muscle
+            }
+        }
+        if !missingAnchorMuscles.isEmpty {
+            let evidence = try storedEvidence(modelContext: modelContext)
+            let sevenDaysAgo = now.addingTimeInterval(-7 * 86_400)
+            let activeTargets = targets(for: activeProgram, allTargets: allTargets)
+            for muscle in missingAnchorMuscles {
+                let target = activeTargets[muscle]?.weeklySetTarget
+                    ?? defaultWeeklyTarget(for: muscle)
+                let recentDirectEvidence = directEvidence(evidence, for: muscle)
+                    .filter { $0.completedAt >= sevenDaysAgo && $0.completedAt <= now }
+                let recentDirectSets = recentDirectEvidence.count
+                let bound = Double(max(0, target))
+                let seed = min(bound, max(-bound, Double(recentDirectSets - target)))
+                let anchor = AdaptiveMuscleVolumeAnchor(
+                    lineageId: activeProgram.lineageId,
+                    muscle: muscle,
+                    activatedAt: now,
+                    initialBalance: seed,
+                    seededDirectSetEntryIds: recentDirectEvidence.map(\.setEntryId)
+                )
+                modelContext.insert(anchor)
+                anchors.append(anchor)
+                inserted += 1
+            }
+        }
+
+        if inserted > 0 && saveChanges { try modelContext.save() }
+        return inserted
+    }
+
+    static func statuses(
+        program: AdaptiveProgram,
+        allTargets: [AdaptiveMuscleVolumeTarget],
+        anchors: [AdaptiveMuscleVolumeAnchor],
+        evidence: [TrainingLoadEvidence],
+        asOf: Date
+    ) -> [MuscleGroup: AdaptiveMuscleVolumeStatus] {
+        let currentTargets = targets(for: program, allTargets: allTargets)
+        return Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map { muscle in
+            let current = currentTargets[muscle]
+            let fallbackTarget = defaultWeeklyTarget(for: muscle)
+            let weeklyTarget = max(0, current?.weeklySetTarget ?? fallbackTarget)
+            let dailyCap = max(1, current?.dailySetCap ?? 4)
+            guard let anchor = anchors.first(where: {
+                $0.lineageId == program.lineageId && $0.muscle == muscle
+            }), anchor.activatedAt <= asOf else {
+                return (
+                    muscle,
+                    AdaptiveMuscleVolumeStatus(
+                        muscle: muscle,
+                        weeklySetTarget: weeklyTarget,
+                        dailySetCap: dailyCap,
+                        balance: 0
+                    )
+                )
+            }
+
+            let targetChanges = allTargets
+                .filter {
+                    $0.lineageId == program.lineageId
+                        && $0.muscle == muscle
+                        && $0.effectiveAt <= asOf
+                }
+                .sorted {
+                    if $0.effectiveAt != $1.effectiveAt { return $0.effectiveAt < $1.effectiveAt }
+                    return $0.adaptiveProgramId.uuidString < $1.adaptiveProgramId.uuidString
+                }
+            var activeTarget = targetChanges.last(where: { $0.effectiveAt <= anchor.activatedAt })?
+                .weeklySetTarget ?? weeklyTarget
+            var balance = clipped(anchor.initialBalance, weeklyTarget: activeTarget)
+            var cursor = anchor.activatedAt
+
+            enum Event {
+                case target(AdaptiveMuscleVolumeTarget)
+                case completedSet(Date)
+
+                var date: Date {
+                    switch self {
+                    case .target(let target): return target.effectiveAt
+                    case .completedSet(let date): return date
+                    }
+                }
+
+                var order: Int {
+                    switch self {
+                    case .target: return 0
+                    case .completedSet: return 1
+                    }
+                }
+            }
+
+            var events: [Event] = targetChanges
+                .filter { $0.effectiveAt > anchor.activatedAt }
+                .map(Event.target)
+            let seededIds = Set(anchor.seededDirectSetEntryIds)
+            let seedWindowStart = anchor.activatedAt.addingTimeInterval(-7 * 86_400)
+            events += directEvidence(evidence, for: muscle)
+                .filter {
+                    $0.completedAt >= seedWindowStart
+                        && $0.completedAt <= anchor.activatedAt
+                        && !seededIds.contains($0.setEntryId)
+                }
+                .map { _ in .completedSet(anchor.activatedAt) }
+            events += directEvidence(evidence, for: muscle)
+                .filter { $0.completedAt > anchor.activatedAt && $0.completedAt <= asOf }
+                .map { .completedSet($0.completedAt) }
+            events.sort {
+                if $0.date != $1.date { return $0.date < $1.date }
+                return $0.order < $1.order
+            }
+
+            for event in events {
+                balance = accrue(
+                    balance: balance,
+                    weeklyTarget: activeTarget,
+                    from: cursor,
+                    to: event.date
+                )
+                cursor = event.date
+                switch event {
+                case .target(let target):
+                    activeTarget = max(0, target.weeklySetTarget)
+                    balance = clipped(balance, weeklyTarget: activeTarget)
+                case .completedSet:
+                    balance = clipped(balance + 1, weeklyTarget: activeTarget)
+                }
+            }
+            balance = accrue(
+                balance: balance,
+                weeklyTarget: activeTarget,
+                from: cursor,
+                to: asOf
+            )
+
+            return (
+                muscle,
+                AdaptiveMuscleVolumeStatus(
+                    muscle: muscle,
+                    weeklySetTarget: weeklyTarget,
+                    dailySetCap: dailyCap,
+                    balance: clipped(balance, weeklyTarget: weeklyTarget)
+                )
+            )
+        })
+    }
+
+    static func storedEvidence(modelContext: ModelContext) throws -> [TrainingLoadEvidence] {
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let plans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        let overrides = try modelContext.fetch(FetchDescriptor<AdaptiveOverrideEvent>())
+        return TrainingLoadLedgerService.storedEvidence(
+            sessions: try modelContext.fetch(FetchDescriptor<Session>()),
+            setEntries: try modelContext.fetch(FetchDescriptor<SetEntry>()),
+            exercises: exercises,
+            adaptivePlans: plans,
+            occurrenceLinks: try modelContext.fetch(FetchDescriptor<AdaptiveSetOccurrenceLink>()),
+            overrides: overrides
+        ) + TrainingLoadLedgerService.storedAdaptiveEvidence(
+            sessions: try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>()),
+            setEntries: try modelContext.fetch(FetchDescriptor<AdaptiveSetEntry>()),
+            plans: plans,
+            overrides: overrides,
+            exercises: exercises
+        )
+    }
+
+    private static func directEvidence(
+        _ evidence: [TrainingLoadEvidence],
+        for muscle: MuscleGroup
+    ) -> [TrainingLoadEvidence] {
+        evidence.filter {
+            $0.isSessionCompleted
+                && $0.isLocked
+                && $0.reps > 0
+                && $0.muscles.first == muscle
+        }
+    }
+
+    private static func accrue(
+        balance: Double,
+        weeklyTarget: Int,
+        from start: Date,
+        to end: Date
+    ) -> Double {
+        guard end > start, weeklyTarget > 0 else {
+            return clipped(balance, weeklyTarget: weeklyTarget)
+        }
+        let days = end.timeIntervalSince(start) / 86_400
+        return clipped(
+            balance - days * Double(weeklyTarget) / 7,
+            weeklyTarget: weeklyTarget
+        )
+    }
+
+    private static func clipped(_ balance: Double, weeklyTarget: Int) -> Double {
+        let bound = Double(max(0, weeklyTarget))
+        return min(bound, max(-bound, balance))
+    }
+}
+
 struct AdaptivePlannerRejection: Equatable {
     var complexDefinitionId: UUID
     var code: String
@@ -298,7 +649,7 @@ struct AdaptivePlanDecisionTrace: Equatable {
 }
 
 enum AdaptivePlanService {
-    static let plannerVersion = 6
+    static let plannerVersion = 7
 
     static func generate(
         program: AdaptiveProgram,
@@ -306,6 +657,8 @@ enum AdaptivePlanService {
         readiness: [MuscleGroup: MuscleReadinessInput],
         ledger: TrainingLoadLedger,
         targetComplexCount: Int? = nil,
+        volumeStatuses: [MuscleGroup: AdaptiveMuscleVolumeStatus]? = nil,
+        capacity: AdaptiveWorkoutCapacity = .legacy,
         doseRecommendations: [UUID: [Int: DoseRecommendation]] = [:],
         exerciseSelections: [AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation] = [:],
         now: Date,
@@ -324,7 +677,7 @@ enum AdaptivePlanService {
         }
 
         var rejections: [AdaptivePlannerRejection] = []
-        let candidates = program.complexes
+        let rawCandidates = program.complexes
             .filter(\.isEnabled)
             .sorted(by: stableComplexOrder)
             .compactMap { complex -> AdaptivePlannedComplex? in
@@ -473,18 +826,48 @@ enum AdaptivePlanService {
                     components: planned
                 )
             }
+        let candidates = rawCandidates.map { candidate in
+            guard let status = volumeStatuses?[candidate.primaryMuscle],
+                  status.weeklySetTarget > 0 else { return candidate }
+            return applyingVolumeDose(
+                to: candidate,
+                desiredSets: min(
+                    status.dailySetCap,
+                    max(
+                        candidate.components.filter {
+                            $0.primaryMuscle == candidate.primaryMuscle
+                        }.count,
+                        Int(ceil(status.setsBehind))
+                    )
+                ),
+                maxSetsPerExercise: capacity.maxSetsPerExercise
+            )
+        }
 
-        let exposureTarget = max(1, targetComplexCount ?? program.globalMaxMovements)
+        let exposureTarget = min(
+            capacity.maxMuscleGroupCount,
+            max(1, targetComplexCount ?? program.globalMaxMovements)
+        )
         var selected: [AdaptivePlannedComplex] = []
         var selectedDefinitions = Set<UUID>()
         var selectedMuscles = Set<MuscleGroup>()
         var movements = 0
         var difficulty = 0
+        var workingSets = 0
         var setDose: [MuscleGroup: Int] = [:]
 
         func fitFailure(for candidate: AdaptivePlannedComplex) -> String? {
             if selected.count >= exposureTarget { return "daily_exposure_target" }
             if selectedMuscles.contains(candidate.primaryMuscle) { return "muscle_already_selected" }
+            if movements + candidate.components.count > capacity.maxExerciseCount {
+                return "exercise_count_cap"
+            }
+            let candidateSetCount = candidate.components.reduce(0) {
+                $0 + $1.prescribedSetCount
+            }
+            if workingSets + candidateSetCount > capacity.maxWorkingSetCount {
+                return "working_set_cap"
+            }
             let combinedComponents = selected.flatMap(\.components) + candidate.components
             if hasRedundantSameMuscleCompounds(
                 combinedComponents,
@@ -493,9 +876,29 @@ enum AdaptivePlanService {
                 return "multiple_compounds_same_muscle"
             }
 
+            let exercisesPerMuscle = Dictionary(
+                grouping: combinedComponents,
+                by: \.primaryMuscle
+            )
+            if exercisesPerMuscle.values.contains(where: {
+                $0.count > capacity.maxExercisesPerMuscle
+            }) {
+                return "exercises_per_muscle_cap"
+            }
+            let directSetsByMuscle = Dictionary(grouping: combinedComponents, by: \.primaryMuscle)
+                .mapValues { $0.reduce(0) { $0 + $1.prescribedSetCount } }
+            for (muscle, sets) in directSetsByMuscle {
+                let dailyCap = volumeStatuses?[muscle]?.dailySetCap ?? Int.max
+                if sets > dailyCap { return "daily_muscle_set_cap" }
+            }
             for component in candidate.components {
-                guard let primaryRule = rules[component.primaryMuscle],
-                      component.prescribedSetCount <= primaryRule.maxSetsPerExercise else {
+                guard let primaryRule = rules[component.primaryMuscle] else {
+                    return "primary_muscle_disabled"
+                }
+                let exerciseCap = volumeStatuses == nil
+                    ? primaryRule.maxSetsPerExercise
+                    : capacity.maxSetsPerExercise
+                guard component.prescribedSetCount <= exerciseCap else {
                     return "sets_per_exercise_cap"
                 }
             }
@@ -510,28 +913,43 @@ enum AdaptivePlanService {
             selectedMuscles.insert(candidate.primaryMuscle)
             movements += candidate.components.count
             difficulty += candidate.components.reduce(0) { $0 + $1.difficulty.cost }
+            workingSets += candidate.components.reduce(0) { $0 + $1.prescribedSetCount }
             for component in candidate.components {
-                for muscle in attributedMuscles(of: component) {
-                    setDose[muscle, default: 0] += component.prescribedSetCount
+                if volumeStatuses == nil {
+                    for muscle in attributedMuscles(of: component) {
+                        setDose[muscle, default: 0] += component.prescribedSetCount
+                    }
+                } else {
+                    setDose[component.primaryMuscle, default: 0] += component.prescribedSetCount
                 }
             }
         }
 
         var dueReasonByMuscle: [MuscleGroup: String] = [:]
         for rule in enabledRules {
-            let load = ledger[rule.muscle]
-            let exposureDue = rule.rollingSetFloor > 0 && load.lockedSetCount == 0
-            let gapDue: Bool
-            if let last = load.lastProductiveExposureAt,
-               let dueDate = calendar.date(byAdding: .day, value: rule.maxRecoveredDayGap, to: last) {
-                gapDue = dueDate <= now
+            if let status = volumeStatuses?[rule.muscle] {
+                if status.weeklySetTarget > 0 && status.setsBehind > 0.001 {
+                    dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_volume_due"
+                }
             } else {
-                gapDue = true
-            }
-            if exposureDue {
-                dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_exposure_due"
-            } else if gapDue {
-                dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_gap_due"
+                let load = ledger[rule.muscle]
+                let exposureDue = rule.rollingSetFloor > 0 && load.lockedSetCount == 0
+                let gapDue: Bool
+                if let last = load.lastProductiveExposureAt,
+                   let dueDate = calendar.date(
+                    byAdding: .day,
+                    value: rule.maxRecoveredDayGap,
+                    to: last
+                   ) {
+                    gapDue = dueDate <= now
+                } else {
+                    gapDue = true
+                }
+                if exposureDue {
+                    dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_exposure_due"
+                } else if gapDue {
+                    dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_gap_due"
+                }
             }
         }
 
@@ -566,6 +984,7 @@ enum AdaptivePlanService {
             let remaining = candidates.filter {
                 !selectedDefinitions.contains($0.definitionId)
                     && !selectedMuscles.contains($0.primaryMuscle)
+                    && (volumeStatuses == nil || dueReasonByMuscle[$0.primaryMuscle] != nil)
                     && fitFailure(for: $0) == nil
             }
             guard let candidate = remaining.sorted(by: { left, right in
@@ -575,6 +994,9 @@ enum AdaptivePlanService {
                 let leftDue = dueReasonByMuscle[left.primaryMuscle] != nil
                 let rightDue = dueReasonByMuscle[right.primaryMuscle] != nil
                 if leftDue != rightDue { return leftDue }
+                let leftDebt = volumeStatuses?[left.primaryMuscle]?.normalizedDebt ?? 0
+                let rightDebt = volumeStatuses?[right.primaryMuscle]?.normalizedDebt ?? 0
+                if leftDebt != rightDebt { return leftDebt > rightDebt }
                 let leftEagerness = eagernessRank(readiness[left.primaryMuscle]?.eagerness)
                 let rightEagerness = eagernessRank(readiness[right.primaryMuscle]?.eagerness)
                 if leftEagerness != rightEagerness { return leftEagerness < rightEagerness }
@@ -616,6 +1038,37 @@ enum AdaptivePlanService {
                 }
             )
         )
+    }
+
+    private static func applyingVolumeDose(
+        to candidate: AdaptivePlannedComplex,
+        desiredSets: Int,
+        maxSetsPerExercise: Int
+    ) -> AdaptivePlannedComplex {
+        var result = candidate
+        let primaryIndices = result.components.indices.filter {
+            result.components[$0].primaryMuscle == result.primaryMuscle
+        }
+        guard !primaryIndices.isEmpty else { return result }
+        let boundedDesired = min(
+            desiredSets,
+            primaryIndices.count * maxSetsPerExercise
+        )
+        let base = boundedDesired / primaryIndices.count
+        let remainder = boundedDesired % primaryIndices.count
+        for (offset, index) in primaryIndices.enumerated() {
+            result.components[index].prescribedSetCount = min(
+                maxSetsPerExercise,
+                max(1, base + (offset < remainder ? 1 : 0))
+            )
+        }
+        for index in result.components.indices where !primaryIndices.contains(index) {
+            result.components[index].prescribedSetCount = min(
+                maxSetsPerExercise,
+                result.components[index].prescribedSetCount
+            )
+        }
+        return result
     }
 
     static func trace(for result: AdaptivePlannerResult) -> AdaptivePlanDecisionTrace {
@@ -752,6 +1205,8 @@ enum AdaptiveForecastService {
         exercises: [Exercise],
         ledger: TrainingLoadLedger,
         targetComplexCount: Int,
+        volumeStatuses: [MuscleGroup: AdaptiveMuscleVolumeStatus]? = nil,
+        capacity: AdaptiveWorkoutCapacity = .legacy,
         exerciseSelections: [AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation] = [:],
         asOf date: Date,
         calendar: Calendar = .current
@@ -774,6 +1229,8 @@ enum AdaptiveForecastService {
             readiness: readiness,
             ledger: ledger,
             targetComplexCount: targetComplexCount,
+            volumeStatuses: volumeStatuses,
+            capacity: capacity,
             exerciseSelections: exerciseSelections,
             now: date,
             calendar: calendar

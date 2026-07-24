@@ -13,7 +13,10 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(enabled.map(\.priorityRank), Array(1...MuscleGroup.initialAdaptiveRankOrder.count))
         XCTAssertEqual(enabled[4].muscle, .sideDelts)
         XCTAssertEqual(draft.globalMaxMovements, 4)
-        XCTAssertEqual(draft.defaultComplexCount, 4)
+        XCTAssertEqual(draft.defaultComplexCount, 5)
+        XCTAssertEqual(draft.maxExerciseCount, 7)
+        XCTAssertEqual(draft.maxExercisesPerMuscle, 2)
+        XCTAssertEqual(draft.maxWorkingSetCount, 20)
         XCTAssertEqual(draft.maxDifficultyCost, 60)
         XCTAssertTrue(enabled.allSatisfy { $0.rollingSetFloor == 1 })
 
@@ -167,6 +170,148 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         )
         XCTAssertEqual(sizePreference.adaptiveProgramId, saved.id)
         XCTAssertEqual(sizePreference.defaultComplexCount, draft.defaultComplexCount)
+        let targets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
+        XCTAssertEqual(targets.count, MuscleGroup.allCases.count)
+        XCTAssertEqual(targets.first { $0.muscle == .back }?.weeklySetTarget, 12)
+        XCTAssertEqual(targets.first { $0.muscle == .hamstrings }?.weeklySetTarget, 4)
+        XCTAssertEqual(targets.first { $0.muscle == .glutes }?.weeklySetTarget, 0)
+        let capacity = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AdaptiveWorkoutCapacityPreference>()).first
+        )
+        XCTAssertEqual(capacity.maxMuscleGroupCount, 5)
+        XCTAssertEqual(capacity.maxExerciseCount, 7)
+        XCTAssertEqual(capacity.maxExercisesPerMuscle, 2)
+        XCTAssertEqual(capacity.maxWorkingSetCount, 20)
+        XCTAssertEqual(capacity.maxSetsPerExercise, 4)
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<AdaptiveMuscleVolumeAnchor>()),
+            MuscleGroup.allCases.count
+        )
+    }
+
+    func testFirstVolumeActivationSeedsAllRecentWorkoutKindsAndIsIdempotent() throws {
+        let (context, _) = makeContext()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let exercise = Exercise(
+            name: "Seed Chest Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .machine
+        )
+        let program = AdaptiveProgram(
+            version: 1,
+            name: "Seed Profile",
+            createdAt: now.addingTimeInterval(-30 * 86_400),
+            isActiveVersion: true,
+            isReviewedForUse: true,
+            globalMaxMovements: 4,
+            maxDifficultyCost: 60,
+            muscleRules: [],
+            complexes: []
+        )
+        context.insert(exercise)
+        context.insert(program)
+
+        for (offset, label) in [(1, "Cycle Day"), (2, "Off-Schedule")] {
+            let session = Session(
+                cycleInstanceId: UUID(),
+                cycleDayIndex: 0,
+                cycleNameSnapshot: label == "Off-Schedule" ? "Off-Schedule" : "Fixed",
+                dayLabelSnapshot: label,
+                createdAt: now.addingTimeInterval(-Double(offset) * 86_400),
+                finishedAt: now.addingTimeInterval(-Double(offset) * 86_400),
+                status: .completed,
+                exportStatus: .success
+            )
+            context.insert(session)
+            context.insert(
+                SetEntry(
+                    sessionId: session.id,
+                    exerciseId: exercise.id,
+                    setIndex: 1,
+                    weight: 100,
+                    reps: 8,
+                    isLocked: true
+                )
+            )
+        }
+
+        let snapshot = PlannedExerciseSnapshot(
+            position: 0,
+            exerciseId: exercise.id,
+            exerciseName: exercise.name,
+            primaryMuscle: .chest,
+            difficulty: .hard,
+            prescribedSetCount: 1
+        )
+        let plan = GeneratedWorkoutPlan(
+            localDateKey: "2027-01-14",
+            timeZoneIdentifier: "UTC",
+            createdAt: now.addingTimeInterval(-3 * 86_400),
+            status: .completed,
+            adaptiveProgramId: program.id,
+            adaptiveProgramVersion: 1,
+            readinessCheckId: UUID(),
+            plannerVersion: 6,
+            reasonCodes: [],
+            complexes: [
+                PlannedComplexSnapshot(
+                    sourceDefinitionId: UUID(),
+                    sourceVersion: 1,
+                    position: 0,
+                    name: "Chest",
+                    primaryMuscle: .chest,
+                    reasonCodes: [],
+                    exercises: [snapshot]
+                )
+            ]
+        )
+        let adaptiveSession = AdaptiveWorkoutSession(
+            generatedPlanId: plan.id,
+            createdAt: now.addingTimeInterval(-3 * 86_400),
+            finishedAt: now.addingTimeInterval(-3 * 86_400),
+            status: .completed,
+            exportStatus: .success
+        )
+        context.insert(plan)
+        context.insert(adaptiveSession)
+        context.insert(
+            AdaptiveSetEntry(
+                adaptiveSessionId: adaptiveSession.id,
+                occurrenceId: snapshot.occurrenceId,
+                exerciseId: exercise.id,
+                setIndex: 1,
+                weight: 100,
+                reps: 8,
+                isLocked: true
+            )
+        )
+        try context.save()
+
+        XCTAssertEqual(
+            try AdaptiveVolumeControllerService.ensureStoredConfiguration(
+                modelContext: context,
+                now: now
+            ),
+            MuscleGroup.allCases.count * 2 + 1
+        )
+        let chestAnchor = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AdaptiveMuscleVolumeAnchor>())
+                .first { $0.muscle == .chest }
+        )
+        XCTAssertEqual(chestAnchor.initialBalance, -6, accuracy: 0.001)
+        XCTAssertEqual(chestAnchor.seededDirectSetEntryIds.count, 3)
+        XCTAssertEqual(
+            try AdaptiveVolumeControllerService.ensureStoredConfiguration(
+                modelContext: context,
+                now: now.addingTimeInterval(60)
+            ),
+            0
+        )
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<AdaptiveMuscleVolumeAnchor>()),
+            MuscleGroup.allCases.count
+        )
     }
 
     func testValidationRejectsNonBinaryExposureRequirementAndAtomicComplexCaps() {
@@ -481,7 +626,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
     }
 
     private func makeContext() -> (ModelContext, ModelContainer) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV6.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (ModelContext(container), container)
     }
