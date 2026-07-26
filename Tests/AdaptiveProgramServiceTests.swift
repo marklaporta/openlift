@@ -193,9 +193,18 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(sizePreference.defaultComplexCount, draft.defaultComplexCount)
         let targets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
         XCTAssertEqual(targets.count, MuscleGroup.allCases.count)
-        XCTAssertEqual(targets.first { $0.muscle == .back }?.weeklySetTarget, 10)
-        XCTAssertEqual(targets.first { $0.muscle == .hamstrings }?.weeklySetTarget, 5)
+        XCTAssertEqual(targets.first { $0.muscle == .back }?.weeklySetTarget, 21)
+        XCTAssertEqual(targets.first { $0.muscle == .sideDelts }?.weeklySetTarget, 12)
+        XCTAssertEqual(targets.first { $0.muscle == .chest }?.weeklySetTarget, 14)
+        XCTAssertEqual(targets.first { $0.muscle == .triceps }?.weeklySetTarget, 14)
+        XCTAssertEqual(targets.first { $0.muscle == .quads }?.weeklySetTarget, 11)
+        XCTAssertEqual(targets.first { $0.muscle == .biceps }?.weeklySetTarget, 8)
+        XCTAssertEqual(targets.first { $0.muscle == .hamstrings }?.weeklySetTarget, 6)
+        XCTAssertEqual(targets.first { $0.muscle == .forearms }?.weeklySetTarget, 6)
+        XCTAssertEqual(targets.first { $0.muscle == .calves }?.weeklySetTarget, 6)
         XCTAssertEqual(targets.first { $0.muscle == .glutes }?.weeklySetTarget, 0)
+        XCTAssertEqual(targets.first { $0.muscle == .abs }?.weeklySetTarget, 0)
+        XCTAssertEqual(targets.first { $0.muscle == .traps }?.weeklySetTarget, 0)
         let capacity = try XCTUnwrap(
             context.fetch(FetchDescriptor<AdaptiveWorkoutCapacityPreference>()).first
         )
@@ -320,7 +329,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
             context.fetch(FetchDescriptor<AdaptiveMuscleVolumeAnchor>())
                 .first { $0.muscle == .chest }
         )
-        XCTAssertEqual(chestAnchor.initialBalance, -5, accuracy: 0.001)
+        XCTAssertEqual(chestAnchor.initialBalance, -11, accuracy: 0.001)
         XCTAssertEqual(chestAnchor.seededDirectSetEntryIds.count, 3)
         XCTAssertEqual(
             try AdaptiveVolumeControllerService.ensureStoredConfiguration(
@@ -417,7 +426,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertNotEqual(newComplex?.id, originalComplex.id)
     }
 
-    func testLegacyDefaultTargetVectorAdvancesAsNewVersionButCustomizationDoesNot() throws {
+    func testRampUpDefaultTargetVectorAdvancesAsNewVersionButCustomizationDoesNot() throws {
         let exercises = makeRankedExercises()
         let (context, _) = makeContext()
         let first = try AdaptiveProgramService.saveVersion(
@@ -431,7 +440,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         let originalTargets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
             .filter { $0.adaptiveProgramId == first.id }
         for target in originalTargets {
-            target.weeklySetTarget = AdaptiveVolumeControllerService.legacyWeeklyTarget(
+            target.weeklySetTarget = AdaptiveVolumeControllerService.rampUpWeeklyTarget(
                 for: target.muscle
             )
         }
@@ -457,20 +466,25 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertFalse(first.isActiveVersion)
         XCTAssertEqual(
             originalTargets.first { $0.muscle == .back }?.weeklySetTarget,
-            12
+            10
         )
         let allTargets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
         let replacementTargets = AdaptiveVolumeControllerService.targets(
             for: second,
             allTargets: allTargets
         )
-        XCTAssertEqual(replacementTargets[.back]?.weeklySetTarget, 10)
-        XCTAssertEqual(replacementTargets[.sideDelts]?.weeklySetTarget, 10)
-        XCTAssertEqual(replacementTargets[.chest]?.weeklySetTarget, 8)
+        XCTAssertEqual(replacementTargets[.back]?.weeklySetTarget, 21)
+        XCTAssertEqual(replacementTargets[.sideDelts]?.weeklySetTarget, 12)
+        XCTAssertEqual(replacementTargets[.chest]?.weeklySetTarget, 14)
         XCTAssertEqual(replacementTargets[.biceps]?.weeklySetTarget, 8)
-        XCTAssertEqual(replacementTargets[.triceps]?.weeklySetTarget, 8)
-        XCTAssertEqual(replacementTargets[.hamstrings]?.weeklySetTarget, 5)
-        XCTAssertEqual(replacementTargets[.quads]?.weeklySetTarget, 6)
+        XCTAssertEqual(replacementTargets[.triceps]?.weeklySetTarget, 14)
+        XCTAssertEqual(replacementTargets[.hamstrings]?.weeklySetTarget, 6)
+        XCTAssertEqual(replacementTargets[.quads]?.weeklySetTarget, 11)
+        XCTAssertEqual(replacementTargets[.forearms]?.weeklySetTarget, 6)
+        XCTAssertEqual(replacementTargets[.calves]?.weeklySetTarget, 6)
+        XCTAssertEqual(replacementTargets[.glutes]?.weeklySetTarget, 0)
+        XCTAssertEqual(replacementTargets[.abs]?.weeklySetTarget, 0)
+        XCTAssertEqual(replacementTargets[.traps]?.weeklySetTarget, 0)
         XCTAssertTrue(replacementTargets.values.allSatisfy {
             $0.effectiveAt == effectiveAt
         })

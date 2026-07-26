@@ -75,18 +75,25 @@ primary plus optional major-secondary attribution, and easy/moderate/hard recove
 Only completed, locked sets with reps count toward the volume target, and only
 for the exercise's primary muscle. Secondary attribution remains recovery
 context but receives no target credit. Each target accrues continuously at its
-weekly value divided by seven. Credit and debt are each capped at one weekly
+weekly value divided by seven, so the controller is a continuous rolling
+weekly-equivalent accrual rather than a calendar-week counter. It never resets
+on Sunday; Sunday matters only when interpreting an observed calendar week, not
+when updating controller state. Credit and debt are each capped at one weekly
 target; recovered muscles with the greatest normalized debt are considered
 first. Prescriptions approach the accumulated debt within the muscle, exercise,
 and workout caps, distributing work across complementary configured movements
 before piling sets onto one movement.
 
-Initial weekly targets are Back 12, Shoulders 12, Chest 9, Biceps 9, Triceps 9,
-Quads 6, Forearms 6, Calves 6, and Hamstrings 4. The initial per-muscle daily cap
-is four. On first activation the controller seeds each balance from direct sets
-completed in the preceding seven days across Adaptive, Fixed Cycle, and ad hoc
-history. Target edits create a new immutable profile version and apply
-prospectively; they do not rewrite old work or previously elapsed target rates.
+Initial weekly targets are Back 21, Shoulders 12, Chest 14, Triceps 14, Quads 11,
+Biceps 8, Hamstrings 6, Forearms 6, and Calves 6. Glutes, Abs, and Traps remain
+zero. These steady-state targets represent 6 Back sets across 3.5 weekly
+exposures, 3 Shoulder sets across 4 exposures, 4 Chest and Triceps sets across
+3.5 exposures, and 3 Quad sets across 3.5 exposures (10.5, rounded to the
+integer target 11). The initial per-muscle daily cap is four. On first activation
+the controller seeds each balance from direct sets completed in the preceding
+seven days across Adaptive, Fixed Cycle, and ad hoc history. Target edits create
+a new immutable profile version and apply prospectively; they do not rewrite old
+work or previously elapsed target rates.
 The proposed slate remains editable: movements may be added, removed, swapped,
 or reordered before it is accepted, including beyond the automatic target.
 Exercises may also be added to a specific complex before or after the workout is
@@ -169,11 +176,17 @@ idempotent `adaptive_readiness` snapshot is then mirrored asynchronously under
 hydrated by the completed-workout importer. A local recovery copy remains
 pending rather than being reported as an iCloud success.
 
+None and Light soreness are automatically trainable with normal set dosing and
+progression. Light loses an otherwise equal scheduling tie to None. Moderate
+and Heavy both hold the muscle out of automatic proposals; manual Add Complex
+and exercise edits remain available without a warning or confirmation.
+
 The first morning after a productive exposure is treated as a DOMS observation
 window, not proof of recovery: even a low-soreness answer cannot schedule that
 muscle again. Readiness is tested again beginning on the second calendar day,
-when delayed soreness commonly becomes more informative. A high-soreness or
-stop-pain answer continues to hold the muscle for as long as it is reported.
+when delayed soreness commonly becomes more informative. A Moderate-or-Heavy
+soreness or Stop-pain answer continues to hold the muscle for as long as it is
+reported.
 This observation window is based on direct work only: secondary loading from
 chest does not bar triceps the next day, and secondary loading from back does
 not bar biceps. Shoulders are explicitly eligible on consecutive days when

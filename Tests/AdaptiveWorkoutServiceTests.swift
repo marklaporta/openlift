@@ -902,6 +902,10 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(SorenessLevel.decodeStoredOrExportedValue("light"), .mild)
         XCTAssertEqual(SorenessLevel.decodeStoredOrExportedValue("medium"), .moderate)
         XCTAssertEqual(SorenessLevel.decodeStoredOrExportedValue("heavy"), .high)
+        XCTAssertTrue(SorenessLevel.none.allowsAutomaticTraining)
+        XCTAssertTrue(SorenessLevel.mild.allowsAutomaticTraining)
+        XCTAssertFalse(SorenessLevel.moderate.allowsAutomaticTraining)
+        XCTAssertFalse(SorenessLevel.high.allowsAutomaticTraining)
 
         let encoded = try JSONEncoder().encode([
             SorenessLevel.mild, .moderate, .high
