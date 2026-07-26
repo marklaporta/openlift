@@ -838,7 +838,7 @@ enum AdaptiveReadinessExportService {
     static func makePayload(check: DailyReadinessCheck) -> Payload {
         let iso = ISO8601DateFormatter()
         return Payload(
-            schema_version: 1,
+            schema_version: 2,
             record_kind: "adaptive_readiness",
             check_id: check.id.uuidString,
             revision: check.revision,
@@ -1153,7 +1153,7 @@ enum AdaptiveExportService {
             )
         }
         return PayloadV2(
-            schema_version: 2,
+            schema_version: 3,
             workout_kind: "adaptive",
             session_id: session.id.uuidString,
             date: iso.string(from: session.finishedAt ?? .now),
@@ -1217,7 +1217,7 @@ enum AdaptiveExportService {
 
     static func decode(_ data: Data) -> PayloadV2? {
         guard let payload = try? JSONDecoder().decode(PayloadV2.self, from: data),
-              payload.schema_version == 2,
+              [2, 3].contains(payload.schema_version),
               payload.workout_kind == "adaptive" else { return nil }
         return payload
     }
@@ -1415,7 +1415,7 @@ enum AdaptiveExportService {
 
         let responses = payload.readiness.responses.compactMap { response -> AdaptiveReadinessResponse? in
             guard let muscle = MuscleGroup(rawValue: response.muscle),
-                  let soreness = SorenessLevel(rawValue: response.soreness),
+                  let soreness = SorenessLevel.decodeStoredOrExportedValue(response.soreness),
                   let pain = ConnectiveTissuePainLevel(rawValue: response.connective_tissue_pain),
                   let eagerness = EagernessLevel(rawValue: response.eagerness) else { return nil }
             return AdaptiveReadinessResponse(

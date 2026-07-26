@@ -276,6 +276,16 @@ struct AdaptiveMuscleVolumeStatus: Equatable {
 enum AdaptiveVolumeControllerService {
     static func defaultWeeklyTarget(for muscle: MuscleGroup) -> Int {
         switch muscle {
+        case .back, .sideDelts: return 10
+        case .chest, .biceps, .triceps: return 8
+        case .quads, .forearms, .calves: return 6
+        case .hamstrings: return 5
+        case .glutes, .abs, .traps: return 0
+        }
+    }
+
+    static func legacyWeeklyTarget(for muscle: MuscleGroup) -> Int {
+        switch muscle {
         case .back, .sideDelts: return 12
         case .chest, .biceps, .triceps: return 9
         case .quads, .forearms, .calves: return 6
@@ -390,6 +400,131 @@ enum AdaptiveVolumeControllerService {
 
         if inserted > 0 && saveChanges { try modelContext.save() }
         return inserted
+    }
+
+    /// Advances only an untouched V7 default target vector. The old program
+    /// and target rows remain immutable history; the replacement program gets
+    /// a new effective-dated target vector. Any customized target prevents the
+    /// migration.
+    @discardableResult
+    static func migrateLegacyDefaultTargetVector(
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws -> Bool {
+        let programs = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
+        guard let activeProgram = AdaptiveProgramService.activeProgram(from: programs) else {
+            return false
+        }
+        let allTargets = try modelContext.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
+        let currentTargets = targets(for: activeProgram, allTargets: allTargets)
+        guard currentTargets.count == MuscleGroup.allCases.count,
+              MuscleGroup.allCases.allSatisfy({
+                  currentTargets[$0]?.weeklySetTarget == legacyWeeklyTarget(for: $0)
+              }) else {
+            return false
+        }
+        let openPlans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        guard !openPlans.contains(where: {
+            $0.adaptiveProgramId == activeProgram.id && $0.status != .completed
+        }) else {
+            return false
+        }
+
+        let replacement = AdaptiveProgram(
+            lineageId: activeProgram.lineageId,
+            version: activeProgram.version + 1,
+            name: activeProgram.name,
+            createdAt: now,
+            isActiveVersion: true,
+            isReviewedForUse: activeProgram.isReviewedForUse,
+            globalMaxMovements: activeProgram.globalMaxMovements,
+            maxDifficultyCost: activeProgram.maxDifficultyCost,
+            muscleRules: activeProgram.muscleRules.map {
+                AdaptiveMuscleRule(
+                    muscle: $0.muscle,
+                    priorityRank: $0.priorityRank,
+                    rollingSetFloor: $0.rollingSetFloor,
+                    rollingWindowDays: $0.rollingWindowDays,
+                    maxRecoveredDayGap: $0.maxRecoveredDayGap,
+                    maxExercisesPerExposure: $0.maxExercisesPerExposure,
+                    maxSetsPerExercise: $0.maxSetsPerExercise,
+                    isEnabled: $0.isEnabled
+                )
+            },
+            complexes: activeProgram.complexes.map { complex in
+                AdaptiveExerciseComplex(
+                    definitionId: complex.definitionId,
+                    version: complex.version + 1,
+                    name: complex.name,
+                    position: complex.position,
+                    primaryMuscle: complex.primaryMuscle,
+                    qualifiesForPrimaryFloor: complex.qualifiesForPrimaryFloor,
+                    isEnabled: complex.isEnabled,
+                    components: complex.components.map {
+                        AdaptiveComplexComponent(
+                            position: $0.position,
+                            exerciseId: $0.exerciseId,
+                            prescribedSetCount: $0.prescribedSetCount,
+                            primaryMuscle: $0.primaryMuscle,
+                            secondaryMuscle: $0.secondaryMuscle,
+                            difficulty: $0.difficulty
+                        )
+                    }
+                )
+            }
+        )
+        for program in programs where program.isActiveVersion {
+            program.isActiveVersion = false
+        }
+        modelContext.insert(replacement)
+
+        let sizePreferences = try modelContext.fetch(
+            FetchDescriptor<AdaptiveWorkoutSizePreference>()
+        )
+        let oldSize = sizePreferences.first {
+            $0.adaptiveProgramId == activeProgram.id
+        }
+        modelContext.insert(
+            AdaptiveWorkoutSizePreference(
+                adaptiveProgramId: replacement.id,
+                defaultComplexCount: oldSize?.defaultComplexCount
+                    ?? max(1, min(activeProgram.globalMaxMovements, 12)),
+                updatedAt: now
+            )
+        )
+
+        let capacities = try modelContext.fetch(
+            FetchDescriptor<AdaptiveWorkoutCapacityPreference>()
+        )
+        let oldCapacity = capacities.first {
+            $0.adaptiveProgramId == activeProgram.id
+        }
+        modelContext.insert(
+            AdaptiveWorkoutCapacityPreference(
+                adaptiveProgramId: replacement.id,
+                maxMuscleGroupCount: oldCapacity?.maxMuscleGroupCount ?? 5,
+                maxExerciseCount: oldCapacity?.maxExerciseCount ?? 7,
+                maxExercisesPerMuscle: oldCapacity?.maxExercisesPerMuscle ?? 2,
+                maxWorkingSetCount: oldCapacity?.maxWorkingSetCount ?? 20,
+                maxSetsPerExercise: oldCapacity?.maxSetsPerExercise ?? 4,
+                updatedAt: now
+            )
+        )
+
+        for muscle in MuscleGroup.allCases {
+            modelContext.insert(
+                AdaptiveMuscleVolumeTarget(
+                    adaptiveProgramId: replacement.id,
+                    lineageId: replacement.lineageId,
+                    muscle: muscle,
+                    weeklySetTarget: defaultWeeklyTarget(for: muscle),
+                    dailySetCap: currentTargets[muscle]?.dailySetCap ?? 4,
+                    effectiveAt: now
+                )
+            )
+        }
+        try modelContext.save()
+        return true
     }
 
     static func statuses(
@@ -649,7 +784,7 @@ struct AdaptivePlanDecisionTrace: Equatable {
 }
 
 enum AdaptivePlanService {
-    static let plannerVersion = 7
+    static let plannerVersion = 8
 
     static func generate(
         program: AdaptiveProgram,
@@ -827,11 +962,12 @@ enum AdaptivePlanService {
                 )
             }
         let candidates = rawCandidates.map { candidate in
-            guard let status = volumeStatuses?[candidate.primaryMuscle],
-                  status.weeklySetTarget > 0 else { return candidate }
-            return applyingVolumeDose(
-                to: candidate,
-                desiredSets: min(
+            let desiredSets: Int
+            let hasRollingVolumeDose: Bool
+            if let status = volumeStatuses?[candidate.primaryMuscle],
+               status.weeklySetTarget > 0 {
+                hasRollingVolumeDose = true
+                desiredSets = min(
                     status.dailySetCap,
                     max(
                         candidate.components.filter {
@@ -839,9 +975,52 @@ enum AdaptivePlanService {
                         }.count,
                         Int(ceil(status.setsBehind))
                     )
-                ),
-                maxSetsPerExercise: capacity.maxSetsPerExercise
+                )
+            } else {
+                hasRollingVolumeDose = false
+                desiredSets = candidate.components
+                    .filter { $0.primaryMuscle == candidate.primaryMuscle }
+                    .reduce(0) { $0 + $1.prescribedSetCount }
+            }
+            let distributed = applyingExerciseVariation(
+                to: candidate,
+                desiredSets: desiredSets,
+                exercisesById: exercisesById,
+                exerciseSelections: exerciseSelections
             )
+            let variationAdded = distributed.components.count != candidate.components.count
+            var dosed = hasRollingVolumeDose || variationAdded
+                ? applyingVolumeDose(
+                    to: distributed,
+                    desiredSets: desiredSets,
+                    maxSetsPerExercise: candidate.primaryMuscle == .back
+                        || candidate.primaryMuscle == .chest
+                        ? min(3, capacity.maxSetsPerExercise)
+                        : capacity.maxSetsPerExercise
+                )
+                : distributed
+            if candidate.primaryMuscle == .chest || candidate.primaryMuscle == .back {
+                for index in dosed.components.indices
+                    where dosed.components[index].primaryMuscle == dosed.primaryMuscle {
+                    dosed.components[index].prescribedSetCount = min(
+                        3,
+                        dosed.components[index].prescribedSetCount
+                    )
+                }
+            }
+            if readiness[candidate.primaryMuscle]?.soreness == .moderate {
+                for index in dosed.components.indices
+                    where dosed.components[index].primaryMuscle == dosed.primaryMuscle {
+                    dosed.components[index].prescribedSetCount = max(
+                        1,
+                        dosed.components[index].prescribedSetCount - 1
+                    )
+                }
+                dosed.reasonCodes.append(
+                    "\(candidate.primaryMuscle.rawValue)_moderate_soreness_reduced"
+                )
+            }
+            return dosed
         }
 
         let exposureTarget = min(
@@ -991,12 +1170,18 @@ enum AdaptivePlanService {
                 let leftPair = createsHardLowerBodyPair(selected: selected, adding: left)
                 let rightPair = createsHardLowerBodyPair(selected: selected, adding: right)
                 if leftPair != rightPair { return !leftPair }
+                let leftModerate = readiness[left.primaryMuscle]?.soreness == .moderate
+                let rightModerate = readiness[right.primaryMuscle]?.soreness == .moderate
+                if leftModerate != rightModerate { return !leftModerate }
                 let leftDue = dueReasonByMuscle[left.primaryMuscle] != nil
                 let rightDue = dueReasonByMuscle[right.primaryMuscle] != nil
                 if leftDue != rightDue { return leftDue }
                 let leftDebt = volumeStatuses?[left.primaryMuscle]?.normalizedDebt ?? 0
                 let rightDebt = volumeStatuses?[right.primaryMuscle]?.normalizedDebt ?? 0
                 if leftDebt != rightDebt { return leftDebt > rightDebt }
+                let leftSoreness = sorenessRank(readiness[left.primaryMuscle]?.soreness)
+                let rightSoreness = sorenessRank(readiness[right.primaryMuscle]?.soreness)
+                if leftSoreness != rightSoreness { return leftSoreness < rightSoreness }
                 let leftEagerness = eagernessRank(readiness[left.primaryMuscle]?.eagerness)
                 let rightEagerness = eagernessRank(readiness[right.primaryMuscle]?.eagerness)
                 if leftEagerness != rightEagerness { return leftEagerness < rightEagerness }
@@ -1071,6 +1256,155 @@ enum AdaptivePlanService {
         return result
     }
 
+    private static func applyingExerciseVariation(
+        to candidate: AdaptivePlannedComplex,
+        desiredSets: Int,
+        exercisesById: [UUID: Exercise],
+        exerciseSelections: [
+            AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation
+        ]
+    ) -> AdaptivePlannedComplex {
+        var result = candidate
+
+        func stableExerciseOrder(_ left: Exercise, _ right: Exercise) -> Bool {
+            let comparison = left.name.localizedCaseInsensitiveCompare(right.name)
+            if comparison != .orderedSame { return comparison == .orderedAscending }
+            return left.id.uuidString < right.id.uuidString
+        }
+
+        func exerciseType(for component: AdaptivePlannedComponent) -> ExerciseType? {
+            exercisesById[component.exerciseId]?.type
+                ?? exerciseSelections.values.first {
+                    $0.exercise.id == component.exerciseId
+                }?.exercise.type
+        }
+
+        switch result.primaryMuscle {
+        case .chest:
+            var primaryComponents = result.components.filter {
+                $0.primaryMuscle == .chest
+            }
+            if !primaryComponents.contains(where: {
+                exerciseType(for: $0) == .compound
+            }) {
+                let selectedCompound = exerciseSelections[
+                    AdaptiveExerciseSelectionKey(muscle: .chest, type: .compound)
+                ]?.exercise
+                let fallbackCompound = exercisesById.values
+                    .filter {
+                        $0.isActive
+                            && $0.primaryMuscle == .chest
+                            && $0.type == .compound
+                    }
+                    .sorted(by: stableExerciseOrder)
+                    .first
+                if let compound = selectedCompound ?? fallbackCompound,
+                   let index = result.components.firstIndex(where: {
+                       $0.primaryMuscle == .chest
+                   }) {
+                    result.components[index].exerciseId = compound.id
+                    result.components[index].exerciseName = compound.name
+                    result.components[index].secondaryMuscle = nil
+                    result.components[index].difficulty =
+                        AdaptiveExerciseRoleService.difficulty(for: compound)
+                    result.reasonCodes.append("chest_compound_lead")
+                    primaryComponents = result.components.filter {
+                        $0.primaryMuscle == .chest
+                    }
+                }
+            }
+            guard desiredSets > 3 else { return result }
+            let hasCompound = primaryComponents.contains {
+                exerciseType(for: $0) == .compound
+            }
+            let hasIsolation = primaryComponents.contains {
+                exerciseType(for: $0) == .isolation
+            }
+            guard hasCompound, !hasIsolation else { return result }
+            let selected = exerciseSelections[
+                AdaptiveExerciseSelectionKey(muscle: .chest, type: .isolation)
+            ]?.exercise
+            let fallback = exercisesById.values
+                .filter {
+                    $0.isActive
+                        && $0.primaryMuscle == .chest
+                        && $0.type == .isolation
+                }
+                .sorted(by: stableExerciseOrder)
+                .first
+            guard let isolation = selected ?? fallback,
+                  !result.components.contains(where: { $0.exerciseId == isolation.id }) else {
+                return result
+            }
+            result.components.append(
+                AdaptivePlannedComponent(
+                    exerciseId: isolation.id,
+                    exerciseName: isolation.name,
+                    position: (result.components.map(\.position).max() ?? -1) + 1,
+                    primaryMuscle: .chest,
+                    secondaryMuscle: nil,
+                    difficulty: AdaptiveExerciseRoleService.difficulty(for: isolation),
+                    prescribedSetCount: 1
+                )
+            )
+            result.reasonCodes.append("chest_isolation_volume_split")
+
+        case .back:
+            guard desiredSets > 3 else { return result }
+            let primaryComponents = result.components.filter {
+                $0.primaryMuscle == .back
+            }
+            let patterned = primaryComponents.compactMap {
+                exercisesById[$0.exerciseId].flatMap(BackMovementPatternService.pattern(for:))
+            }
+            guard Set(patterned).count == 1,
+                  let existingPattern = patterned.first,
+                  let missingPattern = BackMovementPattern.allCases.first(where: {
+                      $0 != existingPattern
+                  }) else {
+                return result
+            }
+            let selected = exerciseSelections[
+                AdaptiveExerciseSelectionKey(
+                    muscle: .back,
+                    type: .compound,
+                    backPattern: missingPattern
+                )
+            ]?.exercise
+            let fallback = exercisesById.values
+                .filter {
+                    $0.isActive
+                        && $0.primaryMuscle == .back
+                        && $0.type == .compound
+                        && BackMovementPatternService.pattern(for: $0) == missingPattern
+                }
+                .sorted(by: stableExerciseOrder)
+                .first
+            guard let complementary = selected ?? fallback,
+                  !result.components.contains(where: {
+                      $0.exerciseId == complementary.id
+                  }) else {
+                return result
+            }
+            result.components.append(
+                AdaptivePlannedComponent(
+                    exerciseId: complementary.id,
+                    exerciseName: complementary.name,
+                    position: (result.components.map(\.position).max() ?? -1) + 1,
+                    primaryMuscle: .back,
+                    secondaryMuscle: nil,
+                    difficulty: AdaptiveExerciseRoleService.difficulty(for: complementary),
+                    prescribedSetCount: 1
+                )
+            )
+            result.reasonCodes.append("back_\(missingPattern.rawValue)_volume_split")
+
+        default:
+            break
+        }
+        return result
+    }
+
     static func trace(for result: AdaptivePlannerResult) -> AdaptivePlanDecisionTrace {
         switch result {
         case .proposal(let proposal):
@@ -1110,6 +1444,16 @@ enum AdaptivePlanService {
         case .neutral: return 1
         case .reluctant: return 2
         case nil: return 3
+        }
+    }
+
+    private static func sorenessRank(_ soreness: SorenessLevel?) -> Int {
+        switch soreness {
+        case .some(.none): return 0
+        case .some(.mild): return 1
+        case .some(.moderate): return 2
+        case .some(.high): return 3
+        case nil: return 4
         }
     }
 
@@ -1317,7 +1661,8 @@ enum AdaptiveDoseEvidenceService {
                 } else {
                     latestPerformance = nil
                 }
-                let recovered = readinessByMuscle[component.primaryMuscle].map {
+                let componentReadiness = readinessByMuscle[component.primaryMuscle]
+                let recovered = componentReadiness.map {
                     $0.soreness != .high
                         && $0.connectiveTissuePain == .none
                         && $0.eagerness != .reluctant
@@ -1328,7 +1673,12 @@ enum AdaptiveDoseEvidenceService {
                         ?? component.prescribedSetCount,
                     recentFeedback: datedFeedback.map(\.1),
                     latestPerformance: latestPerformance,
-                    recoveredOnTime: recovered
+                    recoveredOnTime: recovered,
+                    allowsPositiveProgression: componentReadiness.map {
+                        ($0.soreness == .none || $0.soreness == .mild)
+                            && $0.connectiveTissuePain == .none
+                            && $0.eagerness != .reluctant
+                    } ?? false
                 )
                 result[definition.definitionId, default: [:]][component.position] = recommendation
             }
@@ -1811,7 +2161,8 @@ enum DoseRecommendationService {
         maximumSetCount: Int,
         recentFeedback: [ComplexFeedbackRating],
         latestPerformance: RepeatPerformanceLabel?,
-        recoveredOnTime: Bool
+        recoveredOnTime: Bool,
+        allowsPositiveProgression: Bool? = nil
     ) -> DoseRecommendation {
         guard recentFeedback.last != .painProblem else {
             return DoseRecommendation(
@@ -1830,7 +2181,7 @@ enum DoseRecommendationService {
         }
         let repeatedTooLittle = recentFeedback.suffix(3).filter { $0 == .tooLittle }.count >= 2
         if repeatedTooLittle,
-           recoveredOnTime,
+           allowsPositiveProgression ?? recoveredOnTime,
            latestPerformance?.isMatchedOrImproved == true {
             return DoseRecommendation(
                 prescribedSetCount: min(maximumSetCount, currentSetCount + 1),

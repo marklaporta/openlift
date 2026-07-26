@@ -840,8 +840,18 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             overrides: [pain],
             feedback: [feedback]
         )
-        let decoded = try XCTUnwrap(AdaptiveExportService.decode(AdaptiveExportService.encode(payload)))
-        XCTAssertEqual(decoded.schema_version, 2)
+        let encodedPayload = try AdaptiveExportService.encode(payload)
+        let decoded = try XCTUnwrap(AdaptiveExportService.decode(encodedPayload))
+        XCTAssertEqual(decoded.schema_version, 3)
+        let legacyV2JSON = try XCTUnwrap(String(data: encodedPayload, encoding: .utf8))
+            .replacingOccurrences(
+                of: "\"schema_version\" : 3",
+                with: "\"schema_version\" : 2"
+            )
+        XCTAssertEqual(
+            AdaptiveExportService.decode(Data(legacyV2JSON.utf8))?.schema_version,
+            2
+        )
         XCTAssertEqual(decoded.workout_kind, "adaptive")
         XCTAssertEqual(decoded.plan.complexes.map(\.name), ["Press First", "Press Again"])
         XCTAssertNotEqual(
@@ -880,6 +890,26 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(response.soreness, .mild)
         XCTAssertEqual(response.connectiveTissuePain, .none)
         XCTAssertEqual(response.eagerness, .eager)
+    }
+
+    func testSorenessDisplayAndCompatibilityAliasesPreserveLegacyRawValues() throws {
+        XCTAssertEqual(SorenessLevel.allCases.map(\.displayName), [
+            "None", "Light", "Moderate", "Heavy"
+        ])
+        XCTAssertEqual(SorenessLevel.mild.rawValue, "mild")
+        XCTAssertEqual(SorenessLevel.high.rawValue, "high")
+        XCTAssertEqual(SorenessLevel.decodeStoredOrExportedValue("mild"), .mild)
+        XCTAssertEqual(SorenessLevel.decodeStoredOrExportedValue("light"), .mild)
+        XCTAssertEqual(SorenessLevel.decodeStoredOrExportedValue("medium"), .moderate)
+        XCTAssertEqual(SorenessLevel.decodeStoredOrExportedValue("heavy"), .high)
+
+        let encoded = try JSONEncoder().encode([
+            SorenessLevel.mild, .moderate, .high
+        ])
+        XCTAssertEqual(
+            try JSONDecoder().decode([SorenessLevel].self, from: encoded),
+            [.mild, .moderate, .high]
+        )
     }
 
     @MainActor

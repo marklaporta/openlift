@@ -112,6 +112,27 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         }
     }
 
+    func testDemoDraftStartsChestWithCompoundEvenWhenIsolationSortsFirst() throws {
+        let fly = Exercise(
+            name: "Cable Fly",
+            primaryMuscle: .chest,
+            type: .isolation,
+            equipment: .cable
+        )
+        let press = Exercise(
+            name: "Incline Dumbbell Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        let draft = AdaptiveProgramService.demoDraft(exercises: [fly, press])
+        let chest = try XCTUnwrap(
+            draft.complexes.first { $0.primaryMuscle == .chest }
+        )
+        XCTAssertEqual(chest.components.map(\.exerciseId), [press.id])
+        XCTAssertEqual(chest.components.map(\.prescribedSetCount), [2])
+    }
+
     func testDemoDraftBuildsComplementaryBackPairAndIgnoresLegacyExerciseCap() throws {
         let exercises = makeRankedExercises() + [
             Exercise(
@@ -172,8 +193,8 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(sizePreference.defaultComplexCount, draft.defaultComplexCount)
         let targets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
         XCTAssertEqual(targets.count, MuscleGroup.allCases.count)
-        XCTAssertEqual(targets.first { $0.muscle == .back }?.weeklySetTarget, 12)
-        XCTAssertEqual(targets.first { $0.muscle == .hamstrings }?.weeklySetTarget, 4)
+        XCTAssertEqual(targets.first { $0.muscle == .back }?.weeklySetTarget, 10)
+        XCTAssertEqual(targets.first { $0.muscle == .hamstrings }?.weeklySetTarget, 5)
         XCTAssertEqual(targets.first { $0.muscle == .glutes }?.weeklySetTarget, 0)
         let capacity = try XCTUnwrap(
             context.fetch(FetchDescriptor<AdaptiveWorkoutCapacityPreference>()).first
@@ -299,7 +320,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
             context.fetch(FetchDescriptor<AdaptiveMuscleVolumeAnchor>())
                 .first { $0.muscle == .chest }
         )
-        XCTAssertEqual(chestAnchor.initialBalance, -6, accuracy: 0.001)
+        XCTAssertEqual(chestAnchor.initialBalance, -5, accuracy: 0.001)
         XCTAssertEqual(chestAnchor.seededDirectSetEntryIds.count, 3)
         XCTAssertEqual(
             try AdaptiveVolumeControllerService.ensureStoredConfiguration(
@@ -394,6 +415,166 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(newComplex?.name, "Edited Chest Complex")
         XCTAssertEqual(newComplex?.components.first?.prescribedSetCount, 3)
         XCTAssertNotEqual(newComplex?.id, originalComplex.id)
+    }
+
+    func testLegacyDefaultTargetVectorAdvancesAsNewVersionButCustomizationDoesNot() throws {
+        let exercises = makeRankedExercises()
+        let (context, _) = makeContext()
+        let first = try AdaptiveProgramService.saveVersion(
+            draft: AdaptiveProgramService.demoDraft(exercises: exercises),
+            replacing: nil,
+            allPrograms: [],
+            exercises: exercises,
+            modelContext: context,
+            now: Date(timeIntervalSince1970: 100)
+        )
+        let originalTargets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
+            .filter { $0.adaptiveProgramId == first.id }
+        for target in originalTargets {
+            target.weeklySetTarget = AdaptiveVolumeControllerService.legacyWeeklyTarget(
+                for: target.muscle
+            )
+        }
+        let capacity = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AdaptiveWorkoutCapacityPreference>())
+                .first { $0.adaptiveProgramId == first.id }
+        )
+        capacity.maxWorkingSetCount = 15
+        try context.save()
+
+        let effectiveAt = Date(timeIntervalSince1970: 200)
+        XCTAssertTrue(
+            try AdaptiveVolumeControllerService.migrateLegacyDefaultTargetVector(
+                modelContext: context,
+                now: effectiveAt
+            )
+        )
+
+        let programs = try context.fetch(FetchDescriptor<AdaptiveProgram>())
+        let second = try XCTUnwrap(AdaptiveProgramService.activeProgram(from: programs))
+        XCTAssertEqual(second.version, first.version + 1)
+        XCTAssertEqual(second.lineageId, first.lineageId)
+        XCTAssertFalse(first.isActiveVersion)
+        XCTAssertEqual(
+            originalTargets.first { $0.muscle == .back }?.weeklySetTarget,
+            12
+        )
+        let allTargets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
+        let replacementTargets = AdaptiveVolumeControllerService.targets(
+            for: second,
+            allTargets: allTargets
+        )
+        XCTAssertEqual(replacementTargets[.back]?.weeklySetTarget, 10)
+        XCTAssertEqual(replacementTargets[.sideDelts]?.weeklySetTarget, 10)
+        XCTAssertEqual(replacementTargets[.chest]?.weeklySetTarget, 8)
+        XCTAssertEqual(replacementTargets[.biceps]?.weeklySetTarget, 8)
+        XCTAssertEqual(replacementTargets[.triceps]?.weeklySetTarget, 8)
+        XCTAssertEqual(replacementTargets[.hamstrings]?.weeklySetTarget, 5)
+        XCTAssertEqual(replacementTargets[.quads]?.weeklySetTarget, 6)
+        XCTAssertTrue(replacementTargets.values.allSatisfy {
+            $0.effectiveAt == effectiveAt
+        })
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<AdaptiveWorkoutCapacityPreference>())
+                .first { $0.adaptiveProgramId == second.id }?.maxWorkingSetCount,
+            15
+        )
+        XCTAssertFalse(
+            try AdaptiveVolumeControllerService.migrateLegacyDefaultTargetVector(
+                modelContext: context,
+                now: effectiveAt.addingTimeInterval(1)
+            )
+        )
+
+        replacementTargets[.chest]?.weeklySetTarget = 7
+        try context.save()
+        XCTAssertFalse(
+            try AdaptiveVolumeControllerService.migrateLegacyDefaultTargetVector(
+                modelContext: context,
+                now: effectiveAt.addingTimeInterval(2)
+            )
+        )
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<AdaptiveProgram>()),
+            2
+        )
+    }
+
+    func testLegacyTargetMigrationDefersForOpenPlanAndPreservesCustomizedProfile() throws {
+        let exercises = makeRankedExercises()
+        let (context, _) = makeContext()
+        let program = try AdaptiveProgramService.saveVersion(
+            draft: AdaptiveProgramService.demoDraft(exercises: exercises),
+            replacing: nil,
+            allPrograms: [],
+            exercises: exercises,
+            modelContext: context
+        )
+        let targets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
+            .filter { $0.adaptiveProgramId == program.id }
+        for target in targets {
+            target.weeklySetTarget = AdaptiveVolumeControllerService.legacyWeeklyTarget(
+                for: target.muscle
+            )
+        }
+        let openPlan = GeneratedWorkoutPlan(
+            localDateKey: "2026-07-26",
+            timeZoneIdentifier: "America/Los_Angeles",
+            status: .proposed,
+            adaptiveProgramId: program.id,
+            adaptiveProgramVersion: program.version,
+            readinessCheckId: UUID(),
+            plannerVersion: AdaptivePlanService.plannerVersion,
+            reasonCodes: [],
+            complexes: []
+        )
+        context.insert(openPlan)
+        try context.save()
+
+        XCTAssertFalse(
+            try AdaptiveVolumeControllerService.migrateLegacyDefaultTargetVector(
+                modelContext: context
+            )
+        )
+        XCTAssertTrue(program.isActiveVersion)
+        openPlan.status = .completed
+        try context.save()
+        XCTAssertTrue(
+            try AdaptiveVolumeControllerService.migrateLegacyDefaultTargetVector(
+                modelContext: context
+            )
+        )
+        XCTAssertEqual(openPlan.adaptiveProgramId, program.id)
+
+        let (customContext, _) = makeContext()
+        let customized = try AdaptiveProgramService.saveVersion(
+            draft: AdaptiveProgramService.demoDraft(exercises: exercises),
+            replacing: nil,
+            allPrograms: [],
+            exercises: exercises,
+            modelContext: customContext
+        )
+        let customizedTargets = try customContext.fetch(
+            FetchDescriptor<AdaptiveMuscleVolumeTarget>()
+        ).filter { $0.adaptiveProgramId == customized.id }
+        for target in customizedTargets {
+            target.weeklySetTarget = AdaptiveVolumeControllerService.legacyWeeklyTarget(
+                for: target.muscle
+            )
+        }
+        customizedTargets.first { $0.muscle == .chest }?.weeklySetTarget = 7
+        try customContext.save()
+
+        XCTAssertFalse(
+            try AdaptiveVolumeControllerService.migrateLegacyDefaultTargetVector(
+                modelContext: customContext
+            )
+        )
+        XCTAssertTrue(customized.isActiveVersion)
+        XCTAssertEqual(
+            try customContext.fetchCount(FetchDescriptor<AdaptiveProgram>()),
+            1
+        )
     }
 
     private func makeRankedExercises() -> [Exercise] {

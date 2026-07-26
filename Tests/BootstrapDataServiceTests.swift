@@ -1241,6 +1241,10 @@ final class OpenLiftStateResolverTests: XCTestCase {
         let payloadData = try AdaptiveReadinessExportService.encode(
             AdaptiveReadinessExportService.makePayload(check: check)
         )
+        XCTAssertEqual(
+            AdaptiveReadinessExportService.makePayload(check: check).schema_version,
+            2
+        )
         XCTAssertNil(AdaptiveExportService.decode(payloadData))
 
         let root = FileManager.default.temporaryDirectory

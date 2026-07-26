@@ -157,9 +157,30 @@ enum MovementDifficulty: String, Codable, CaseIterable, Hashable {
 enum SorenessLevel: String, Codable, CaseIterable, Hashable {
     case none
     case mild
+    case moderate
     case high
 
-    var displayName: String { rawValue.capitalized }
+    var displayName: String {
+        switch self {
+        case .none: return "None"
+        case .mild: return "Light"
+        case .moderate: return "Moderate"
+        case .high: return "Heavy"
+        }
+    }
+
+    /// Export/import aliases are intentionally separate from the persisted raw
+    /// values. Existing SwiftData rows and JSON use `mild` and `high`; the UI
+    /// presents those same values as Light and Heavy.
+    static func decodeStoredOrExportedValue(_ value: String) -> SorenessLevel? {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "none": return SorenessLevel.none
+        case "mild", "light": return .mild
+        case "moderate", "medium": return .moderate
+        case "high", "heavy": return .high
+        default: return nil
+        }
+    }
 }
 
 enum ConnectiveTissuePainLevel: String, Codable, CaseIterable, Hashable {

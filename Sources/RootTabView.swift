@@ -64,6 +64,9 @@ struct RootTabView: View {
             _ = try? AdaptiveVolumeControllerService.ensureStoredConfiguration(
                 modelContext: modelContext
             )
+            _ = try? AdaptiveVolumeControllerService.migrateLegacyDefaultTargetVector(
+                modelContext: modelContext
+            )
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
