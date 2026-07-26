@@ -88,6 +88,15 @@ struct AdaptiveMuscleRuleDraft: Identifiable, Equatable {
     var maxExercisesPerExposure: Int
     var maxSetsPerExercise: Int
     var isEnabled: Bool
+    var normalSetCount: Int
+    var cadenceKind: AdaptiveCadenceKind
+    var minimumCalendarDays: Int
+    var cadencePattern: [Int]
+    var exerciseSplitKind: AdaptiveExerciseSplitKind
+    var firstSplitSetCount: Int
+    var secondSplitSetCount: Int
+    // Retained only to decode/edit profiles created by the unshipped V7
+    // controller. Weekly values are no longer displayed or used for planning.
     var weeklySetTarget: Int
     var dailySetCap: Int
 
@@ -101,6 +110,13 @@ struct AdaptiveMuscleRuleDraft: Identifiable, Equatable {
         maxExercisesPerExposure: Int,
         maxSetsPerExercise: Int,
         isEnabled: Bool,
+        normalSetCount: Int? = nil,
+        cadenceKind: AdaptiveCadenceKind? = nil,
+        minimumCalendarDays: Int? = nil,
+        cadencePattern: [Int]? = nil,
+        exerciseSplitKind: AdaptiveExerciseSplitKind? = nil,
+        firstSplitSetCount: Int? = nil,
+        secondSplitSetCount: Int? = nil,
         weeklySetTarget: Int? = nil,
         dailySetCap: Int = 4
     ) {
@@ -113,6 +129,14 @@ struct AdaptiveMuscleRuleDraft: Identifiable, Equatable {
         self.maxExercisesPerExposure = maxExercisesPerExposure
         self.maxSetsPerExercise = maxSetsPerExercise
         self.isEnabled = isEnabled
+        let exposure = AdaptiveExposureControllerService.defaultRule(for: muscle)
+        self.normalSetCount = normalSetCount ?? exposure.normalSetCount
+        self.cadenceKind = cadenceKind ?? exposure.cadenceKind
+        self.minimumCalendarDays = minimumCalendarDays ?? exposure.minimumCalendarDays
+        self.cadencePattern = cadencePattern ?? exposure.cadencePattern
+        self.exerciseSplitKind = exerciseSplitKind ?? exposure.exerciseSplitKind
+        self.firstSplitSetCount = firstSplitSetCount ?? exposure.firstSplitSetCount
+        self.secondSplitSetCount = secondSplitSetCount ?? exposure.secondSplitSetCount
         self.weeklySetTarget = weeklySetTarget
             ?? AdaptiveVolumeControllerService.defaultWeeklyTarget(for: muscle)
         self.dailySetCap = dailySetCap
@@ -158,7 +182,7 @@ struct AdaptiveProgramDraft: Equatable {
             defaultComplexCount: 5,
             maxExerciseCount: 7,
             maxExercisesPerMuscle: 2,
-            maxWorkingSetCount: 20,
+            maxWorkingSetCount: 15,
             globalMaxMovements: 4,
             maxDifficultyCost: 60,
             muscleRules: MuscleGroup.allCases.map { muscle in
@@ -187,7 +211,7 @@ struct AdaptiveProgramDraft: Equatable {
         defaultComplexCount: Int? = nil,
         maxExerciseCount: Int = 7,
         maxExercisesPerMuscle: Int = 2,
-        maxWorkingSetCount: Int = 20,
+        maxWorkingSetCount: Int = 15,
         globalMaxMovements: Int,
         maxDifficultyCost: Int,
         muscleRules: [AdaptiveMuscleRuleDraft],
@@ -211,7 +235,7 @@ struct AdaptiveProgramDraft: Equatable {
         defaultComplexCount = 5
         maxExerciseCount = 7
         maxExercisesPerMuscle = 2
-        maxWorkingSetCount = 20
+        maxWorkingSetCount = 15
         globalMaxMovements = existing.globalMaxMovements
         maxDifficultyCost = existing.maxDifficultyCost
         muscleRules = existing.muscleRules
@@ -528,6 +552,28 @@ enum AdaptiveProgramService {
                 throw AdaptiveProgramValidationError.duplicatePriority(rule.priorityRank)
             }
         }
+        let largestEnabledDose = enabledRules.map(\.normalSetCount).max() ?? 1
+        let largestEnabledExerciseSplit = enabledRules.map {
+            $0.exerciseSplitKind == .none ? 1 : 2
+        }.max() ?? 1
+        if draft.maxWorkingSetCount < largestEnabledDose {
+            throw AdaptiveProgramValidationError.invalidWorkoutLimit(
+                field: "maximum working sets",
+                value: draft.maxWorkingSetCount
+            )
+        }
+        if draft.maxExerciseCount < largestEnabledExerciseSplit {
+            throw AdaptiveProgramValidationError.invalidWorkoutLimit(
+                field: "maximum exercise count",
+                value: draft.maxExerciseCount
+            )
+        }
+        if draft.maxExercisesPerMuscle < largestEnabledExerciseSplit {
+            throw AdaptiveProgramValidationError.invalidWorkoutLimit(
+                field: "maximum exercises per muscle",
+                value: draft.maxExercisesPerMuscle
+            )
+        }
 
         let enabledComplexes = draft.complexes.filter(\.isEnabled)
         guard !enabledComplexes.isEmpty else {
@@ -626,6 +672,28 @@ enum AdaptiveProgramService {
                 updatedAt: now
             )
         )
+        AdaptiveExposureControllerService.insertConfigurations(
+            for: program,
+            rules: draft.muscleRules.map {
+                AdaptiveExposureRule(
+                    muscle: $0.muscle,
+                    isAutomaticPlanningEnabled:
+                        AdaptiveExposureControllerService.automaticPriority.contains($0.muscle)
+                            && $0.isEnabled,
+                    normalSetCount: $0.normalSetCount,
+                    cadenceKind: $0.cadenceKind,
+                    minimumCalendarDays: $0.minimumCalendarDays,
+                    cadencePattern: $0.cadencePattern,
+                    exerciseSplitKind: $0.exerciseSplitKind,
+                    firstSplitSetCount: $0.firstSplitSetCount,
+                    secondSplitSetCount: $0.secondSplitSetCount
+                )
+            },
+            modelContext: modelContext,
+            effectiveAt: now
+        )
+        // Keep V7 rows populated for store compatibility. They are inert in
+        // V8: neither the planner nor any view reads them.
         for rule in draft.muscleRules {
             modelContext.insert(
                 AdaptiveMuscleVolumeTarget(
@@ -644,7 +712,7 @@ enum AdaptiveProgramService {
                 maxMuscleGroupCount: draft.defaultComplexCount,
                 maxExerciseCount: draft.maxExerciseCount,
                 maxExercisesPerMuscle: draft.maxExercisesPerMuscle,
-                maxWorkingSetCount: draft.maxWorkingSetCount,
+                maxWorkingSetCount: min(15, draft.maxWorkingSetCount),
                 maxSetsPerExercise: 4,
                 updatedAt: now
             )
@@ -654,7 +722,6 @@ enum AdaptiveProgramService {
             now: now,
             saveChanges: false
         )
-
         do {
             try modelContext.save()
             return program
@@ -670,14 +737,59 @@ enum AdaptiveProgramService {
             ("rolling window", rule.rollingWindowDays, 1...60),
             ("maximum recovered-day gap", rule.maxRecoveredDayGap, 1...60),
             ("sets per exercise cap", rule.maxSetsPerExercise, 1...10),
-            ("weekly set target", rule.weeklySetTarget, 0...100),
-            ("daily set cap", rule.dailySetCap, 1...20)
+            ("normal sets per exposure", rule.normalSetCount, 1...15),
+            ("minimum calendar days", rule.minimumCalendarDays, 1...14),
+            ("first exercise split", rule.firstSplitSetCount, 0...15),
+            ("second exercise split", rule.secondSplitSetCount, 0...15)
         ]
         for (field, value, range) in fields where !range.contains(value) {
             throw AdaptiveProgramValidationError.invalidMuscleLimit(
                 muscle: rule.muscle,
                 field: field,
                 value: value
+            )
+        }
+        if rule.cadenceKind == .lateralDelts2221
+            && (rule.cadencePattern.isEmpty || rule.cadencePattern.contains(where: { $0 < 1 || $0 > 14 })) {
+            throw AdaptiveProgramValidationError.invalidMuscleLimit(
+                muscle: rule.muscle,
+                field: "cadence pattern",
+                value: rule.cadencePattern.first ?? 0
+            )
+        }
+        if rule.exerciseSplitKind != .none
+            && (
+                rule.firstSplitSetCount < 1
+                    || rule.secondSplitSetCount < 1
+                    || rule.firstSplitSetCount > 3
+                    || rule.secondSplitSetCount > 3
+                    || rule.firstSplitSetCount + rule.secondSplitSetCount
+                        != rule.normalSetCount
+            ) {
+                throw AdaptiveProgramValidationError.invalidMuscleLimit(
+                    muscle: rule.muscle,
+                    field: "exercise split total",
+                    value: rule.firstSplitSetCount + rule.secondSplitSetCount
+                )
+        }
+        if rule.exerciseSplitKind == .none {
+            let plannerCap = rule.muscle == .chest || rule.muscle == .back
+                ? min(3, rule.maxSetsPerExercise)
+                : rule.maxSetsPerExercise
+            if rule.normalSetCount > plannerCap {
+                throw AdaptiveProgramValidationError.invalidMuscleLimit(
+                    muscle: rule.muscle,
+                    field: "normal sets per exposure",
+                    value: rule.normalSetCount
+                )
+            }
+        }
+        if (rule.exerciseSplitKind == .chestCompoundIsolation && rule.muscle != .chest)
+            || (rule.exerciseSplitKind == .backVerticalHorizontal && rule.muscle != .back) {
+            throw AdaptiveProgramValidationError.invalidMuscleLimit(
+                muscle: rule.muscle,
+                field: "exercise split",
+                value: rule.normalSetCount
             )
         }
     }
@@ -807,9 +919,8 @@ enum AdaptiveExerciseSelectionPreferenceService {
             if muscle == .hamstrings,
                let reverseHyper = exercises.first(where: {
                    $0.isActive && $0.primaryMuscle == .hamstrings && $0.name == "Reverse Hyper"
-               }),
-               !eligibleExerciseIds.contains(reverseHyper.id) {
-                eligibleExerciseIds.append(reverseHyper.id)
+               }) {
+                eligibleExerciseIds.removeAll { $0 == reverseHyper.id }
             }
             modelContext.insert(
                 AdaptiveExerciseSelectionPreference(

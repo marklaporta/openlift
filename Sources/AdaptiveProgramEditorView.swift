@@ -8,7 +8,7 @@ struct AdaptiveProgramEditorView: View {
     @Query private var exercises: [Exercise]
     @Query private var programs: [AdaptiveProgram]
     @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
-    @Query private var volumeTargets: [AdaptiveMuscleVolumeTarget]
+    @Query private var exposureConfigurations: [AdaptiveMuscleExposureConfiguration]
     @Query private var capacityPreferences: [AdaptiveWorkoutCapacityPreference]
 
     let existingProgram: AdaptiveProgram?
@@ -27,10 +27,6 @@ struct AdaptiveProgramEditorView: View {
         exercises
             .filter(\.isActive)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    private var enabledRuleCount: Int {
-        max(1, draft.muscleRules.filter(\.isEnabled).count)
     }
 
     var body: some View {
@@ -69,17 +65,33 @@ struct AdaptiveProgramEditorView: View {
                 }) {
                     draft.defaultComplexCount = stored.defaultComplexCount
                 }
-                let targets = AdaptiveVolumeControllerService.targets(
+                let configurations = AdaptiveExposureControllerService.configurations(
                     for: existingProgram,
-                    allTargets: volumeTargets
+                    allConfigurations: exposureConfigurations
                 )
                 for index in draft.muscleRules.indices {
                     let muscle = draft.muscleRules[index].muscle
-                    if let target = targets[muscle] {
-                        draft.muscleRules[index].weeklySetTarget = target.weeklySetTarget
-                        draft.muscleRules[index].dailySetCap = target.dailySetCap
+                    if let configuration = configurations[muscle] {
+                        draft.muscleRules[index].isEnabled =
+                            configuration.isAutomaticPlanningEnabled
+                        draft.muscleRules[index].normalSetCount =
+                            configuration.normalSetCount
+                        draft.muscleRules[index].cadenceKind =
+                            configuration.cadenceKind
+                        draft.muscleRules[index].minimumCalendarDays =
+                            configuration.minimumCalendarDays
+                        draft.muscleRules[index].cadencePattern =
+                            configuration.cadencePattern
+                        draft.muscleRules[index].exerciseSplitKind =
+                            configuration.exerciseSplitKind
+                        draft.muscleRules[index].firstSplitSetCount =
+                            configuration.firstSplitSetCount
+                        draft.muscleRules[index].secondSplitSetCount =
+                            configuration.secondSplitSetCount
                     }
                 }
+                disableComplexesForDisabledRules()
+                normalizePriorities()
                 if let capacity = capacityPreferences.first(where: {
                     $0.adaptiveProgramId == existingProgram.id
                 }) {
@@ -122,9 +134,9 @@ struct AdaptiveProgramEditorView: View {
             Stepper(
                 "Maximum working sets: \(draft.maxWorkingSetCount)",
                 value: $draft.maxWorkingSetCount,
-                in: 1...100
+                in: 1...15
             )
-            Text("The planner also limits each exercise to 4 working sets.")
+            Text("Automatic workouts never exceed 15 working sets. Chest and back exercises are capped at 3 sets each.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Toggle("Reviewed for real use", isOn: $draft.isReviewedForUse)
@@ -147,38 +159,58 @@ struct AdaptiveProgramEditorView: View {
                 let rule = draft.muscleRules[index]
                 DisclosureGroup {
                     Toggle(
-                        "Enabled for planning",
+                        "Enabled for automatic planning",
                         isOn: Binding(
                             get: { draft.muscleRules[index].isEnabled },
                             set: { setRuleEnabled(at: index, enabled: $0) }
                         )
                     )
+                    .disabled(
+                        !AdaptiveExposureControllerService.automaticPriority.contains(rule.muscle)
+                    )
 
                     if rule.isEnabled {
+                        LabeledContent(
+                            "Automatic priority",
+                            value: "\(AdaptiveExposureControllerService.automaticPriority.firstIndex(of: rule.muscle).map { $0 + 1 } ?? 0)"
+                        )
+                        Stepper(
+                            "Normal sets per exposure: \(rule.normalSetCount)",
+                            value: Binding(
+                                get: { draft.muscleRules[index].normalSetCount },
+                                set: { setNormalDose(at: index, to: $0) }
+                            ),
+                            in: 1...normalDoseLimit(for: rule)
+                        )
                         Picker(
-                            "Priority Rank",
+                            "Recovery cadence",
                             selection: Binding(
-                                get: { draft.muscleRules[index].priorityRank },
-                                set: { setPriority(at: index, to: $0) }
+                                get: { draft.muscleRules[index].cadenceKind },
+                                set: { setCadence(at: index, to: $0) }
                             )
                         ) {
-                            ForEach(1...enabledRuleCount, id: \.self) { rank in
-                                Text("\(rank)").tag(rank)
+                            ForEach(AdaptiveCadenceKind.allCases, id: \.self) { cadence in
+                                Text(cadence.displayName).tag(cadence)
                             }
                         }
-
-                        Stepper(
-                            "Weekly set target: \(rule.weeklySetTarget)",
-                            value: $draft.muscleRules[index].weeklySetTarget,
-                            in: 0...100
-                        )
-                        Stepper(
-                            "Maximum sets today: \(rule.dailySetCap)",
-                            value: $draft.muscleRules[index].dailySetCap,
-                            in: 1...20
-                        )
+                        if rule.cadenceKind == .fixedCalendarDays {
+                            Stepper(
+                                cadenceDescription(days: rule.minimumCalendarDays),
+                                value: $draft.muscleRules[index].minimumCalendarDays,
+                                in: 1...14
+                            )
+                        } else {
+                            Text("Intervals: \(rule.cadencePattern.map(String.init).joined(separator: ", ")) calendar days. Skips do not advance the pattern.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        exerciseSplitEditor(at: index)
                     } else {
-                        Text("Not recommended automatically")
+                        Text(
+                            AdaptiveExposureControllerService.automaticPriority.contains(rule.muscle)
+                                ? "Manual planning only"
+                                : "Always manual only"
+                        )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -186,7 +218,7 @@ struct AdaptiveProgramEditorView: View {
                     HStack {
                         Text(rule.muscle.displayName)
                         Spacer()
-                        Text(rule.isEnabled ? "#\(rule.priorityRank)" : "Off")
+                        Text(rule.isEnabled ? "\(rule.normalSetCount) sets" : "Off")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -345,39 +377,26 @@ struct AdaptiveProgramEditorView: View {
     }
 
     private func setRuleEnabled(at index: Int, enabled: Bool) {
-        draft.muscleRules[index].isEnabled = enabled
-        if enabled && draft.muscleRules[index].weeklySetTarget == 0 {
-            draft.muscleRules[index].weeklySetTarget = max(
-                1,
-                AdaptiveVolumeControllerService.defaultWeeklyTarget(
-                    for: draft.muscleRules[index].muscle
-                )
-            )
+        let muscle = draft.muscleRules[index].muscle
+        draft.muscleRules[index].isEnabled =
+            enabled && AdaptiveExposureControllerService.automaticPriority.contains(muscle)
+        if !draft.muscleRules[index].isEnabled {
+            for complexIndex in draft.complexes.indices
+                where draft.complexes[complexIndex].primaryMuscle == muscle {
+                draft.complexes[complexIndex].isEnabled = false
+            }
         }
         normalizePriorities()
-    }
-
-    private func setPriority(at index: Int, to newRank: Int) {
-        let oldRank = draft.muscleRules[index].priorityRank
-        if let swapIndex = draft.muscleRules.firstIndex(where: {
-            $0.isEnabled && $0.priorityRank == newRank
-        }) {
-            draft.muscleRules[swapIndex].priorityRank = oldRank
-        }
-        draft.muscleRules[index].priorityRank = newRank
     }
 
     private func normalizePriorities() {
         let enabledIndices = draft.muscleRules.indices
             .filter { draft.muscleRules[$0].isEnabled }
             .sorted {
-                let left = draft.muscleRules[$0]
-                let right = draft.muscleRules[$1]
-                let leftRank = left.priorityRank == 0 ? Int.max : left.priorityRank
-                let rightRank = right.priorityRank == 0 ? Int.max : right.priorityRank
-                if leftRank != rightRank { return leftRank < rightRank }
-                return (MuscleGroup.initialAdaptiveRankOrder.firstIndex(of: left.muscle) ?? Int.max)
-                    < (MuscleGroup.initialAdaptiveRankOrder.firstIndex(of: right.muscle) ?? Int.max)
+                let left = draft.muscleRules[$0].muscle
+                let right = draft.muscleRules[$1].muscle
+                return (AdaptiveExposureControllerService.automaticPriority.firstIndex(of: left) ?? Int.max)
+                    < (AdaptiveExposureControllerService.automaticPriority.firstIndex(of: right) ?? Int.max)
             }
         for (rank, index) in enabledIndices.enumerated() {
             draft.muscleRules[index].priorityRank = rank + 1
@@ -386,6 +405,123 @@ struct AdaptiveProgramEditorView: View {
             draft.muscleRules[index].priorityRank = 0
             draft.muscleRules[index].rollingSetFloor = 0
         }
+    }
+
+    @ViewBuilder
+    private func exerciseSplitEditor(at index: Int) -> some View {
+        let rule = draft.muscleRules[index]
+        if rule.muscle == .chest || rule.muscle == .back {
+            Picker(
+                "Exercise split",
+                selection: Binding(
+                    get: { draft.muscleRules[index].exerciseSplitKind },
+                    set: { setExerciseSplit(at: index, to: $0) }
+                )
+            ) {
+                Text("Single exercise").tag(AdaptiveExerciseSplitKind.none)
+                if rule.muscle == .chest {
+                    Text("Compound + isolation").tag(
+                        AdaptiveExerciseSplitKind.chestCompoundIsolation
+                    )
+                } else {
+                    Text("Vertical + horizontal").tag(
+                        AdaptiveExerciseSplitKind.backVerticalHorizontal
+                    )
+                }
+            }
+            if rule.exerciseSplitKind != .none {
+                Stepper(
+                    "\(splitFirstLabel(for: rule)): \(rule.firstSplitSetCount)",
+                    value: Binding(
+                        get: { draft.muscleRules[index].firstSplitSetCount },
+                        set: {
+                            let first = min(max(1, $0), 3)
+                            draft.muscleRules[index].firstSplitSetCount = first
+                            draft.muscleRules[index].secondSplitSetCount =
+                                rule.normalSetCount - first
+                        }
+                    ),
+                    in: splitFirstRange(for: rule)
+                )
+                LabeledContent(
+                    splitSecondLabel(for: rule),
+                    value: "\(rule.secondSplitSetCount)"
+                )
+            }
+        }
+    }
+
+    private func setNormalDose(at index: Int, to value: Int) {
+        let boundedValue = min(
+            normalDoseLimit(for: draft.muscleRules[index]),
+            draft.muscleRules[index].exerciseSplitKind == .none
+                ? max(1, value)
+                : max(2, value)
+        )
+        draft.muscleRules[index].normalSetCount = boundedValue
+        if draft.muscleRules[index].exerciseSplitKind != .none {
+            let first = min(max(1, boundedValue / 2), boundedValue - 1)
+            draft.muscleRules[index].firstSplitSetCount = first
+            draft.muscleRules[index].secondSplitSetCount = boundedValue - first
+        }
+    }
+
+    private func setExerciseSplit(
+        at index: Int,
+        to split: AdaptiveExerciseSplitKind
+    ) {
+        draft.muscleRules[index].exerciseSplitKind = split
+        let bounded = min(
+            normalDoseLimit(for: draft.muscleRules[index]),
+            split == .none
+                ? draft.muscleRules[index].normalSetCount
+                : max(2, draft.muscleRules[index].normalSetCount)
+        )
+        setNormalDose(at: index, to: bounded)
+    }
+
+    private func normalDoseLimit(for rule: AdaptiveMuscleRuleDraft) -> Int {
+        if rule.exerciseSplitKind != .none { return 6 }
+        if rule.muscle == .chest || rule.muscle == .back { return 3 }
+        return min(15, rule.maxSetsPerExercise)
+    }
+
+    private func splitFirstRange(
+        for rule: AdaptiveMuscleRuleDraft
+    ) -> ClosedRange<Int> {
+        let dose = min(6, max(2, rule.normalSetCount))
+        return max(1, dose - 3)...min(3, dose - 1)
+    }
+
+    private func setCadence(at index: Int, to cadence: AdaptiveCadenceKind) {
+        draft.muscleRules[index].cadenceKind = cadence
+        if cadence == .lateralDelts2221
+            && draft.muscleRules[index].cadencePattern.isEmpty {
+            draft.muscleRules[index].cadencePattern = [2, 2, 2, 1]
+        }
+    }
+
+    private func disableComplexesForDisabledRules() {
+        let disabled = Set(
+            draft.muscleRules.filter { !$0.isEnabled }.map(\.muscle)
+        )
+        for index in draft.complexes.indices
+            where disabled.contains(draft.complexes[index].primaryMuscle) {
+            draft.complexes[index].isEnabled = false
+        }
+    }
+
+    private func cadenceDescription(days: Int) -> String {
+        let restDays = max(0, days - 1)
+        return "\(days) calendar days (\(restDays) full rest \(restDays == 1 ? "day" : "days"))"
+    }
+
+    private func splitFirstLabel(for rule: AdaptiveMuscleRuleDraft) -> String {
+        rule.muscle == .chest ? "Compound sets" : "Vertical-pull sets"
+    }
+
+    private func splitSecondLabel(for rule: AdaptiveMuscleRuleDraft) -> String {
+        rule.muscle == .chest ? "Isolation sets" : "Horizontal-pull sets"
     }
 
     private func addComplex() {

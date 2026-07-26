@@ -13,9 +13,10 @@ created by the former unversioned `Schema([...])` call.
 Later schemas remain additive: V4 adds exercise-selection preferences, V5 adds
 export diagnostics, V6 adds workout-size/design state, and V7 adds parallel
 per-version volume targets, workout capacity, and lineage volume anchors.
-The V7 lightweight migration does not alter legacy sessions, completed Adaptive
-snapshots, or export records. Controller rows are initialized only after the
-store opens successfully.
+V8 adds parallel per-muscle exposure configuration. The V7 and V8 lightweight
+migrations do not alter legacy sessions, completed Adaptive snapshots, volume
+rows, or export records. Exposure-controller rows are initialized only after
+the store opens successfully and no open Adaptive plan would be invalidated.
 
 ## Startup failure contract
 

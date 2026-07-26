@@ -3,7 +3,7 @@ import SwiftData
 
 @main
 struct OpenLiftApp: App {
-    private static let schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
+    private static let schema = Schema(versionedSchema: OpenLiftSchemaV8.self)
 
     private static let startup: OpenLiftContainerStartup = {
         AppRuntime.prepareForUITesting()

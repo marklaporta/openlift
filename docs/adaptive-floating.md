@@ -48,52 +48,42 @@ initial enabled priority is:
 
 1. Chest
 2. Back
-3. Triceps
-4. Biceps
-5. Shoulders
-6. Quads
-7. Hamstrings
-8. Forearms
-9. Calves
+3. Quads
+4. Hamstrings
+5. Triceps
+6. Biceps
+7. Lateral Delts
 
-Glutes, Abs, and Traps are explicit candidates but start disabled, unranked, and
-without a set target. Glutes are excluded from the current
-equipment profile because available glute work is better represented by its quad
-movements. The persisted shoulder raw value remains `sideDelts` so old
-stores continue to decode; it is presented as the broader Shoulders bucket.
-The current catalog is side-delt focused, but future front- or rear-delt
-exercise variants may use the same bucket.
+Forearms, Calves, Glutes, Abs, and Traps are manual-only and never consume an
+automatic priority slot. Reverse Hyper is also manual recovery work: it can be
+logged on any day but never enters an automatic plan or resets the hamstring
+clock. The persisted lateral-delt raw value remains `sideDelts` so old stores
+continue to decode.
 
 Cycle contains the one Adaptive profile editor. A profile stores strict muscle
-priorities, editable weekly-equivalent direct-set targets, editable per-muscle
-daily caps, and workout capacity. The initial capacity is five muscle groups,
-seven exercises, no more than two exercises per muscle, and twenty working sets.
-The automatic planner never prescribes more than four sets for one exercise.
+priorities, editable per-exposure doses, editable recovery cadence, optional
+exercise splits, enablement, and workout capacity. The initial capacity is five
+muscle groups, seven exercises, no more than two exercises per muscle, and
+fifteen working sets. The automatic planner never prescribes more than four sets
+for one exercise, or more than three for each chest/back split movement.
 Complexes are ordered atomic units with ordered component exercises, set counts,
 primary plus optional major-secondary attribution, and easy/moderate/hard recovery context.
 
-Only completed, locked sets with reps count toward the volume target, and only
-for the exercise's primary muscle. Secondary attribution remains recovery
-context but receives no target credit. Each target accrues continuously at its
-weekly value divided by seven, so the controller is a continuous rolling
-weekly-equivalent accrual rather than a calendar-week counter. It never resets
-on Sunday; Sunday matters only when interpreting an observed calendar week, not
-when updating controller state. Credit and debt are each capped at one weekly
-target; recovered muscles with the greatest normalized debt are considered
-first. Prescriptions approach the accumulated debt within the muscle, exercise,
-and workout caps, distributing work across complementary configured movements
-before piling sets onto one movement.
+Any completed, locked direct hypertrophy set with reps resets that muscle's
+clock, including Fixed Cycle, Adaptive, and ad hoc work. Secondary attribution
+does not reset a clock. Missing a day changes nothing: no missed-session record,
+set debt, carry-forward, catch-up dose, or automatic dose adjustment is created.
+When capacity postpones an eligible muscle, elapsed days raise its priority; the
+normal dose does not change.
 
-Initial weekly targets are Back 21, Shoulders 12, Chest 14, Quads 11,
-Biceps 8, Hamstrings 6, Forearms 6, and Calves 6. Glutes, Abs, and Traps remain
-zero, and Triceps remains 8. These steady-state targets represent 6 Back sets
-across 3.5 weekly exposures, 3 Shoulder sets across 4 exposures, 4 Chest sets
-across 3.5 exposures, and 3 Quad sets across 3.5 exposures (10.5, rounded to the
-integer target 11). The initial per-muscle daily cap is four. On first activation
-the controller seeds each balance from direct sets completed in the preceding
-seven days across Adaptive, Fixed Cycle, and ad hoc history. Target edits create
-a new immutable profile version and apply prospectively; they do not rewrite old
-work or previously elapsed target rates.
+Initial prescriptions are Back 6 sets every other day (3 vertical pull + 3
+horizontal pull), Chest 4 every other day (2 compound + 2 isolation), Quads and
+Hamstrings 3 after two full rest days, Biceps and Triceps 3 after one full rest
+day, and Lateral Delts 3 on a floating 2, 2, 2, 1-day cadence. Eligible muscles
+sort by days overdue, then the fixed priority above, then None before Light
+soreness, then least recently trained. Moderate and Heavy remain held.
+Automatic plans hard-ban Chest + Triceps and Back + Biceps; Chest + Biceps and
+Back + Triceps remain available.
 The proposed slate remains editable: movements may be added, removed, swapped,
 or reordered before it is accepted, including beyond the automatic target.
 Exercises may also be added to a specific complex before or after the workout is

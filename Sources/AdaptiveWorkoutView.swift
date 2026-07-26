@@ -19,9 +19,8 @@ struct AdaptiveWorkoutView: View {
     @Query private var exerciseSelectionPreferences: [AdaptiveExerciseSelectionPreference]
     @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
     @Query private var planDesignStates: [AdaptivePlanDesignState]
-    @Query private var volumeTargets: [AdaptiveMuscleVolumeTarget]
+    @Query private var exposureConfigurations: [AdaptiveMuscleExposureConfiguration]
     @Query private var capacityPreferences: [AdaptiveWorkoutCapacityPreference]
-    @Query private var volumeAnchors: [AdaptiveMuscleVolumeAnchor]
 
     @State private var readiness: [MuscleGroup: ReadinessSelection] = Dictionary(
         uniqueKeysWithValues: MuscleGroup.allCases.map { ($0, ReadinessSelection()) }
@@ -194,8 +193,12 @@ struct AdaptiveWorkoutView: View {
 
         ForEach(enabledMuscles(in: program), id: \.self) { muscle in
             Section(muscle.displayName) {
-                if let status = volumeStatuses(program: program, asOf: .now)[muscle] {
-                    Text(volumePaceText(status))
+                if let status = exposureStatuses(
+                    program: program,
+                    readinessInputs: currentReadinessInputs(),
+                    asOf: .now
+                )[muscle] {
+                    Text(exposureStatusText(status))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -511,7 +514,7 @@ struct AdaptiveWorkoutView: View {
                                 }
                             }
                             .accessibilityIdentifier("adaptive.feedbackPicker")
-                            Text("Used to adjust future set recommendations.")
+                            Text("Recorded for manual review. It does not change future doses automatically.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -522,7 +525,6 @@ struct AdaptiveWorkoutView: View {
             Section {
                 Button("Finish Adaptive Workout") { pendingFinishPlanId = plan.id }
                     .buttonStyle(.borderedProminent)
-                    .disabled(hasMissingFeedback(plan: plan, session: session))
                     .accessibilityIdentifier("adaptive.finishWorkout")
                     .alert(
                         "Finish Adaptive Workout?",
@@ -586,10 +588,13 @@ struct AdaptiveWorkoutView: View {
     }
 
     private func enabledMuscles(in program: AdaptiveProgram) -> [MuscleGroup] {
-        program.muscleRules
-            .filter(\.isEnabled)
-            .sorted { $0.priorityRank < $1.priorityRank }
-            .map(\.muscle)
+        let configurations = AdaptiveExposureControllerService.configurations(
+            for: program,
+            allConfigurations: exposureConfigurations
+        )
+        return AdaptiveExposureControllerService.automaticPriority.filter {
+            configurations[$0]?.isAutomaticPlanningEnabled == true
+        }
     }
 
     private func capacity(for program: AdaptiveProgram) -> AdaptiveWorkoutCapacity {
@@ -599,11 +604,25 @@ struct AdaptiveWorkoutView: View {
         )
     }
 
-    private func volumeStatuses(
+    private func exposureStatuses(
         program: AdaptiveProgram,
+        readinessInputs: [MuscleGroup: MuscleReadinessInput],
         asOf: Date
-    ) -> [MuscleGroup: AdaptiveMuscleVolumeStatus] {
-        let evidence = TrainingLoadLedgerService.storedEvidence(
+    ) -> [MuscleGroup: AdaptiveMuscleExposureStatus] {
+        AdaptiveExposureControllerService.statuses(
+            rules: AdaptiveExposureControllerService.configurations(
+                for: program,
+                allConfigurations: exposureConfigurations
+            ),
+            readiness: readinessInputs,
+            evidence: trainingEvidence(),
+            exercises: exercises,
+            asOf: asOf
+        )
+    }
+
+    private func trainingEvidence() -> [TrainingLoadEvidence] {
+        TrainingLoadLedgerService.storedEvidence(
             sessions: rotationSessions,
             setEntries: rotationSetEntries,
             exercises: exercises,
@@ -617,25 +636,37 @@ struct AdaptiveWorkoutView: View {
             overrides: overrides,
             exercises: exercises
         )
-        return AdaptiveVolumeControllerService.statuses(
-            program: program,
-            allTargets: volumeTargets,
-            anchors: volumeAnchors,
-            evidence: evidence,
-            asOf: asOf
-        )
     }
 
-    private func volumePaceText(_ status: AdaptiveMuscleVolumeStatus) -> String {
-        let pace: String
-        if status.setsBehind >= 0.05 {
-            pace = "\(String(format: "%.1f", status.setsBehind)) behind"
-        } else if status.balance >= 0.05 {
-            pace = "\(String(format: "%.1f", status.balance)) ahead"
+    private func exposureStatusText(_ status: AdaptiveMuscleExposureStatus) -> String {
+        let timing: String
+        if status.nextEligibleAt == nil {
+            timing = "Due now"
+        } else if let next = status.nextEligibleAt,
+                  Calendar.current.startOfDay(for: next)
+                    <= Calendar.current.startOfDay(for: .now) {
+            timing = status.daysOverdue > 0
+                ? "Due · \(status.daysOverdue) day(s) overdue"
+                : "Due today"
+        } else if let next = status.nextEligibleAt {
+            timing = "Next eligible \(next.formatted(date: .abbreviated, time: .omitted))"
         } else {
-            pace = "on pace"
+            timing = "Not eligible"
         }
-        return "\(status.weeklySetTarget) sets/week · \(pace) · max \(status.dailySetCap) today"
+        return "\(status.rule.normalSetCount) normal sets · \(timing)"
+    }
+
+    private func currentReadinessInputs() -> [MuscleGroup: MuscleReadinessInput] {
+        Dictionary(uniqueKeysWithValues: readiness.map { muscle, value in
+            (
+                muscle,
+                MuscleReadinessInput(
+                    soreness: value.soreness,
+                    connectiveTissuePain: value.pain,
+                    eagerness: value.eagerness
+                )
+            )
+        })
     }
 
     private func loadReadiness(from plan: GeneratedWorkoutPlan) {
@@ -850,14 +881,12 @@ struct AdaptiveWorkoutView: View {
             exercises: exercises,
             readiness: AdaptiveWorkoutService.readinessInputs(from: readinessCheck),
             ledger: ledger,
-            targetComplexCount: targetComplexCount,
-            volumeStatuses: AdaptiveVolumeControllerService.statuses(
+            exposureStatuses: exposureStatuses(
                 program: program,
-                allTargets: volumeTargets,
-                anchors: volumeAnchors,
-                evidence: rotationEvidence + adaptiveEvidence,
+                readinessInputs: AdaptiveWorkoutService.readinessInputs(from: readinessCheck),
                 asOf: .now
             ),
+            targetComplexCount: targetComplexCount,
             capacity: capacity(for: program),
             doseRecommendations: AdaptiveDoseEvidenceService.recommendations(
                 program: program,
@@ -923,13 +952,11 @@ struct AdaptiveWorkoutView: View {
             exercises: exercises,
             ledger: ledger,
             targetComplexCount: max(1, target),
-            volumeStatuses: AdaptiveVolumeControllerService.statuses(
-                program: program,
-                allTargets: volumeTargets,
-                anchors: volumeAnchors,
-                evidence: rotationEvidence + adaptiveEvidence,
-                asOf: tomorrow
+            exposureRules: AdaptiveExposureControllerService.configurations(
+                for: program,
+                allConfigurations: exposureConfigurations
             ),
+            evidence: rotationEvidence + adaptiveEvidence,
             capacity: capacity(for: program),
             exerciseSelections: AdaptiveExerciseSelectionService.recommendations(
                 exercises: exercises,
@@ -1547,6 +1574,9 @@ struct AdaptiveWorkoutView: View {
     }
 
     private func proposedSetCount(for exercise: Exercise) -> Int {
+        if exercise.primaryMuscle == .forearms || exercise.primaryMuscle == .calves {
+            return 3
+        }
         let configured = activeProgram?.complexes
             .flatMap(\.components)
             .filter { $0.exerciseId == exercise.id }

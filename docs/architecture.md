@@ -120,16 +120,16 @@ Adaptive Workout is one tab with three service-backed phases: Readiness, Design,
 and Execute. Readiness is committed locally before its distinct asynchronous
 iCloud mirror begins. Design stores a per-plan muscle-group exposure target in
 parallel migration-safe metadata; the profile default remains independent.
-The set-rate controller derives per-muscle credit/debt from immutable completed
-set evidence plus versioned target changes. It accrues continuously at a rolling
-weekly-equivalent rate and has no Sunday reset; Sunday is relevant only when
-interpreting an observed calendar week. Only primary-muscle sets receive volume
-credit. Automatic planning applies the profile's muscle-group, exercise,
-per-muscle exercise, total-set, daily-muscle-set, and per-exercise caps.
+The exposure controller derives each muscle's next eligible date from immutable
+completed direct-set evidence and its editable cadence. Missing work creates no
+debt or carry-forward; the next actual exposure uses the normal configured dose
+and resets the clock. Secondary-muscle attribution does not reset clocks.
+Automatic planning applies the profile's muscle-group, exercise, per-muscle
+exercise, total-set, and per-exercise caps.
 Difficulty is recovery context rather than a global point budget. The canonical
 planner strongly deprioritizes a hard quad plus hard hamstring pairing but does
-not make it infeasible, and it cannot route an easier exercise to a muscle that
-readiness or the post-exposure DOMS observation window says is unrecovered.
+not make it infeasible. It hard-bans Chest + Triceps and Back + Biceps in the
+same automatic plan, while manual editing remains available.
 None and Light soreness are treated as normally trainable, with Light losing an
 otherwise equal scheduling tie to None; Moderate and Heavy are excluded from
 automatic planning while manual plan edits remain available.

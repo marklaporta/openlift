@@ -11,16 +11,16 @@ final class AdaptiveProgramServiceTests: XCTestCase {
 
         XCTAssertEqual(enabled.map(\.muscle), MuscleGroup.initialAdaptiveRankOrder)
         XCTAssertEqual(enabled.map(\.priorityRank), Array(1...MuscleGroup.initialAdaptiveRankOrder.count))
-        XCTAssertEqual(enabled[4].muscle, .sideDelts)
+        XCTAssertEqual(enabled[4].muscle, .triceps)
         XCTAssertEqual(draft.globalMaxMovements, 4)
         XCTAssertEqual(draft.defaultComplexCount, 5)
         XCTAssertEqual(draft.maxExerciseCount, 7)
         XCTAssertEqual(draft.maxExercisesPerMuscle, 2)
-        XCTAssertEqual(draft.maxWorkingSetCount, 20)
+        XCTAssertEqual(draft.maxWorkingSetCount, 15)
         XCTAssertEqual(draft.maxDifficultyCost, 60)
         XCTAssertTrue(enabled.allSatisfy { $0.rollingSetFloor == 1 })
 
-        for muscle in [MuscleGroup.glutes, .abs, .traps] {
+        for muscle in [MuscleGroup.forearms, .calves, .glutes, .abs, .traps] {
             let rule = draft.muscleRules.first { $0.muscle == muscle }
             XCTAssertEqual(rule?.priorityRank, 0)
             XCTAssertEqual(rule?.rollingSetFloor, 0)
@@ -200,8 +200,8 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(targets.first { $0.muscle == .quads }?.weeklySetTarget, 11)
         XCTAssertEqual(targets.first { $0.muscle == .biceps }?.weeklySetTarget, 8)
         XCTAssertEqual(targets.first { $0.muscle == .hamstrings }?.weeklySetTarget, 6)
-        XCTAssertEqual(targets.first { $0.muscle == .forearms }?.weeklySetTarget, 6)
-        XCTAssertEqual(targets.first { $0.muscle == .calves }?.weeklySetTarget, 6)
+        XCTAssertEqual(targets.first { $0.muscle == .forearms }?.weeklySetTarget, 0)
+        XCTAssertEqual(targets.first { $0.muscle == .calves }?.weeklySetTarget, 0)
         XCTAssertEqual(targets.first { $0.muscle == .glutes }?.weeklySetTarget, 0)
         XCTAssertEqual(targets.first { $0.muscle == .abs }?.weeklySetTarget, 0)
         XCTAssertEqual(targets.first { $0.muscle == .traps }?.weeklySetTarget, 0)
@@ -211,7 +211,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(capacity.maxMuscleGroupCount, 5)
         XCTAssertEqual(capacity.maxExerciseCount, 7)
         XCTAssertEqual(capacity.maxExercisesPerMuscle, 2)
-        XCTAssertEqual(capacity.maxWorkingSetCount, 20)
+        XCTAssertEqual(capacity.maxWorkingSetCount, 15)
         XCTAssertEqual(capacity.maxSetsPerExercise, 4)
         XCTAssertEqual(
             try context.fetchCount(FetchDescriptor<AdaptiveMuscleVolumeAnchor>()),
@@ -591,6 +591,90 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         )
     }
 
+    func testExposureMigrationDefersForOpenPlanAndPreservesCustomizedProfile() throws {
+        let exercises = makeRankedExercises()
+        let (context, _) = makeContext()
+        let program = try AdaptiveProgramService.saveVersion(
+            draft: AdaptiveProgramService.demoDraft(exercises: exercises),
+            replacing: nil,
+            allPrograms: [],
+            exercises: exercises,
+            modelContext: context
+        )
+        for configuration in try context.fetch(
+            FetchDescriptor<AdaptiveMuscleExposureConfiguration>()
+        ) {
+            context.delete(configuration)
+        }
+        program.name = "Customized Profile"
+        let chestRule = try XCTUnwrap(
+            program.muscleRules.first { $0.muscle == .chest }
+        )
+        chestRule.isEnabled = false
+        let capacity = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AdaptiveWorkoutCapacityPreference>())
+                .first { $0.adaptiveProgramId == program.id }
+        )
+        capacity.maxWorkingSetCount = 30
+        let openPlan = GeneratedWorkoutPlan(
+            localDateKey: "2026-07-26",
+            timeZoneIdentifier: "America/Los_Angeles",
+            status: .proposed,
+            adaptiveProgramId: program.id,
+            adaptiveProgramVersion: program.version,
+            readinessCheckId: UUID(),
+            plannerVersion: AdaptivePlanService.plannerVersion,
+            reasonCodes: [],
+            complexes: []
+        )
+        context.insert(openPlan)
+        try context.save()
+
+        XCTAssertEqual(
+            try AdaptiveExposureControllerService.migrateActiveProgramIfNeeded(
+                modelContext: context
+            ),
+            0
+        )
+        XCTAssertEqual(
+            try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleExposureConfiguration>()
+            ),
+            0
+        )
+        XCTAssertEqual(capacity.maxWorkingSetCount, 30)
+
+        openPlan.status = .completed
+        try context.save()
+        XCTAssertEqual(
+            try AdaptiveExposureControllerService.migrateActiveProgramIfNeeded(
+                modelContext: context,
+                now: Date(timeIntervalSince1970: 1_900_000_000)
+            ),
+            MuscleGroup.allCases.count
+        )
+        let configurations = try context.fetch(
+            FetchDescriptor<AdaptiveMuscleExposureConfiguration>()
+        )
+        XCTAssertEqual(configurations.count, MuscleGroup.allCases.count)
+        XCTAssertFalse(
+            configurations.first { $0.muscle == .chest }?
+                .isAutomaticPlanningEnabled == true
+        )
+        XCTAssertFalse(
+            configurations.first { $0.muscle == .forearms }?
+                .isAutomaticPlanningEnabled == true
+        )
+        XCTAssertEqual(
+            configurations.first { $0.muscle == .back }?.normalSetCount,
+            6
+        )
+        XCTAssertEqual(capacity.maxWorkingSetCount, 15)
+        XCTAssertEqual(program.name, "Customized Profile")
+        XCTAssertTrue(program.isActiveVersion)
+        XCTAssertEqual(openPlan.adaptiveProgramId, program.id)
+    }
+
     private func makeRankedExercises() -> [Exercise] {
         MuscleGroup.initialAdaptiveRankOrder.map(makeExercise(for:))
     }
@@ -750,7 +834,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(hamstrings.mode, .pinned)
         XCTAssertEqual(hamstrings.pinnedExerciseId, stiffLegDeadlift.id)
         XCTAssertTrue(hamstrings.eligibleExerciseIds.contains(stiffLegDeadlift.id))
-        XCTAssertTrue(hamstrings.eligibleExerciseIds.contains(reverseHyper.id))
+        XCTAssertFalse(hamstrings.eligibleExerciseIds.contains(reverseHyper.id))
         XCTAssertFalse(hamstrings.eligibleExerciseIds.contains(gluteHamRaise.id))
         XCTAssertEqual(preferences.first { $0.muscle == .back }?.mode, .rotateRecent)
         let triceps = try XCTUnwrap(preferences.first { $0.muscle == .triceps })
@@ -821,7 +905,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
     }
 
     private func makeContext() -> (ModelContext, ModelContainer) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV8.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (ModelContext(container), container)
     }

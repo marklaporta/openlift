@@ -648,7 +648,11 @@ private struct AdaptiveExerciseSelectionEditorView: View {
 
     private func activeExercises(for muscle: MuscleGroup) -> [Exercise] {
         exercises
-            .filter { $0.isActive && $0.primaryMuscle == muscle }
+            .filter {
+                $0.isActive
+                    && $0.primaryMuscle == muscle
+                    && !AdaptiveExposureControllerService.isReverseHyper($0)
+            }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 

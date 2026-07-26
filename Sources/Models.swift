@@ -27,13 +27,11 @@ enum MuscleGroup: String, Codable, CaseIterable {
     static let initialAdaptiveRankOrder: [MuscleGroup] = [
         .chest,
         .back,
-        .triceps,
-        .biceps,
-        .sideDelts,
         .quads,
         .hamstrings,
-        .forearms,
-        .calves
+        .triceps,
+        .biceps,
+        .sideDelts
     ]
 }
 
@@ -385,6 +383,85 @@ final class AdaptiveMuscleVolumeAnchor {
 
     static func key(lineageId: UUID, muscle: MuscleGroup) -> String {
         "\(lineageId.uuidString)|\(muscle.rawValue)"
+    }
+}
+
+enum AdaptiveCadenceKind: String, Codable, CaseIterable, Hashable {
+    case fixedCalendarDays
+    case lateralDelts2221
+
+    var displayName: String {
+        switch self {
+        case .fixedCalendarDays: return "Fixed recovery days"
+        case .lateralDelts2221: return "Floating 2, 2, 2, 1 days"
+        }
+    }
+}
+
+enum AdaptiveExerciseSplitKind: String, Codable, CaseIterable, Hashable {
+    case none
+    case chestCompoundIsolation
+    case backVerticalHorizontal
+
+    var displayName: String {
+        switch self {
+        case .none: return "Single exercise"
+        case .chestCompoundIsolation: return "Compound + isolation"
+        case .backVerticalHorizontal: return "Vertical + horizontal"
+        }
+    }
+}
+
+/// Version-scoped automatic-planning configuration introduced by schema V8.
+/// It is intentionally parallel to the legacy V7 weekly-volume records so
+/// workout history and stores that already contain those rows remain intact.
+@Model
+final class AdaptiveMuscleExposureConfiguration {
+    @Attribute(.unique) var key: String
+    var adaptiveProgramId: UUID
+    var lineageId: UUID
+    var muscle: MuscleGroup
+    var isAutomaticPlanningEnabled: Bool
+    var normalSetCount: Int
+    var cadenceKind: AdaptiveCadenceKind
+    var minimumCalendarDays: Int
+    var cadencePattern: [Int]
+    var exerciseSplitKind: AdaptiveExerciseSplitKind
+    var firstSplitSetCount: Int
+    var secondSplitSetCount: Int
+    var effectiveAt: Date
+
+    init(
+        adaptiveProgramId: UUID,
+        lineageId: UUID,
+        muscle: MuscleGroup,
+        isAutomaticPlanningEnabled: Bool,
+        normalSetCount: Int,
+        cadenceKind: AdaptiveCadenceKind,
+        minimumCalendarDays: Int,
+        cadencePattern: [Int] = [],
+        exerciseSplitKind: AdaptiveExerciseSplitKind = .none,
+        firstSplitSetCount: Int = 0,
+        secondSplitSetCount: Int = 0,
+        effectiveAt: Date
+    ) {
+        self.key = Self.key(programId: adaptiveProgramId, muscle: muscle)
+        self.adaptiveProgramId = adaptiveProgramId
+        self.lineageId = lineageId
+        self.muscle = muscle
+        self.isAutomaticPlanningEnabled = isAutomaticPlanningEnabled
+        self.normalSetCount = normalSetCount
+        self.cadenceKind = cadenceKind
+        self.minimumCalendarDays = minimumCalendarDays
+        self.cadencePattern = cadencePattern
+        self.exerciseSplitKind = exerciseSplitKind
+        self.firstSplitSetCount = firstSplitSetCount
+        self.secondSplitSetCount = secondSplitSetCount
+        self.effectiveAt = effectiveAt
+    }
+
+    static func key(programId: UUID, muscle: MuscleGroup) -> String {
+        "\(programId.uuidString)|\(muscle.rawValue)"
     }
 }
 

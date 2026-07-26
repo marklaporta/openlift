@@ -223,7 +223,7 @@ struct AdaptiveWorkoutCapacity: Equatable {
         maxMuscleGroupCount: 5,
         maxExerciseCount: 7,
         maxExercisesPerMuscle: 2,
-        maxWorkingSetCount: 20,
+        maxWorkingSetCount: 15,
         maxSetsPerExercise: 4
     )
     static let legacy = AdaptiveWorkoutCapacity(
@@ -255,6 +255,329 @@ struct AdaptiveWorkoutCapacity: Equatable {
             maxExercisesPerMuscle: preference.maxExercisesPerMuscle,
             maxWorkingSetCount: preference.maxWorkingSetCount,
             maxSetsPerExercise: preference.maxSetsPerExercise
+        )
+    }
+}
+
+struct AdaptiveExposureRule: Equatable {
+    var muscle: MuscleGroup
+    var isAutomaticPlanningEnabled: Bool
+    var normalSetCount: Int
+    var cadenceKind: AdaptiveCadenceKind
+    var minimumCalendarDays: Int
+    var cadencePattern: [Int]
+    var exerciseSplitKind: AdaptiveExerciseSplitKind
+    var firstSplitSetCount: Int
+    var secondSplitSetCount: Int
+}
+
+struct AdaptiveMuscleExposureStatus: Equatable {
+    var muscle: MuscleGroup
+    var rule: AdaptiveExposureRule
+    var lastDirectExposureAt: Date?
+    var nextEligibleAt: Date?
+    var daysOverdue: Int
+    var soreness: SorenessLevel
+    var isEligible: Bool
+}
+
+enum AdaptiveExposureControllerService {
+    static let automaticPriority: [MuscleGroup] = [
+        .chest, .back, .quads, .hamstrings, .triceps, .biceps, .sideDelts
+    ]
+
+    static func defaultRule(for muscle: MuscleGroup) -> AdaptiveExposureRule {
+        switch muscle {
+        case .back:
+            return rule(
+                muscle, sets: 6, days: 2, split: .backVerticalHorizontal,
+                first: 3, second: 3
+            )
+        case .chest:
+            return rule(
+                muscle, sets: 4, days: 2, split: .chestCompoundIsolation,
+                first: 2, second: 2
+            )
+        case .quads, .hamstrings:
+            return rule(muscle, sets: 3, days: 3)
+        case .triceps, .biceps:
+            return rule(muscle, sets: 3, days: 2)
+        case .sideDelts:
+            var value = rule(muscle, sets: 3, days: 2)
+            value.cadenceKind = .lateralDelts2221
+            value.cadencePattern = [2, 2, 2, 1]
+            return value
+        case .forearms, .glutes, .calves, .abs, .traps:
+            var value = rule(muscle, sets: 3, days: 2)
+            value.isAutomaticPlanningEnabled = false
+            return value
+        }
+    }
+
+    static func configurations(
+        for program: AdaptiveProgram,
+        allConfigurations: [AdaptiveMuscleExposureConfiguration]
+    ) -> [MuscleGroup: AdaptiveExposureRule] {
+        let stored = Dictionary(
+            uniqueKeysWithValues: allConfigurations
+                .filter { $0.adaptiveProgramId == program.id }
+                .map { ($0.muscle, rule(from: $0)) }
+        )
+        return Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map { muscle in
+            (muscle, stored[muscle] ?? defaultRule(for: muscle))
+        })
+    }
+
+    /// Adds V8 controller rows only when the active program has no open plan.
+    /// Existing profile graphs and completed history are never rewritten.
+    @discardableResult
+    static func migrateActiveProgramIfNeeded(
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws -> Int {
+        let programs = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
+        guard let program = AdaptiveProgramService.activeProgram(from: programs) else { return 0 }
+        let existing = try modelContext.fetch(
+            FetchDescriptor<AdaptiveMuscleExposureConfiguration>()
+        ).filter { $0.adaptiveProgramId == program.id }
+        guard existing.count < MuscleGroup.allCases.count else { return 0 }
+
+        let openPlans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        guard !openPlans.contains(where: {
+            $0.adaptiveProgramId == program.id && $0.status != .completed
+        }) else {
+            return 0
+        }
+
+        let rulesByMuscle = Dictionary(
+            uniqueKeysWithValues: program.muscleRules.map { ($0.muscle, $0) }
+        )
+        let existingMuscles = Set(existing.map(\.muscle))
+        var inserted = 0
+        for muscle in MuscleGroup.allCases where !existingMuscles.contains(muscle) {
+            var value = defaultRule(for: muscle)
+            value.isAutomaticPlanningEnabled =
+                automaticPriority.contains(muscle) && rulesByMuscle[muscle]?.isEnabled == true
+            modelContext.insert(
+                makeConfiguration(rule: value, program: program, effectiveAt: now)
+            )
+            inserted += 1
+        }
+
+        let capacities = try modelContext.fetch(
+            FetchDescriptor<AdaptiveWorkoutCapacityPreference>()
+        )
+        if let capacity = capacities.first(where: { $0.adaptiveProgramId == program.id }) {
+            capacity.maxWorkingSetCount = min(capacity.maxWorkingSetCount, 15)
+            capacity.updatedAt = now
+        } else {
+            modelContext.insert(
+                AdaptiveWorkoutCapacityPreference(
+                    adaptiveProgramId: program.id,
+                    maxWorkingSetCount: 15,
+                    updatedAt: now
+                )
+            )
+            inserted += 1
+        }
+
+        // Reverse Hypers remain available for manual recovery work, but are
+        // removed from every automatic exercise-selection pool.
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let reverseHyperIds = Set(exercises.filter(isReverseHyper).map(\.id))
+        if !reverseHyperIds.isEmpty {
+            let preferences = try modelContext.fetch(
+                FetchDescriptor<AdaptiveExerciseSelectionPreference>()
+            )
+            for preference in preferences {
+                preference.eligibleExerciseIds.removeAll { reverseHyperIds.contains($0) }
+                if preference.pinnedExerciseId.map(reverseHyperIds.contains) == true {
+                    preference.pinnedExerciseId = nil
+                    preference.mode = .repeatLast
+                }
+            }
+        }
+
+        if inserted > 0 { try modelContext.save() }
+        return inserted
+    }
+
+    static func insertConfigurations(
+        for program: AdaptiveProgram,
+        rules: [AdaptiveExposureRule],
+        modelContext: ModelContext,
+        effectiveAt: Date
+    ) {
+        for rule in rules {
+            modelContext.insert(
+                makeConfiguration(rule: rule, program: program, effectiveAt: effectiveAt)
+            )
+        }
+    }
+
+    static func statuses(
+        rules: [MuscleGroup: AdaptiveExposureRule],
+        readiness: [MuscleGroup: MuscleReadinessInput],
+        evidence: [TrainingLoadEvidence],
+        exercises: [Exercise],
+        asOf: Date,
+        calendar: Calendar = .current
+    ) -> [MuscleGroup: AdaptiveMuscleExposureStatus] {
+        let exercisesById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
+        return Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map { muscle in
+            let rule = rules[muscle] ?? defaultRule(for: muscle)
+            let exposureDays = directExposureDays(
+                evidence: evidence,
+                muscle: muscle,
+                exercisesById: exercisesById,
+                asOf: asOf,
+                calendar: calendar
+            )
+            let last = exposureDays.last
+            let interval = cadenceInterval(rule: rule, completedExposureCount: exposureDays.count)
+            let next = last.flatMap {
+                calendar.date(byAdding: .day, value: interval, to: $0)
+            }
+            let today = calendar.startOfDay(for: asOf)
+            let due = next.map(calendar.startOfDay(for:))
+            let overdue = due.map {
+                max(0, calendar.dateComponents([.day], from: $0, to: today).day ?? 0)
+            } ?? Int.max
+            let soreness = readiness[muscle]?.soreness ?? .high
+            let readinessAllows = soreness.allowsAutomaticTraining
+                && readiness[muscle]?.connectiveTissuePain != .stop
+            let isDue = due.map { $0 <= today } ?? true
+            return (
+                muscle,
+                AdaptiveMuscleExposureStatus(
+                    muscle: muscle,
+                    rule: rule,
+                    lastDirectExposureAt: last,
+                    nextEligibleAt: due,
+                    daysOverdue: overdue,
+                    soreness: soreness,
+                    isEligible: automaticPriority.contains(muscle)
+                        && rule.isAutomaticPlanningEnabled
+                        && readinessAllows
+                        && isDue
+                )
+            )
+        })
+    }
+
+    static func rankedEligible(
+        _ statuses: [MuscleGroup: AdaptiveMuscleExposureStatus]
+    ) -> [AdaptiveMuscleExposureStatus] {
+        statuses.values.filter(\.isEligible).sorted { left, right in
+            if left.daysOverdue != right.daysOverdue {
+                return left.daysOverdue > right.daysOverdue
+            }
+            let leftPriority = automaticPriority.firstIndex(of: left.muscle) ?? Int.max
+            let rightPriority = automaticPriority.firstIndex(of: right.muscle) ?? Int.max
+            if leftPriority != rightPriority { return leftPriority < rightPriority }
+            let leftSoreness = left.soreness == .none ? 0 : 1
+            let rightSoreness = right.soreness == .none ? 0 : 1
+            if leftSoreness != rightSoreness { return leftSoreness < rightSoreness }
+            let leftLast = left.lastDirectExposureAt ?? .distantPast
+            let rightLast = right.lastDirectExposureAt ?? .distantPast
+            if leftLast != rightLast { return leftLast < rightLast }
+            return left.muscle.rawValue < right.muscle.rawValue
+        }
+    }
+
+    static func isReverseHyper(_ exercise: Exercise) -> Bool {
+        exercise.name.lowercased().contains("reverse hyper")
+    }
+
+    private static func directExposureDays(
+        evidence: [TrainingLoadEvidence],
+        muscle: MuscleGroup,
+        exercisesById: [UUID: Exercise],
+        asOf: Date,
+        calendar: Calendar
+    ) -> [Date] {
+        let dates = evidence.compactMap { item -> Date? in
+            guard item.isSessionCompleted,
+                  item.isLocked,
+                  item.reps > 0,
+                  item.completedAt <= asOf,
+                  item.muscles.first == muscle,
+                  let exercise = exercisesById[item.exerciseId],
+                  !isReverseHyper(exercise) else {
+                return nil
+            }
+            return calendar.startOfDay(for: item.completedAt)
+        }
+        return Array(Set(dates)).sorted()
+    }
+
+    private static func cadenceInterval(
+        rule: AdaptiveExposureRule,
+        completedExposureCount: Int
+    ) -> Int {
+        guard rule.cadenceKind == .lateralDelts2221,
+              !rule.cadencePattern.isEmpty,
+              completedExposureCount > 0 else {
+            return max(1, rule.minimumCalendarDays)
+        }
+        return max(1, rule.cadencePattern[(completedExposureCount - 1) % rule.cadencePattern.count])
+    }
+
+    private static func rule(
+        _ muscle: MuscleGroup,
+        sets: Int,
+        days: Int,
+        split: AdaptiveExerciseSplitKind = .none,
+        first: Int = 0,
+        second: Int = 0
+    ) -> AdaptiveExposureRule {
+        AdaptiveExposureRule(
+            muscle: muscle,
+            isAutomaticPlanningEnabled: automaticPriority.contains(muscle),
+            normalSetCount: sets,
+            cadenceKind: .fixedCalendarDays,
+            minimumCalendarDays: days,
+            cadencePattern: [],
+            exerciseSplitKind: split,
+            firstSplitSetCount: first,
+            secondSplitSetCount: second
+        )
+    }
+
+    private static func rule(
+        from configuration: AdaptiveMuscleExposureConfiguration
+    ) -> AdaptiveExposureRule {
+        AdaptiveExposureRule(
+            muscle: configuration.muscle,
+            isAutomaticPlanningEnabled: configuration.isAutomaticPlanningEnabled,
+            normalSetCount: configuration.normalSetCount,
+            cadenceKind: configuration.cadenceKind,
+            minimumCalendarDays: configuration.minimumCalendarDays,
+            cadencePattern: configuration.cadencePattern,
+            exerciseSplitKind: configuration.exerciseSplitKind,
+            firstSplitSetCount: configuration.firstSplitSetCount,
+            secondSplitSetCount: configuration.secondSplitSetCount
+        )
+    }
+
+    private static func makeConfiguration(
+        rule: AdaptiveExposureRule,
+        program: AdaptiveProgram,
+        effectiveAt: Date
+    ) -> AdaptiveMuscleExposureConfiguration {
+        AdaptiveMuscleExposureConfiguration(
+            adaptiveProgramId: program.id,
+            lineageId: program.lineageId,
+            muscle: rule.muscle,
+            isAutomaticPlanningEnabled: rule.isAutomaticPlanningEnabled,
+            normalSetCount: rule.normalSetCount,
+            cadenceKind: rule.cadenceKind,
+            minimumCalendarDays: rule.minimumCalendarDays,
+            cadencePattern: rule.cadencePattern,
+            exerciseSplitKind: rule.exerciseSplitKind,
+            firstSplitSetCount: rule.firstSplitSetCount,
+            secondSplitSetCount: rule.secondSplitSetCount,
+            effectiveAt: effectiveAt
         )
     }
 }
@@ -786,24 +1109,44 @@ struct AdaptivePlanDecisionTrace: Equatable {
 }
 
 enum AdaptivePlanService {
-    static let plannerVersion = 9
+    static let plannerVersion = 10
 
     static func generate(
         program: AdaptiveProgram,
         exercises: [Exercise],
         readiness: [MuscleGroup: MuscleReadinessInput],
         ledger: TrainingLoadLedger,
+        exposureStatuses: [MuscleGroup: AdaptiveMuscleExposureStatus] = [:],
         targetComplexCount: Int? = nil,
-        volumeStatuses: [MuscleGroup: AdaptiveMuscleVolumeStatus]? = nil,
         capacity: AdaptiveWorkoutCapacity = .legacy,
         doseRecommendations: [UUID: [Int: DoseRecommendation]] = [:],
         exerciseSelections: [AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation] = [:],
         now: Date,
         calendar: Calendar = .current
     ) -> AdaptivePlannerResult {
+        let controllerStatuses = exposureStatuses.isEmpty
+            ? fallbackExposureStatuses(
+                readiness: readiness,
+                ledger: ledger,
+                now: now,
+                calendar: calendar
+            )
+            : exposureStatuses
         let enabledRules = program.muscleRules
-            .filter(\.isEnabled)
-            .sorted { $0.priorityRank < $1.priorityRank }
+            .filter {
+                $0.isEnabled
+                    && controllerStatuses[$0.muscle]?.rule.isAutomaticPlanningEnabled == true
+                    && AdaptiveExposureControllerService.automaticPriority.contains($0.muscle)
+            }
+            .sorted {
+                let left = AdaptiveExposureControllerService.automaticPriority.firstIndex(
+                    of: $0.muscle
+                ) ?? Int.max
+                let right = AdaptiveExposureControllerService.automaticPriority.firstIndex(
+                    of: $1.muscle
+                ) ?? Int.max
+                return left < right
+            }
         let rules = Dictionary(uniqueKeysWithValues: enabledRules.map { ($0.muscle, $0) })
         let exercisesById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
 
@@ -833,6 +1176,15 @@ enum AdaptivePlanService {
                 for component in components {
                     guard let exercise = exercisesById[component.exerciseId], exercise.isActive else {
                         rejections.append(.init(complexDefinitionId: complex.definitionId, code: "inactive_exercise"))
+                        return nil
+                    }
+                    if AdaptiveExposureControllerService.isReverseHyper(exercise) {
+                        rejections.append(
+                            .init(
+                                complexDefinitionId: complex.definitionId,
+                                code: "manual_recovery_exercise"
+                            )
+                        )
                         return nil
                     }
                     if doseRecommendations[complex.definitionId]?[component.position]?.isPainBlocked == true {
@@ -867,6 +1219,15 @@ enum AdaptivePlanService {
                         ? nil
                         : availableSelection
                     let selectedExercise = selection?.exercise ?? exercise
+                    if AdaptiveExposureControllerService.isReverseHyper(selectedExercise) {
+                        rejections.append(
+                            .init(
+                                complexDefinitionId: complex.definitionId,
+                                code: "manual_recovery_exercise"
+                            )
+                        )
+                        return nil
+                    }
                     if let selection, let selectedKey {
                         appliedSelectionKeys.insert(selectedKey)
                         selectionReasonCodes.append(
@@ -886,8 +1247,7 @@ enum AdaptivePlanService {
                             primaryMuscle: component.primaryMuscle,
                             secondaryMuscle: changedExercise ? nil : component.secondaryMuscle,
                             difficulty: AdaptiveExerciseRoleService.difficulty(for: selectedExercise),
-                            prescribedSetCount: doseRecommendations[complex.definitionId]?[component.position]?
-                                .prescribedSetCount ?? component.prescribedSetCount
+                            prescribedSetCount: component.prescribedSetCount
                         )
                     )
                 }
@@ -936,19 +1296,6 @@ enum AdaptivePlanService {
                     rejections.append(.init(complexDefinitionId: complex.definitionId, code: "held_for_recovery"))
                     return nil
                 }
-                if attributedMuscles.contains(where: {
-                    isWithinDOMSObservationWindow(
-                        muscle: $0,
-                        lastDirectExposureAt: ledger[$0].lastDirectProductiveExposureAt,
-                        now: now,
-                        calendar: calendar
-                    )
-                }) {
-                    rejections.append(
-                        .init(complexDefinitionId: complex.definitionId, code: "doms_observation_window")
-                    )
-                    return nil
-                }
                 guard rules[complex.primaryMuscle] != nil else {
                     rejections.append(.init(complexDefinitionId: complex.definitionId, code: "primary_muscle_disabled"))
                     return nil
@@ -963,44 +1310,44 @@ enum AdaptivePlanService {
                     components: planned
                 )
             }
-        let candidates = rawCandidates.map { candidate in
-            let desiredSets: Int
-            let hasRollingVolumeDose: Bool
-            if let status = volumeStatuses?[candidate.primaryMuscle],
-               status.weeklySetTarget > 0 {
-                hasRollingVolumeDose = true
-                desiredSets = min(
-                    status.dailySetCap,
-                    max(
-                        candidate.components.filter {
-                            $0.primaryMuscle == candidate.primaryMuscle
-                        }.count,
-                        Int(ceil(status.setsBehind))
-                    )
+        let candidates = rawCandidates.compactMap { candidate -> AdaptivePlannedComplex? in
+            let exposureRule = controllerStatuses[candidate.primaryMuscle]?.rule
+                ?? AdaptiveExposureControllerService.defaultRule(
+                    for: candidate.primaryMuscle
                 )
-            } else {
-                hasRollingVolumeDose = false
-                desiredSets = candidate.components
-                    .filter { $0.primaryMuscle == candidate.primaryMuscle }
-                    .reduce(0) { $0 + $1.prescribedSetCount }
-            }
+            let desiredSets = exposureRule.normalSetCount
             let distributed = applyingExerciseVariation(
                 to: candidate,
                 desiredSets: desiredSets,
                 exercisesById: exercisesById,
                 exerciseSelections: exerciseSelections
             )
-            let variationAdded = distributed.components.count != candidate.components.count
-            var dosed = hasRollingVolumeDose || variationAdded
-                ? applyingVolumeDose(
-                    to: distributed,
-                    desiredSets: desiredSets,
-                    maxSetsPerExercise: candidate.primaryMuscle == .back
-                        || candidate.primaryMuscle == .chest
-                        ? min(3, capacity.maxSetsPerExercise)
-                        : capacity.maxSetsPerExercise
+            var dosed = applyingVolumeDose(
+                to: distributed,
+                desiredSets: desiredSets,
+                maxSetsPerExercise: candidate.primaryMuscle == .back
+                    || candidate.primaryMuscle == .chest
+                    ? min(3, capacity.maxSetsPerExercise)
+                    : capacity.maxSetsPerExercise
+            )
+            dosed = applyingConfiguredSplit(
+                to: dosed,
+                rule: exposureRule,
+                exercisesById: exercisesById
+            )
+            guard configuredSplitIsSatisfied(
+                by: dosed,
+                rule: exposureRule,
+                exercisesById: exercisesById
+            ) else {
+                rejections.append(
+                    .init(
+                        complexDefinitionId: candidate.definitionId,
+                        code: "required_exercise_split_unavailable"
+                    )
                 )
-                : distributed
+                return nil
+            }
             if candidate.primaryMuscle == .chest || candidate.primaryMuscle == .back {
                 for index in dosed.components.indices
                     where dosed.components[index].primaryMuscle == dosed.primaryMuscle {
@@ -1028,6 +1375,12 @@ enum AdaptivePlanService {
         func fitFailure(for candidate: AdaptivePlannedComplex) -> String? {
             if selected.count >= exposureTarget { return "daily_exposure_target" }
             if selectedMuscles.contains(candidate.primaryMuscle) { return "muscle_already_selected" }
+            if createsBannedSynergistPair(
+                selectedMuscles: selectedMuscles,
+                adding: candidate.primaryMuscle
+            ) {
+                return "synergist_pair_ban"
+            }
             if movements + candidate.components.count > capacity.maxExerciseCount {
                 return "exercise_count_cap"
             }
@@ -1054,19 +1407,14 @@ enum AdaptivePlanService {
             }) {
                 return "exercises_per_muscle_cap"
             }
-            let directSetsByMuscle = Dictionary(grouping: combinedComponents, by: \.primaryMuscle)
-                .mapValues { $0.reduce(0) { $0 + $1.prescribedSetCount } }
-            for (muscle, sets) in directSetsByMuscle {
-                let dailyCap = volumeStatuses?[muscle]?.dailySetCap ?? Int.max
-                if sets > dailyCap { return "daily_muscle_set_cap" }
-            }
             for component in candidate.components {
                 guard let primaryRule = rules[component.primaryMuscle] else {
                     return "primary_muscle_disabled"
                 }
-                let exerciseCap = volumeStatuses == nil
-                    ? primaryRule.maxSetsPerExercise
-                    : capacity.maxSetsPerExercise
+                let exerciseCap = candidate.primaryMuscle == .chest
+                    || candidate.primaryMuscle == .back
+                    ? min(3, capacity.maxSetsPerExercise)
+                    : min(primaryRule.maxSetsPerExercise, capacity.maxSetsPerExercise)
                 guard component.prescribedSetCount <= exerciseCap else {
                     return "sets_per_exercise_cap"
                 }
@@ -1084,41 +1432,14 @@ enum AdaptivePlanService {
             difficulty += candidate.components.reduce(0) { $0 + $1.difficulty.cost }
             workingSets += candidate.components.reduce(0) { $0 + $1.prescribedSetCount }
             for component in candidate.components {
-                if volumeStatuses == nil {
-                    for muscle in attributedMuscles(of: component) {
-                        setDose[muscle, default: 0] += component.prescribedSetCount
-                    }
-                } else {
-                    setDose[component.primaryMuscle, default: 0] += component.prescribedSetCount
-                }
+                setDose[component.primaryMuscle, default: 0] += component.prescribedSetCount
             }
         }
 
         var dueReasonByMuscle: [MuscleGroup: String] = [:]
         for rule in enabledRules {
-            if let status = volumeStatuses?[rule.muscle] {
-                if status.weeklySetTarget > 0 && status.setsBehind > 0.001 {
-                    dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_volume_due"
-                }
-            } else {
-                let load = ledger[rule.muscle]
-                let exposureDue = rule.rollingSetFloor > 0 && load.lockedSetCount == 0
-                let gapDue: Bool
-                if let last = load.lastProductiveExposureAt,
-                   let dueDate = calendar.date(
-                    byAdding: .day,
-                    value: rule.maxRecoveredDayGap,
-                    to: last
-                   ) {
-                    gapDue = dueDate <= now
-                } else {
-                    gapDue = true
-                }
-                if exposureDue {
-                    dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_exposure_due"
-                } else if gapDue {
-                    dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_gap_due"
-                }
+            if controllerStatuses[rule.muscle]?.isEligible == true {
+                dueReasonByMuscle[rule.muscle] = "\(rule.muscle.rawValue)_cadence_due"
             }
         }
 
@@ -1153,30 +1474,30 @@ enum AdaptivePlanService {
             let remaining = candidates.filter {
                 !selectedDefinitions.contains($0.definitionId)
                     && !selectedMuscles.contains($0.primaryMuscle)
-                    && (volumeStatuses == nil || dueReasonByMuscle[$0.primaryMuscle] != nil)
+                    && dueReasonByMuscle[$0.primaryMuscle] != nil
                     && fitFailure(for: $0) == nil
             }
             guard let candidate = remaining.sorted(by: { left, right in
                 let leftPair = createsHardLowerBodyPair(selected: selected, adding: left)
                 let rightPair = createsHardLowerBodyPair(selected: selected, adding: right)
                 if leftPair != rightPair { return !leftPair }
-                let leftDue = dueReasonByMuscle[left.primaryMuscle] != nil
-                let rightDue = dueReasonByMuscle[right.primaryMuscle] != nil
-                if leftDue != rightDue { return leftDue }
-                let leftDebt = volumeStatuses?[left.primaryMuscle]?.normalizedDebt ?? 0
-                let rightDebt = volumeStatuses?[right.primaryMuscle]?.normalizedDebt ?? 0
-                if leftDebt != rightDebt { return leftDebt > rightDebt }
+                let leftOverdue = controllerStatuses[left.primaryMuscle]?.daysOverdue ?? -1
+                let rightOverdue = controllerStatuses[right.primaryMuscle]?.daysOverdue ?? -1
+                if leftOverdue != rightOverdue { return leftOverdue > rightOverdue }
+                let leftPriority = AdaptiveExposureControllerService.automaticPriority.firstIndex(
+                    of: left.primaryMuscle
+                ) ?? Int.max
+                let rightPriority = AdaptiveExposureControllerService.automaticPriority.firstIndex(
+                    of: right.primaryMuscle
+                ) ?? Int.max
+                if leftPriority != rightPriority { return leftPriority < rightPriority }
                 let leftSoreness = sorenessRank(readiness[left.primaryMuscle]?.soreness)
                 let rightSoreness = sorenessRank(readiness[right.primaryMuscle]?.soreness)
                 if leftSoreness != rightSoreness { return leftSoreness < rightSoreness }
-                let leftEagerness = eagernessRank(readiness[left.primaryMuscle]?.eagerness)
-                let rightEagerness = eagernessRank(readiness[right.primaryMuscle]?.eagerness)
-                if leftEagerness != rightEagerness { return leftEagerness < rightEagerness }
-                let leftRank = rules[left.primaryMuscle]?.priorityRank ?? Int.max
-                let rightRank = rules[right.primaryMuscle]?.priorityRank ?? Int.max
-                if leftRank != rightRank { return leftRank < rightRank }
-                let leftLast = ledger[left.primaryMuscle].lastProductiveExposureAt ?? .distantPast
-                let rightLast = ledger[right.primaryMuscle].lastProductiveExposureAt ?? .distantPast
+                let leftLast = controllerStatuses[left.primaryMuscle]?.lastDirectExposureAt
+                    ?? .distantPast
+                let rightLast = controllerStatuses[right.primaryMuscle]?.lastDirectExposureAt
+                    ?? .distantPast
                 if leftLast != rightLast { return leftLast < rightLast }
                 return floorFitOrder(left, right)
             }).first else { break }
@@ -1241,6 +1562,127 @@ enum AdaptivePlanService {
             )
         }
         return result
+    }
+
+    private static func fallbackExposureStatuses(
+        readiness: [MuscleGroup: MuscleReadinessInput],
+        ledger: TrainingLoadLedger,
+        now: Date,
+        calendar: Calendar
+    ) -> [MuscleGroup: AdaptiveMuscleExposureStatus] {
+        let today = calendar.startOfDay(for: now)
+        return Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map { muscle in
+            let rule = AdaptiveExposureControllerService.defaultRule(for: muscle)
+            let last = ledger[muscle].lastDirectProductiveExposureAt.map(
+                calendar.startOfDay(for:)
+            )
+            let next = last.flatMap {
+                calendar.date(
+                    byAdding: .day,
+                    value: rule.minimumCalendarDays,
+                    to: $0
+                )
+            }
+            let overdue = next.map {
+                max(0, calendar.dateComponents([.day], from: $0, to: today).day ?? 0)
+            } ?? Int.max
+            let input = readiness[muscle]
+            return (
+                muscle,
+                AdaptiveMuscleExposureStatus(
+                    muscle: muscle,
+                    rule: rule,
+                    lastDirectExposureAt: last,
+                    nextEligibleAt: next,
+                    daysOverdue: overdue,
+                    soreness: input?.soreness ?? .high,
+                    isEligible: rule.isAutomaticPlanningEnabled
+                        && input?.isHardBlocked == false
+                        && (next.map { $0 <= today } ?? true)
+                )
+            )
+        })
+    }
+
+    private static func applyingConfiguredSplit(
+        to candidate: AdaptivePlannedComplex,
+        rule: AdaptiveExposureRule,
+        exercisesById: [UUID: Exercise]
+    ) -> AdaptivePlannedComplex {
+        guard rule.exerciseSplitKind != .none,
+              rule.firstSplitSetCount + rule.secondSplitSetCount == rule.normalSetCount else {
+            return candidate
+        }
+        var result = candidate
+        let firstIndex: Int?
+        let secondIndex: Int?
+        switch rule.exerciseSplitKind {
+        case .none:
+            return candidate
+        case .chestCompoundIsolation:
+            firstIndex = result.components.firstIndex {
+                $0.primaryMuscle == .chest && exercisesById[$0.exerciseId]?.type == .compound
+            }
+            secondIndex = result.components.firstIndex {
+                $0.primaryMuscle == .chest && exercisesById[$0.exerciseId]?.type == .isolation
+            }
+        case .backVerticalHorizontal:
+            firstIndex = result.components.firstIndex {
+                guard $0.primaryMuscle == .back,
+                      let exercise = exercisesById[$0.exerciseId] else { return false }
+                return BackMovementPatternService.pattern(for: exercise) == .verticalPull
+            }
+            secondIndex = result.components.firstIndex {
+                guard $0.primaryMuscle == .back,
+                      let exercise = exercisesById[$0.exerciseId] else { return false }
+                return BackMovementPatternService.pattern(for: exercise) == .horizontalPull
+            }
+        }
+        guard let firstIndex, let secondIndex else { return candidate }
+        result.components[firstIndex].prescribedSetCount = rule.firstSplitSetCount
+        result.components[secondIndex].prescribedSetCount = rule.secondSplitSetCount
+        return result
+    }
+
+    private static func configuredSplitIsSatisfied(
+        by candidate: AdaptivePlannedComplex,
+        rule: AdaptiveExposureRule,
+        exercisesById: [UUID: Exercise]
+    ) -> Bool {
+        switch rule.exerciseSplitKind {
+        case .none:
+            return candidate.components
+                .filter { $0.primaryMuscle == candidate.primaryMuscle }
+                .reduce(0) { $0 + $1.prescribedSetCount } == rule.normalSetCount
+        case .chestCompoundIsolation:
+            let compounds = candidate.components.filter {
+                $0.primaryMuscle == .chest
+                    && exercisesById[$0.exerciseId]?.type == .compound
+            }
+            let isolations = candidate.components.filter {
+                $0.primaryMuscle == .chest
+                    && exercisesById[$0.exerciseId]?.type == .isolation
+            }
+            return compounds.count == 1
+                && isolations.count == 1
+                && compounds[0].prescribedSetCount == rule.firstSplitSetCount
+                && isolations[0].prescribedSetCount == rule.secondSplitSetCount
+        case .backVerticalHorizontal:
+            let vertical = candidate.components.filter {
+                guard $0.primaryMuscle == .back,
+                      let exercise = exercisesById[$0.exerciseId] else { return false }
+                return BackMovementPatternService.pattern(for: exercise) == .verticalPull
+            }
+            let horizontal = candidate.components.filter {
+                guard $0.primaryMuscle == .back,
+                      let exercise = exercisesById[$0.exerciseId] else { return false }
+                return BackMovementPatternService.pattern(for: exercise) == .horizontalPull
+            }
+            return vertical.count == 1
+                && horizontal.count == 1
+                && vertical[0].prescribedSetCount == rule.firstSplitSetCount
+                && horizontal[0].prescribedSetCount == rule.secondSplitSetCount
+        }
     }
 
     private static func applyingExerciseVariation(
@@ -1458,6 +1900,16 @@ enum AdaptivePlanService {
         return hasQuads && hasHamstrings
     }
 
+    private static func createsBannedSynergistPair(
+        selectedMuscles: Set<MuscleGroup>,
+        adding muscle: MuscleGroup
+    ) -> Bool {
+        (muscle == .chest && selectedMuscles.contains(.triceps))
+            || (muscle == .triceps && selectedMuscles.contains(.chest))
+            || (muscle == .back && selectedMuscles.contains(.biceps))
+            || (muscle == .biceps && selectedMuscles.contains(.back))
+    }
+
     private static func prefersCompoundContinuity(_ muscle: MuscleGroup) -> Bool {
         switch muscle {
         case .chest, .back, .quads, .hamstrings: return true
@@ -1536,7 +1988,12 @@ enum AdaptiveForecastService {
         exercises: [Exercise],
         ledger: TrainingLoadLedger,
         targetComplexCount: Int,
-        volumeStatuses: [MuscleGroup: AdaptiveMuscleVolumeStatus]? = nil,
+        exposureRules: [MuscleGroup: AdaptiveExposureRule] = Dictionary(
+            uniqueKeysWithValues: MuscleGroup.allCases.map {
+                ($0, AdaptiveExposureControllerService.defaultRule(for: $0))
+            }
+        ),
+        evidence: [TrainingLoadEvidence] = [],
         capacity: AdaptiveWorkoutCapacity = .legacy,
         exerciseSelections: [AdaptiveExerciseSelectionKey: AdaptiveExerciseSelectionRecommendation] = [:],
         asOf date: Date,
@@ -1559,8 +2016,15 @@ enum AdaptiveForecastService {
             exercises: exercises,
             readiness: readiness,
             ledger: ledger,
+            exposureStatuses: AdaptiveExposureControllerService.statuses(
+                rules: exposureRules,
+                readiness: readiness,
+                evidence: evidence,
+                exercises: exercises,
+                asOf: date,
+                calendar: calendar
+            ),
             targetComplexCount: targetComplexCount,
-            volumeStatuses: volumeStatuses,
             capacity: capacity,
             exerciseSelections: exerciseSelections,
             now: date,
