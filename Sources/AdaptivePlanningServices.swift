@@ -278,20 +278,10 @@ enum AdaptiveVolumeControllerService {
         switch muscle {
         case .back: return 21
         case .sideDelts: return 12
-        case .chest, .triceps: return 14
+        case .chest: return 14
         case .quads: return 11
-        case .biceps: return 8
+        case .biceps, .triceps: return 8
         case .hamstrings, .forearms, .calves: return 6
-        case .glutes, .abs, .traps: return 0
-        }
-    }
-
-    static func rampUpWeeklyTarget(for muscle: MuscleGroup) -> Int {
-        switch muscle {
-        case .back, .sideDelts: return 10
-        case .chest, .biceps, .triceps: return 8
-        case .quads, .forearms, .calves: return 6
-        case .hamstrings: return 5
         case .glutes, .abs, .traps: return 0
         }
     }
@@ -414,11 +404,10 @@ enum AdaptiveVolumeControllerService {
         return inserted
     }
 
-    /// Advances only a complete, untouched prior default target vector. Both
-    /// the original V7 defaults and the short-lived ramp-up defaults are
-    /// recognized. The old program and target rows remain immutable history;
-    /// the replacement program gets a new effective-dated target vector. Any
-    /// customized target prevents the migration.
+    /// Advances only a complete, untouched original V7 default target vector.
+    /// The old program and target rows remain immutable history; the replacement
+    /// program gets a new effective-dated target vector. Any customized target
+    /// prevents the migration.
     @discardableResult
     static func migrateLegacyDefaultTargetVector(
         modelContext: ModelContext,
@@ -430,16 +419,10 @@ enum AdaptiveVolumeControllerService {
         }
         let allTargets = try modelContext.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
         let currentTargets = targets(for: activeProgram, allTargets: allTargets)
-        guard currentTargets.count == MuscleGroup.allCases.count else {
-            return false
-        }
-        let hasOriginalDefaults = MuscleGroup.allCases.allSatisfy {
-            currentTargets[$0]?.weeklySetTarget == legacyWeeklyTarget(for: $0)
-        }
-        let hasRampUpDefaults = MuscleGroup.allCases.allSatisfy {
-            currentTargets[$0]?.weeklySetTarget == rampUpWeeklyTarget(for: $0)
-        }
-        guard hasOriginalDefaults || hasRampUpDefaults else {
+        guard currentTargets.count == MuscleGroup.allCases.count,
+              MuscleGroup.allCases.allSatisfy({
+                  currentTargets[$0]?.weeklySetTarget == legacyWeeklyTarget(for: $0)
+              }) else {
             return false
         }
         let openPlans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
