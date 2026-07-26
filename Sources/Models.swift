@@ -160,6 +160,10 @@ enum SorenessLevel: String, Codable, CaseIterable, Hashable {
     case moderate
     case high
 
+    var allowsAutomaticTraining: Bool {
+        self == .none || self == .mild
+    }
+
     var displayName: String {
         switch self {
         case .none: return "None"

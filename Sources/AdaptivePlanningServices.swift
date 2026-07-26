@@ -7,7 +7,7 @@ struct MuscleReadinessInput: Equatable {
     var eagerness: EagernessLevel
 
     var isHardBlocked: Bool {
-        soreness == .high || connectiveTissuePain == .stop
+        !soreness.allowsAutomaticTraining || connectiveTissuePain == .stop
     }
 }
 
@@ -276,6 +276,18 @@ struct AdaptiveMuscleVolumeStatus: Equatable {
 enum AdaptiveVolumeControllerService {
     static func defaultWeeklyTarget(for muscle: MuscleGroup) -> Int {
         switch muscle {
+        case .back: return 21
+        case .sideDelts: return 12
+        case .chest, .triceps: return 14
+        case .quads: return 11
+        case .biceps: return 8
+        case .hamstrings, .forearms, .calves: return 6
+        case .glutes, .abs, .traps: return 0
+        }
+    }
+
+    static func rampUpWeeklyTarget(for muscle: MuscleGroup) -> Int {
+        switch muscle {
         case .back, .sideDelts: return 10
         case .chest, .biceps, .triceps: return 8
         case .quads, .forearms, .calves: return 6
@@ -402,10 +414,11 @@ enum AdaptiveVolumeControllerService {
         return inserted
     }
 
-    /// Advances only an untouched V7 default target vector. The old program
-    /// and target rows remain immutable history; the replacement program gets
-    /// a new effective-dated target vector. Any customized target prevents the
-    /// migration.
+    /// Advances only a complete, untouched prior default target vector. Both
+    /// the original V7 defaults and the short-lived ramp-up defaults are
+    /// recognized. The old program and target rows remain immutable history;
+    /// the replacement program gets a new effective-dated target vector. Any
+    /// customized target prevents the migration.
     @discardableResult
     static func migrateLegacyDefaultTargetVector(
         modelContext: ModelContext,
@@ -417,10 +430,16 @@ enum AdaptiveVolumeControllerService {
         }
         let allTargets = try modelContext.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
         let currentTargets = targets(for: activeProgram, allTargets: allTargets)
-        guard currentTargets.count == MuscleGroup.allCases.count,
-              MuscleGroup.allCases.allSatisfy({
-                  currentTargets[$0]?.weeklySetTarget == legacyWeeklyTarget(for: $0)
-              }) else {
+        guard currentTargets.count == MuscleGroup.allCases.count else {
+            return false
+        }
+        let hasOriginalDefaults = MuscleGroup.allCases.allSatisfy {
+            currentTargets[$0]?.weeklySetTarget == legacyWeeklyTarget(for: $0)
+        }
+        let hasRampUpDefaults = MuscleGroup.allCases.allSatisfy {
+            currentTargets[$0]?.weeklySetTarget == rampUpWeeklyTarget(for: $0)
+        }
+        guard hasOriginalDefaults || hasRampUpDefaults else {
             return false
         }
         let openPlans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
@@ -784,7 +803,7 @@ struct AdaptivePlanDecisionTrace: Equatable {
 }
 
 enum AdaptivePlanService {
-    static let plannerVersion = 8
+    static let plannerVersion = 9
 
     static func generate(
         program: AdaptiveProgram,
@@ -1008,18 +1027,6 @@ enum AdaptivePlanService {
                     )
                 }
             }
-            if readiness[candidate.primaryMuscle]?.soreness == .moderate {
-                for index in dosed.components.indices
-                    where dosed.components[index].primaryMuscle == dosed.primaryMuscle {
-                    dosed.components[index].prescribedSetCount = max(
-                        1,
-                        dosed.components[index].prescribedSetCount - 1
-                    )
-                }
-                dosed.reasonCodes.append(
-                    "\(candidate.primaryMuscle.rawValue)_moderate_soreness_reduced"
-                )
-            }
             return dosed
         }
 
@@ -1170,9 +1177,6 @@ enum AdaptivePlanService {
                 let leftPair = createsHardLowerBodyPair(selected: selected, adding: left)
                 let rightPair = createsHardLowerBodyPair(selected: selected, adding: right)
                 if leftPair != rightPair { return !leftPair }
-                let leftModerate = readiness[left.primaryMuscle]?.soreness == .moderate
-                let rightModerate = readiness[right.primaryMuscle]?.soreness == .moderate
-                if leftModerate != rightModerate { return !leftModerate }
                 let leftDue = dueReasonByMuscle[left.primaryMuscle] != nil
                 let rightDue = dueReasonByMuscle[right.primaryMuscle] != nil
                 if leftDue != rightDue { return leftDue }
@@ -1663,7 +1667,7 @@ enum AdaptiveDoseEvidenceService {
                 }
                 let componentReadiness = readinessByMuscle[component.primaryMuscle]
                 let recovered = componentReadiness.map {
-                    $0.soreness != .high
+                    $0.soreness.allowsAutomaticTraining
                         && $0.connectiveTissuePain == .none
                         && $0.eagerness != .reluctant
                 } ?? false
@@ -1675,7 +1679,7 @@ enum AdaptiveDoseEvidenceService {
                     latestPerformance: latestPerformance,
                     recoveredOnTime: recovered,
                     allowsPositiveProgression: componentReadiness.map {
-                        ($0.soreness == .none || $0.soreness == .mild)
+                        $0.soreness.allowsAutomaticTraining
                             && $0.connectiveTissuePain == .none
                             && $0.eagerness != .reluctant
                     } ?? false

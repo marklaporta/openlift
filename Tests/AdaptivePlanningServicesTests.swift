@@ -445,7 +445,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(proposal.totalMovements, 2)
         XCTAssertEqual(proposal.muscleSetDose[.chest], 4)
         let trace = AdaptivePlanService.trace(for: result)
-        XCTAssertEqual(trace.plannerVersion, 8)
+        XCTAssertEqual(trace.plannerVersion, 9)
         XCTAssertEqual(trace.outcomeCode, "proposal")
         XCTAssertEqual(trace.selectedComplexDefinitionIds, [uuid(1)])
         XCTAssertNil(trace.conflictCode)
@@ -1537,7 +1537,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertNil(back.muscleSetDose[.biceps])
     }
 
-    func testSorenessRanksClearBeforeLightBeforeModerateAndModerateReducesAfterDose() throws {
+    func testNoneRanksBeforeLightWithNormalDoseWhileModerateIsHeld() throws {
         let chestPress = exercise("Chest Press", muscle: .chest)
         let fly = exercise("Cable Fly", muscle: .chest, type: .isolation)
         let row = exercise("Cable Row", muscle: .back)
@@ -1597,13 +1597,17 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             calendar: utcCalendar
         ))
 
-        XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.biceps, .back, .chest])
-        let chest = try XCTUnwrap(
-            proposal.complexes.first { $0.primaryMuscle == .chest }
+        XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.biceps, .back])
+        let back = try XCTUnwrap(
+            proposal.complexes.first { $0.primaryMuscle == .back }
         )
-        XCTAssertEqual(chest.components.map(\.exerciseName), ["Chest Press", "Cable Fly"])
-        XCTAssertEqual(chest.components.map(\.prescribedSetCount), [1, 1])
-        XCTAssertTrue(chest.reasonCodes.contains("chest_moderate_soreness_reduced"))
+        XCTAssertEqual(back.components.map(\.prescribedSetCount), [3])
+        XCTAssertTrue(
+            proposal.rejections.contains {
+                $0.complexDefinitionId == uuid(920)
+                    && $0.code == "held_for_recovery"
+            }
+        )
     }
 
     func testFourthSetVariationAppliesToChestAndBackButNotIsolationOrLegWork() {

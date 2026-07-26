@@ -187,6 +187,9 @@ struct AdaptiveWorkoutView: View {
             Text("Adjust anything that is not at its recovered default, then submit once.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Text("None and Light are trained normally. Moderate and Heavy stay out of automatic proposals; you can still add work manually.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
 
         ForEach(enabledMuscles(in: program), id: \.self) { muscle in
