@@ -61,10 +61,7 @@ struct RootTabView: View {
             )
             retryPendingExports()
             importAvailableWorkoutExportsIfRequested()
-            _ = try? AdaptiveVolumeControllerService.ensureStoredConfiguration(
-                modelContext: modelContext
-            )
-            _ = try? AdaptiveVolumeControllerService.migrateLegacyDefaultTargetVector(
+            _ = try? AdaptiveExposureControllerService.migrateActiveProgramIfNeeded(
                 modelContext: modelContext
             )
         }

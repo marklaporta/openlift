@@ -64,7 +64,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             allowed.complexes.first?.components.map(\.exerciseName),
             ["Lat Pulldown", "Cable Row"]
         )
-        XCTAssertEqual(allowed.muscleSetDose[.back], 4)
+        XCTAssertEqual(allowed.muscleSetDose[.back], 6)
 
         let rejected = unwrapProposal(AdaptivePlanService.generate(
             program: makeProgram(
@@ -83,7 +83,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertTrue(rejected.complexes.isEmpty)
         XCTAssertTrue(rejected.rejections.contains {
             $0.complexDefinitionId == uuid(911)
-                && $0.code == "multiple_compounds_same_muscle"
+                && $0.code == "required_exercise_split_unavailable"
         })
     }
 
@@ -215,7 +215,8 @@ final class AdaptivePlanningServicesTests: XCTestCase {
     func testPinnedHeavySelectionsStillHonorSoftQuadHamstringPreference() {
         let configuredQuad = exercise("Configured Quad", muscle: .quads)
         let configuredHamstring = exercise("Configured Hamstring", muscle: .hamstrings, type: .isolation)
-        let configuredBack = exercise("Configured Back", muscle: .back)
+        let configuredBack = exercise("Configured Row", muscle: .back)
+        let verticalBack = exercise("Lat Pulldown", muscle: .back)
         let beltSquat = exercise("Belt Squat", muscle: .quads)
         let stiffLegDeadlift = exercise("Stiff-Leg Deadlift", muscle: .hamstrings)
         let program = makeProgram(
@@ -246,7 +247,10 @@ final class AdaptivePlanningServicesTests: XCTestCase {
 
         let result = AdaptivePlanService.generate(
             program: program,
-            exercises: [configuredQuad, configuredHamstring, configuredBack, beltSquat, stiffLegDeadlift],
+            exercises: [
+                configuredQuad, configuredHamstring, configuredBack, verticalBack,
+                beltSquat, stiffLegDeadlift
+            ],
             readiness: [
                 .quads: .init(soreness: .none, connectiveTissuePain: .none, eagerness: .neutral),
                 .hamstrings: .init(soreness: .none, connectiveTissuePain: .none, eagerness: .neutral),
@@ -271,13 +275,14 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         let proposal = unwrapProposal(result)
         XCTAssertEqual(
             Set(proposal.complexes.flatMap(\.components).map(\.exerciseName)),
-            ["Belt Squat", "Configured Back"]
+            ["Belt Squat", "Configured Row", "Lat Pulldown"]
         )
         XCTAssertTrue(proposal.rejections.contains { $0.complexDefinitionId == uuid(801) })
     }
 
     func testDisabledMusclesDoNotRequireReadiness() {
         let chest = exercise("Chest", muscle: .chest)
+        let fly = exercise("Chest Fly", muscle: .chest, type: .isolation)
         let program = makeProgram(
             movements: 1,
             difficulty: 3,
@@ -293,7 +298,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         )
         let result = AdaptivePlanService.generate(
             program: program,
-            exercises: [chest],
+            exercises: [chest, fly],
             readiness: [
                 .chest: MuscleReadinessInput(
                     soreness: .none,
@@ -309,9 +314,11 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(unwrapProposal(result).complexes.map(\.primaryMuscle), [.chest])
     }
 
-    func testTomorrowForecastUsesRecoveredReadinessButStillHonorsObservationWindow() {
+    func testTomorrowForecastUsesDirectExposureRecoveryGates() {
         let chest = exercise("Chest Press", muscle: .chest)
+        let fly = exercise("Chest Fly", muscle: .chest, type: .isolation)
         let back = exercise("Cable Row", muscle: .back)
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
         let shoulders = exercise("Lateral Raise", muscle: .sideDelts, type: .isolation)
         let program = makeProgram(
             movements: 2,
@@ -339,14 +346,14 @@ final class AdaptivePlanningServicesTests: XCTestCase {
 
         let prediction = AdaptiveForecastService.expectedProposal(
             program: program,
-            exercises: [chest, back, shoulders],
+            exercises: [chest, fly, back, pulldown, shoulders],
             ledger: ledger,
             targetComplexCount: 2,
             asOf: tomorrow,
             calendar: utcCalendar
         )
 
-        XCTAssertEqual(prediction?.complexes.map(\.primaryMuscle), [.back, .sideDelts])
+        XCTAssertEqual(prediction?.complexes.map(\.primaryMuscle), [.chest, .back])
     }
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -445,7 +452,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(proposal.totalMovements, 2)
         XCTAssertEqual(proposal.muscleSetDose[.chest], 4)
         let trace = AdaptivePlanService.trace(for: result)
-        XCTAssertEqual(trace.plannerVersion, 9)
+        XCTAssertEqual(trace.plannerVersion, 10)
         XCTAssertEqual(trace.outcomeCode, "proposal")
         XCTAssertEqual(trace.selectedComplexDefinitionIds, [uuid(1)])
         XCTAssertNil(trace.conflictCode)
@@ -495,6 +502,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
     func testAutomaticPlanUsesOnlyOneComplexPerMuscleExposure() {
         let inclinePress = exercise("Incline Press", muscle: .chest)
         let flatPress = exercise("Flat Dumbbell Press", muscle: .chest)
+        let fly = exercise("Cable Fly", muscle: .chest, type: .isolation)
         let program = makeProgram(
             movements: 2,
             difficulty: 60,
@@ -508,7 +516,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         let proposal = unwrapProposal(
             AdaptivePlanService.generate(
                 program: program,
-                exercises: [inclinePress, flatPress],
+                exercises: [inclinePress, flatPress, fly],
                 readiness: readyInputs,
                 ledger: recentLedger([.chest]),
                 now: now,
@@ -524,7 +532,8 @@ final class AdaptivePlanningServicesTests: XCTestCase {
 
     func testRecoveredLowerPriorityFloorWinsBeforeHigherPriorityFill() {
         let chest = exercise("Chest", muscle: .chest)
-        let back = exercise("Back", muscle: .back)
+        let back = exercise("Cable Row", muscle: .back)
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
         let program = makeProgram(
             movements: 1,
             difficulty: 3,
@@ -541,7 +550,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         let proposal = unwrapProposal(
             AdaptivePlanService.generate(
                 program: program,
-                exercises: [chest, back],
+                exercises: [chest, back, pulldown],
                 readiness: readyInputs,
                 ledger: ledger,
                 now: now,
@@ -550,11 +559,12 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         )
 
         XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.back])
-        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["back_exposure_due"])
+        XCTAssertEqual(proposal.complexes.first?.reasonCodes.last, "back_cadence_due")
     }
 
     func testBinaryTrainingWindowSchedulesOneQualifyingExposureWithoutCreatingASetQuota() {
-        let back = exercise("Back", muscle: .back)
+        let back = exercise("Cable Row", muscle: .back)
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
         let program = makeProgram(
             movements: 1,
             difficulty: 3,
@@ -568,7 +578,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         let proposal = unwrapProposal(
             AdaptivePlanService.generate(
                 program: program,
-                exercises: [back],
+                exercises: [back, pulldown],
                 readiness: readyInputs,
                 ledger: TrainingLoadLedger(byMuscle: [:]),
                 now: now,
@@ -577,8 +587,8 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         )
 
         XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.back])
-        XCTAssertEqual(proposal.muscleSetDose[.back], 2)
-        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["back_exposure_due"])
+        XCTAssertEqual(proposal.muscleSetDose[.back], 6)
+        XCTAssertEqual(proposal.complexes.first?.reasonCodes.last, "back_cadence_due")
     }
 
     func testColdStartAcrossAllEnabledMusclesBuildsPrioritySlateFromBinaryExposureRequirements() {
@@ -603,24 +613,40 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             complexes: complexes
         )
 
+        var statuses = dueStatuses(muscles)
+        for muscle in [MuscleGroup.chest, .back] {
+            statuses[muscle]?.rule.exerciseSplitKind = .none
+            statuses[muscle]?.rule.normalSetCount = 3
+        }
         let proposal = unwrapProposal(
             AdaptivePlanService.generate(
                 program: program,
                 exercises: exercises,
                 readiness: readyInputs,
                 ledger: TrainingLoadLedger(byMuscle: [:]),
+                exposureStatuses: statuses,
                 now: now,
                 calendar: utcCalendar
             )
         )
 
         XCTAssertEqual(proposal.totalMovements, 4)
-        XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), Array(muscles.prefix(4)))
-        XCTAssertEqual(proposal.complexes.flatMap(\.components).map(\.prescribedSetCount), [2, 2, 2, 2])
-        XCTAssertTrue(proposal.complexes.allSatisfy { $0.reasonCodes.first?.hasSuffix("_exposure_due") == true })
+        XCTAssertEqual(
+            proposal.complexes.map(\.primaryMuscle),
+            [.chest, .back, .quads, .sideDelts]
+        )
+        XCTAssertEqual(
+            proposal.complexes.flatMap(\.components).map(\.prescribedSetCount),
+            [3, 3, 3, 3]
+        )
+        XCTAssertTrue(
+            proposal.complexes.allSatisfy {
+                $0.reasonCodes.first?.hasSuffix("_cadence_due") == true
+            }
+        )
     }
 
-    func testOneShoulderSetSatisfiesTrainingWindowButShouldersRemainEligibleOnNextDay() {
+    func testFirstLateralDeltExposureWaitsTwoCalendarDays() {
         let shoulder = exercise("Shoulder", muscle: .sideDelts)
         let program = makeProgram(
             movements: 1,
@@ -658,7 +684,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(proposal.complexes.first?.reasonCodes, ["sideDelts_priority"])
+        XCTAssertTrue(proposal.complexes.isEmpty)
     }
 
     func testHamstringSetCapBeatsGlobalCapacity() {
@@ -693,6 +719,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         let sldl = exercise("SLDL", muscle: .hamstrings)
         let hackSquat = exercise("Hack Squat", muscle: .quads)
         let row = exercise("Hard Row", muscle: .back)
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
         let program = makeProgram(
             movements: 3,
             difficulty: 1,
@@ -707,7 +734,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         let proposal = unwrapProposal(
             AdaptivePlanService.generate(
                 program: program,
-                exercises: [sldl, hackSquat, row],
+                exercises: [sldl, hackSquat, row, pulldown],
                 readiness: readyInputs,
                 ledger: recentLedger([.hamstrings, .quads, .back]),
                 targetComplexCount: 2,
@@ -716,14 +743,17 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(proposal.complexes.map(\.name), ["SLDL Complex", "Hard Row Complex"])
-        XCTAssertEqual(proposal.totalDifficultyCost, 6)
-        XCTAssertTrue(proposal.rejections.contains { $0.complexDefinitionId == uuid(2) })
+        XCTAssertEqual(
+            proposal.complexes.map(\.name),
+            ["Hard Row Complex", "Hack Squat Complex"]
+        )
+        XCTAssertEqual(proposal.totalDifficultyCost, 9)
+        XCTAssertTrue(proposal.rejections.contains { $0.complexDefinitionId == uuid(1) })
 
         let noConflict = unwrapProposal(
             AdaptivePlanService.generate(
                 program: program,
-                exercises: [sldl, hackSquat, row],
+                exercises: [sldl, hackSquat, row, pulldown],
                 readiness: readyInputs,
                 ledger: recentLedger([.hamstrings, .quads, .back]),
                 targetComplexCount: 3,
@@ -734,8 +764,9 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(Set(noConflict.complexes.map(\.primaryMuscle)), [.hamstrings, .quads, .back])
     }
 
-    func testFirstMorningAfterExposureIsObservationWindowEvenWithNoSoreness() {
+    func testFirstMorningAfterExposureIsHeldByRecoveryGateEvenWithNoSoreness() {
         let press = exercise("Press", muscle: .chest)
+        let fly = exercise("Fly", muscle: .chest, type: .isolation)
         let program = makeProgram(
             movements: 4,
             difficulty: 1,
@@ -755,7 +786,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         let firstMorning = unwrapProposal(
             AdaptivePlanService.generate(
                 program: program,
-                exercises: [press],
+                exercises: [press, fly],
                 readiness: readyInputs,
                 ledger: firstMorningLedger,
                 now: now,
@@ -764,7 +795,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         )
         XCTAssertTrue(firstMorning.complexes.isEmpty)
         XCTAssertEqual(firstMorning.rejections, [
-            .init(complexDefinitionId: uuid(80), code: "doms_observation_window")
+            .init(complexDefinitionId: uuid(80), code: "lower_priority_complex")
         ])
 
         let secondMorningLedger = TrainingLoadLedger(byMuscle: [
@@ -777,7 +808,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         let secondMorning = unwrapProposal(
             AdaptivePlanService.generate(
                 program: program,
-                exercises: [press],
+                exercises: [press, fly],
                 readiness: readyInputs,
                 ledger: secondMorningLedger,
                 now: now,
@@ -787,7 +818,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(secondMorning.complexes.map(\.name), ["Chest Complex"])
     }
 
-    func testShouldersCanRepeatNextDayAndSecondaryArmLoadingDoesNotStartDirectHold() {
+    func testLateralDeltsHonorCadenceWhileSecondaryArmLoadingDoesNotResetClock() {
         let lateral = exercise("Lateral Raise", muscle: .sideDelts, type: .isolation)
         let triceps = exercise("Pushdown", muscle: .triceps, type: .isolation)
         let program = makeProgram(
@@ -823,7 +854,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
                 calendar: utcCalendar
             )
         )
-        XCTAssertEqual(proposal.complexes.map(\.name), ["Shoulders Complex", "Triceps Complex"])
+        XCTAssertEqual(proposal.complexes.map(\.name), ["Triceps Complex"])
     }
 
     func testEasyHamstringCurlIsStillIneligibleWhenHamstringsAreUnrecovered() {
@@ -866,6 +897,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
     func testPlannerIsStableAcrossCollectionOrdering() {
         let first = exercise("First", muscle: .chest)
         let second = exercise("Second", muscle: .chest)
+        let fly = exercise("Fly", muscle: .chest, type: .isolation)
         let a = makeComplex(id: uuid(1), position: 0, primary: .chest, components: [component(first)])
         let b = makeComplex(id: uuid(2), position: 0, primary: .chest, components: [component(second)])
         let programA = makeProgram(movements: 1, difficulty: 3, enabled: [.chest], complexes: [b, a])
@@ -873,7 +905,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
 
         let idsA = unwrapProposal(AdaptivePlanService.generate(
             program: programA,
-            exercises: [second, first],
+            exercises: [second, first, fly],
             readiness: readyInputs,
             ledger: recentLedger([.chest]),
             now: now,
@@ -881,7 +913,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         )).complexes.map(\.definitionId)
         let idsB = unwrapProposal(AdaptivePlanService.generate(
             program: programB,
-            exercises: [first, second],
+            exercises: [first, second, fly],
             readiness: readyInputs,
             ledger: recentLedger([.chest]),
             now: now,
@@ -1263,6 +1295,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             equipment: .cable
         )
         let row = exercise("Row", muscle: .back)
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
         let curl = exercise("Curl", muscle: .biceps)
         let program = makeProgram(
             movements: 1,
@@ -1282,7 +1315,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
 
         let one = unwrapProposal(AdaptivePlanService.generate(
             program: program,
-            exercises: [press, fly, row, curl],
+            exercises: [press, fly, row, pulldown, curl],
             readiness: readyInputs,
             ledger: recentLedger([.chest, .back, .biceps]),
             targetComplexCount: 1,
@@ -1291,7 +1324,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         ))
         let two = unwrapProposal(AdaptivePlanService.generate(
             program: program,
-            exercises: [press, fly, row, curl],
+            exercises: [press, fly, row, pulldown, curl],
             readiness: readyInputs,
             ledger: recentLedger([.chest, .back, .biceps]),
             targetComplexCount: 2,
@@ -1302,6 +1335,424 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(one.complexes.count, 1)
         XCTAssertEqual(one.complexes.first?.components.count, 2)
         XCTAssertEqual(two.complexes.map(\.primaryMuscle), [.chest, .back])
+    }
+
+    func testExposureDefaultsMatchApprovedDosesCadencesAndManualOnlyGroups() {
+        let back = AdaptiveExposureControllerService.defaultRule(for: .back)
+        XCTAssertEqual(back.normalSetCount, 6)
+        XCTAssertEqual(back.minimumCalendarDays, 2)
+        XCTAssertEqual(back.exerciseSplitKind, .backVerticalHorizontal)
+        XCTAssertEqual([back.firstSplitSetCount, back.secondSplitSetCount], [3, 3])
+
+        let chest = AdaptiveExposureControllerService.defaultRule(for: .chest)
+        XCTAssertEqual(chest.normalSetCount, 4)
+        XCTAssertEqual(chest.minimumCalendarDays, 2)
+        XCTAssertEqual(chest.exerciseSplitKind, .chestCompoundIsolation)
+        XCTAssertEqual([chest.firstSplitSetCount, chest.secondSplitSetCount], [2, 2])
+
+        for muscle in [MuscleGroup.quads, .hamstrings] {
+            let rule = AdaptiveExposureControllerService.defaultRule(for: muscle)
+            XCTAssertEqual(rule.normalSetCount, 3)
+            XCTAssertEqual(rule.minimumCalendarDays, 3)
+        }
+        for muscle in [MuscleGroup.triceps, .biceps] {
+            let rule = AdaptiveExposureControllerService.defaultRule(for: muscle)
+            XCTAssertEqual(rule.normalSetCount, 3)
+            XCTAssertEqual(rule.minimumCalendarDays, 2)
+        }
+        let delts = AdaptiveExposureControllerService.defaultRule(for: .sideDelts)
+        XCTAssertEqual(delts.normalSetCount, 3)
+        XCTAssertEqual(delts.cadenceKind, .lateralDelts2221)
+        XCTAssertEqual(delts.cadencePattern, [2, 2, 2, 1])
+
+        XCTAssertEqual(
+            AdaptiveExposureControllerService.automaticPriority,
+            [.chest, .back, .quads, .hamstrings, .triceps, .biceps, .sideDelts]
+        )
+        for muscle in [MuscleGroup.forearms, .calves, .glutes, .abs, .traps] {
+            XCTAssertFalse(
+                AdaptiveExposureControllerService.defaultRule(for: muscle)
+                    .isAutomaticPlanningEnabled
+            )
+        }
+    }
+
+    func testClockUsesCalendarBoundariesAndOnlyDirectHypertrophyEvidence() {
+        let press = exercise("Chest Press", muscle: .chest)
+        let tricepsExtension = exercise(
+            "Triceps Extension",
+            muscle: .triceps,
+            type: .isolation
+        )
+        let reverseHyper = exercise("Reverse Hyper", muscle: .hamstrings)
+        let yesterday = utcCalendar.date(byAdding: .day, value: -1, to: now)!
+        let directPress = TrainingLoadEvidence(
+            sessionId: UUID(),
+            setEntryId: UUID(),
+            exerciseId: press.id,
+            completedAt: yesterday,
+            muscles: [.chest, .triceps],
+            weight: 100,
+            reps: 8,
+            isSessionCompleted: true,
+            isLocked: true,
+            kind: .adaptiveComparable,
+            complexDefinitionId: nil,
+            componentPosition: nil
+        )
+        let loggedAccessory = TrainingLoadEvidence(
+            sessionId: UUID(),
+            setEntryId: UUID(),
+            exerciseId: tricepsExtension.id,
+            completedAt: yesterday,
+            muscles: [.triceps],
+            weight: 20,
+            reps: 12,
+            isSessionCompleted: true,
+            isLocked: true,
+            kind: .adHoc,
+            complexDefinitionId: nil,
+            componentPosition: nil
+        )
+        let recoveryWork = TrainingLoadEvidence(
+            sessionId: UUID(),
+            setEntryId: UUID(),
+            exerciseId: reverseHyper.id,
+            completedAt: yesterday,
+            muscles: [.hamstrings],
+            weight: 20,
+            reps: 15,
+            isSessionCompleted: true,
+            isLocked: true,
+            kind: .adaptiveOverride,
+            complexDefinitionId: nil,
+            componentPosition: nil
+        )
+        let rules = Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map {
+            ($0, AdaptiveExposureControllerService.defaultRule(for: $0))
+        })
+        let statuses = AdaptiveExposureControllerService.statuses(
+            rules: rules,
+            readiness: readyInputs,
+            evidence: [directPress, loggedAccessory, recoveryWork],
+            exercises: [press, tricepsExtension, reverseHyper],
+            asOf: now,
+            calendar: utcCalendar
+        )
+
+        XCTAssertFalse(statuses[.chest]?.isEligible == true)
+        XCTAssertEqual(
+            statuses[.triceps]?.lastDirectExposureAt,
+            utcCalendar.startOfDay(for: yesterday)
+        )
+        XCTAssertFalse(statuses[.triceps]?.isEligible == true)
+        XCTAssertNil(statuses[.hamstrings]?.lastDirectExposureAt)
+        XCTAssertTrue(statuses[.hamstrings]?.isEligible == true)
+
+        let tomorrow = utcCalendar.date(byAdding: .day, value: 1, to: now)!
+        let tomorrowStatuses = AdaptiveExposureControllerService.statuses(
+            rules: rules,
+            readiness: readyInputs,
+            evidence: [directPress],
+            exercises: [press, tricepsExtension],
+            asOf: tomorrow,
+            calendar: utcCalendar
+        )
+        XCTAssertTrue(tomorrowStatuses[.chest]?.isEligible == true)
+        XCTAssertEqual(tomorrowStatuses[.chest]?.daysOverdue, 0)
+        XCTAssertNil(tomorrowStatuses[.triceps]?.lastDirectExposureAt)
+    }
+
+    func testLateralDeltCadenceDoesNotAdvanceWhenDueDateIsSkipped() {
+        let raise = exercise("Cable Lateral Raise", muscle: .sideDelts, type: .isolation)
+        let exposureOffsets = [-6, -4, -2, 0]
+        var evidence = exposureOffsets.map { offset in
+            TrainingLoadEvidence(
+                sessionId: UUID(),
+                setEntryId: UUID(),
+                exerciseId: raise.id,
+                completedAt: utcCalendar.date(byAdding: .day, value: offset, to: now)!,
+                muscles: [.sideDelts],
+                weight: 15,
+                reps: 12,
+                isSessionCompleted: true,
+                isLocked: true,
+                kind: .adaptiveComparable,
+                complexDefinitionId: nil,
+                componentPosition: nil
+            )
+        }
+        let rules: [MuscleGroup: AdaptiveExposureRule] = [
+            .sideDelts: AdaptiveExposureControllerService.defaultRule(for: .sideDelts)
+        ]
+        let threeDaysLater = utcCalendar.date(byAdding: .day, value: 3, to: now)!
+        var status = AdaptiveExposureControllerService.statuses(
+            rules: rules,
+            readiness: readyInputs,
+            evidence: evidence,
+            exercises: [raise],
+            asOf: threeDaysLater,
+            calendar: utcCalendar
+        )[.sideDelts]
+        XCTAssertEqual(
+            status?.nextEligibleAt,
+            utcCalendar.startOfDay(
+                for: utcCalendar.date(byAdding: .day, value: 1, to: now)!
+            )
+        )
+        XCTAssertEqual(status?.daysOverdue, 2)
+
+        evidence.append(
+            TrainingLoadEvidence(
+                sessionId: UUID(),
+                setEntryId: UUID(),
+                exerciseId: raise.id,
+                completedAt: threeDaysLater,
+                muscles: [.sideDelts],
+                weight: 15,
+                reps: 12,
+                isSessionCompleted: true,
+                isLocked: true,
+                kind: .adaptiveComparable,
+                complexDefinitionId: nil,
+                componentPosition: nil
+            )
+        )
+        status = AdaptiveExposureControllerService.statuses(
+            rules: rules,
+            readiness: readyInputs,
+            evidence: evidence,
+            exercises: [raise],
+            asOf: threeDaysLater,
+            calendar: utcCalendar
+        )[.sideDelts]
+        XCTAssertEqual(
+            status?.nextEligibleAt,
+            utcCalendar.startOfDay(
+                for: utcCalendar.date(byAdding: .day, value: 5, to: now)!
+            )
+        )
+    }
+
+    func testEligibleRankingUsesOverdueThenFixedPriorityThenSorenessAndRecency() {
+        var statuses = dueStatuses(
+            [.chest, .back, .quads, .biceps],
+            overdueDays: [.biceps: 3, .quads: 3, .chest: 1, .back: 1]
+        )
+        statuses[.quads]?.soreness = .mild
+        statuses[.back]?.soreness = .mild
+        XCTAssertEqual(
+            AdaptiveExposureControllerService.rankedEligible(statuses).map(\.muscle),
+            [.quads, .biceps, .chest, .back]
+        )
+    }
+
+    func testFixedRecoveryGatesUseCalendarDaysAcrossDST() throws {
+        var losAngeles = Calendar(identifier: .gregorian)
+        losAngeles.timeZone = try XCTUnwrap(
+            TimeZone(identifier: "America/Los_Angeles")
+        )
+        let exposure = try XCTUnwrap(
+            losAngeles.date(
+                from: DateComponents(
+                    year: 2026,
+                    month: 10,
+                    day: 31,
+                    hour: 20
+                )
+            )
+        )
+        let press = exercise("Chest Press", muscle: .chest)
+        let squat = exercise("Belt Squat", muscle: .quads)
+        let evidence = [
+            TrainingLoadEvidence(
+                sessionId: UUID(),
+                setEntryId: UUID(),
+                exerciseId: press.id,
+                completedAt: exposure,
+                muscles: [.chest, .triceps],
+                weight: 100,
+                reps: 8,
+                isSessionCompleted: true,
+                isLocked: true,
+                kind: .rotation,
+                complexDefinitionId: nil,
+                componentPosition: nil
+            ),
+            TrainingLoadEvidence(
+                sessionId: UUID(),
+                setEntryId: UUID(),
+                exerciseId: squat.id,
+                completedAt: exposure,
+                muscles: [.quads],
+                weight: 100,
+                reps: 8,
+                isSessionCompleted: true,
+                isLocked: true,
+                kind: .adaptiveComparable,
+                complexDefinitionId: nil,
+                componentPosition: nil
+            )
+        ]
+        let rules = Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map {
+            ($0, AdaptiveExposureControllerService.defaultRule(for: $0))
+        })
+        func status(day: Int) throws -> [MuscleGroup: AdaptiveMuscleExposureStatus] {
+            let date = try XCTUnwrap(
+                losAngeles.date(
+                    from: DateComponents(
+                        year: 2026,
+                        month: 11,
+                        day: day,
+                        hour: 12
+                    )
+                )
+            )
+            return AdaptiveExposureControllerService.statuses(
+                rules: rules,
+                readiness: readyInputs,
+                evidence: evidence,
+                exercises: [press, squat],
+                asOf: date,
+                calendar: losAngeles
+            )
+        }
+
+        XCTAssertFalse(try status(day: 1)[.chest]?.isEligible == true)
+        XCTAssertFalse(try status(day: 1)[.quads]?.isEligible == true)
+        XCTAssertTrue(try status(day: 2)[.chest]?.isEligible == true)
+        XCTAssertFalse(try status(day: 2)[.quads]?.isEligible == true)
+        XCTAssertTrue(try status(day: 3)[.quads]?.isEligible == true)
+    }
+
+    func testPairBansApplyInEitherSelectionOrderAndPreferredPairsRemainAllowed() {
+        let press = exercise("Chest Press", muscle: .chest)
+        let fly = exercise("Cable Fly", muscle: .chest, type: .isolation)
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
+        let row = exercise("Cable Row", muscle: .back)
+        let pushdown = exercise("Triceps Pushdown", muscle: .triceps, type: .isolation)
+        let curl = exercise("Bayesian Curl", muscle: .biceps, type: .isolation)
+        let exercises = [press, fly, pulldown, row, pushdown, curl]
+        let program = makeProgram(
+            movements: 4,
+            difficulty: 60,
+            enabled: [.chest, .back, .triceps, .biceps],
+            complexes: [
+                makeComplex(
+                    id: uuid(960),
+                    position: 0,
+                    primary: .chest,
+                    components: [component(press), component(fly, position: 1)]
+                ),
+                makeComplex(
+                    id: uuid(961),
+                    position: 1,
+                    primary: .back,
+                    components: [component(pulldown), component(row, position: 1)]
+                ),
+                makeComplex(
+                    id: uuid(962),
+                    position: 2,
+                    primary: .triceps,
+                    components: [component(pushdown)]
+                ),
+                makeComplex(
+                    id: uuid(963),
+                    position: 3,
+                    primary: .biceps,
+                    components: [component(curl)]
+                )
+            ]
+        )
+        func planned(
+            _ statuses: [MuscleGroup: AdaptiveMuscleExposureStatus]
+        ) -> [MuscleGroup] {
+            unwrapProposal(
+                AdaptivePlanService.generate(
+                    program: program,
+                    exercises: exercises,
+                    readiness: readyInputs,
+                    ledger: TrainingLoadLedger(byMuscle: [:]),
+                    exposureStatuses: statuses,
+                    targetComplexCount: 2,
+                    capacity: .initial,
+                    now: now,
+                    calendar: utcCalendar
+                )
+            ).complexes.map(\.primaryMuscle)
+        }
+
+        XCTAssertEqual(planned(dueStatuses([.chest, .biceps])), [.chest, .biceps])
+        XCTAssertEqual(planned(dueStatuses([.back, .triceps])), [.back, .triceps])
+        XCTAssertEqual(planned(dueStatuses([.chest, .triceps])), [.chest])
+        XCTAssertEqual(planned(dueStatuses([.back, .biceps])), [.back])
+        XCTAssertEqual(
+            planned(
+                dueStatuses(
+                    [.chest, .triceps],
+                    overdueDays: [.triceps: 2, .chest: 1]
+                )
+            ),
+            [.triceps]
+        )
+        XCTAssertEqual(
+            planned(
+                dueStatuses(
+                    [.back, .biceps],
+                    overdueDays: [.biceps: 2, .back: 1]
+                )
+            ),
+            [.biceps]
+        )
+    }
+
+    func testReverseHyperSelectionReplacementCannotEnterAutomaticPlan() {
+        let sldl = exercise("Stiff-Leg Deadlift", muscle: .hamstrings)
+        let reverseHyper = exercise(
+            "Reverse Hyper",
+            muscle: .hamstrings,
+            type: .isolation
+        )
+        let program = makeProgram(
+            movements: 1,
+            difficulty: 20,
+            enabled: [.hamstrings],
+            complexes: [
+                makeComplex(
+                    id: uuid(970),
+                    position: 0,
+                    primary: .hamstrings,
+                    components: [component(sldl)]
+                )
+            ]
+        )
+        let proposal = unwrapProposal(
+            AdaptivePlanService.generate(
+                program: program,
+                exercises: [sldl, reverseHyper],
+                readiness: readyInputs,
+                ledger: TrainingLoadLedger(byMuscle: [:]),
+                exposureStatuses: dueStatuses([.hamstrings]),
+                exerciseSelections: [
+                    AdaptiveExerciseSelectionKey(
+                        muscle: .hamstrings,
+                        type: .compound
+                    ): AdaptiveExerciseSelectionRecommendation(
+                        exercise: reverseHyper,
+                        reasonCodeSuffix: "exercise_rotation"
+                    )
+                ],
+                now: now,
+                calendar: utcCalendar
+            )
+        )
+        XCTAssertTrue(proposal.complexes.isEmpty)
+        XCTAssertTrue(
+            proposal.rejections.contains {
+                $0.complexDefinitionId == uuid(970)
+                    && $0.code == "manual_recovery_exercise"
+            }
+        )
     }
 
     func testVolumeControllerCountsOnlyPrimarySetsAndCapsDebtAtOneWeek() {
@@ -1472,7 +1923,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(status?.balance ?? .nan, -7, accuracy: 0.001)
     }
 
-    func testVolumePlannerPrioritizesNormalizedDebtAndSplitsBackDose() {
+    func testExposurePlannerUsesFixedPriorityAndNormalSplits() {
         let pulldown = exercise("Lat Pulldown", muscle: .back)
         let row = exercise("Chest Supported Row", muscle: .back)
         let press = exercise("Press", muscle: .chest)
@@ -1496,17 +1947,14 @@ final class AdaptivePlanningServicesTests: XCTestCase {
                 )
             ]
         )
-        let statuses: [MuscleGroup: AdaptiveMuscleVolumeStatus] = [
-            .back: .init(muscle: .back, weeklySetTarget: 12, dailySetCap: 4, balance: -4),
-            .chest: .init(muscle: .chest, weeklySetTarget: 9, dailySetCap: 4, balance: -4)
-        ]
+        let statuses = dueStatuses([.back, .chest])
         let first = unwrapProposal(AdaptivePlanService.generate(
             program: program,
             exercises: [pulldown, row, press, fly],
             readiness: readyInputs,
             ledger: TrainingLoadLedger(byMuscle: [:]),
+            exposureStatuses: statuses,
             targetComplexCount: 1,
-            volumeStatuses: statuses,
             capacity: .initial,
             now: now,
             calendar: utcCalendar
@@ -1519,21 +1967,21 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(first.complexes.first?.components.map(\.prescribedSetCount), [2, 2])
 
         var backOnly = statuses
-        backOnly[.chest]?.balance = 1
+        backOnly[.chest]?.isEligible = false
         let back = unwrapProposal(AdaptivePlanService.generate(
             program: program,
             exercises: [pulldown, row, press, fly],
             readiness: readyInputs,
             ledger: TrainingLoadLedger(byMuscle: [:]),
+            exposureStatuses: backOnly,
             targetComplexCount: 1,
-            volumeStatuses: backOnly,
             capacity: .initial,
             now: now,
             calendar: utcCalendar
         ))
         XCTAssertEqual(back.complexes.map(\.primaryMuscle), [.back])
-        XCTAssertEqual(back.complexes.first?.components.map(\.prescribedSetCount), [2, 2])
-        XCTAssertEqual(back.muscleSetDose[.back], 4)
+        XCTAssertEqual(back.complexes.first?.components.map(\.prescribedSetCount), [3, 3])
+        XCTAssertEqual(back.muscleSetDose[.back], 6)
         XCTAssertNil(back.muscleSetDose[.biceps])
     }
 
@@ -1541,6 +1989,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         let chestPress = exercise("Chest Press", muscle: .chest)
         let fly = exercise("Cable Fly", muscle: .chest, type: .isolation)
         let row = exercise("Cable Row", muscle: .back)
+        let pulldown = exercise("Lat Pulldown", muscle: .back)
         let curl = exercise("Curl", muscle: .biceps, type: .isolation)
         let program = makeProgram(
             movements: 4,
@@ -1567,41 +2016,29 @@ final class AdaptivePlanningServicesTests: XCTestCase {
                 )
             ]
         )
-        let statuses = Dictionary(
-            uniqueKeysWithValues: [MuscleGroup.chest, .back, .biceps].map {
-                (
-                    $0,
-                    AdaptiveMuscleVolumeStatus(
-                        muscle: $0,
-                        weeklySetTarget: 8,
-                        dailySetCap: 4,
-                        balance: -4
-                    )
-                )
-            }
-        )
         var readiness = readyInputs
         readiness[.chest]?.soreness = .moderate
         readiness[.back]?.soreness = .mild
         readiness[.biceps]?.soreness = .none
+        let statuses = dueStatuses([.chest, .back, .biceps], readiness: readiness)
 
         let proposal = unwrapProposal(AdaptivePlanService.generate(
             program: program,
-            exercises: [chestPress, fly, row, curl],
+            exercises: [chestPress, fly, row, pulldown, curl],
             readiness: readiness,
             ledger: TrainingLoadLedger(byMuscle: [:]),
+            exposureStatuses: statuses,
             targetComplexCount: 3,
-            volumeStatuses: statuses,
             capacity: .initial,
             now: now,
             calendar: utcCalendar
         ))
 
-        XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.biceps, .back])
+        XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), [.back])
         let back = try XCTUnwrap(
             proposal.complexes.first { $0.primaryMuscle == .back }
         )
-        XCTAssertEqual(back.components.map(\.prescribedSetCount), [3])
+        XCTAssertEqual(back.components.map(\.prescribedSetCount), [3, 3])
         XCTAssertTrue(
             proposal.rejections.contains {
                 $0.complexDefinitionId == uuid(920)
@@ -1649,39 +2086,14 @@ final class AdaptivePlanningServicesTests: XCTestCase {
                 )
             ]
         )
-        let statuses: [MuscleGroup: AdaptiveMuscleVolumeStatus] = [
-            .chest: .init(
-                muscle: .chest,
-                weeklySetTarget: 8,
-                dailySetCap: 4,
-                balance: -4
-            ),
-            .back: .init(
-                muscle: .back,
-                weeklySetTarget: 10,
-                dailySetCap: 6,
-                balance: -6
-            ),
-            .biceps: .init(
-                muscle: .biceps,
-                weeklySetTarget: 8,
-                dailySetCap: 4,
-                balance: -4
-            ),
-            .quads: .init(
-                muscle: .quads,
-                weeklySetTarget: 6,
-                dailySetCap: 4,
-                balance: -4
-            )
-        ]
+        let statuses = dueStatuses([.chest, .back, .biceps, .quads])
         let proposal = unwrapProposal(AdaptivePlanService.generate(
             program: program,
             exercises: exercises,
             readiness: readyInputs,
             ledger: TrainingLoadLedger(byMuscle: [:]),
+            exposureStatuses: statuses,
             targetComplexCount: 4,
-            volumeStatuses: statuses,
             capacity: AdaptiveWorkoutCapacity(
                 maxMuscleGroupCount: 4,
                 maxExerciseCount: 8,
@@ -1705,8 +2117,8 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             ["Lat Pulldown", "Cable Row"]
         )
         XCTAssertEqual(byMuscle[.back]?.components.map(\.prescribedSetCount), [3, 3])
-        XCTAssertEqual(byMuscle[.biceps]?.components.map(\.prescribedSetCount), [4])
-        XCTAssertEqual(byMuscle[.quads]?.components.map(\.prescribedSetCount), [4])
+        XCTAssertNil(byMuscle[.biceps])
+        XCTAssertEqual(byMuscle[.quads]?.components.map(\.prescribedSetCount), [3])
     }
 
     func testLegacyIsolationOnlyChestDefinitionIsPlannedAsCompoundThenIsolation() {
@@ -1730,15 +2142,8 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             exercises: [fly, press],
             readiness: readyInputs,
             ledger: TrainingLoadLedger(byMuscle: [:]),
+            exposureStatuses: dueStatuses([.chest]),
             targetComplexCount: 1,
-            volumeStatuses: [
-                .chest: .init(
-                    muscle: .chest,
-                    weeklySetTarget: 8,
-                    dailySetCap: 4,
-                    balance: -4
-                )
-            ],
             capacity: .initial,
             now: now,
             calendar: utcCalendar
@@ -1757,7 +2162,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         )
     }
 
-    func testInitialWorkoutCapacityProducesAtMostFiveGroupsSevenExercisesAndTwentySets() {
+    func testInitialWorkoutCapacityHonorsPairBansAndFifteenSetCeiling() {
         let pulldown = exercise("Lat Pulldown", muscle: .back)
         let row = exercise("Cable Row", muscle: .back)
         let press = exercise("Chest Press", muscle: .chest)
@@ -1795,42 +2200,37 @@ final class AdaptivePlanningServicesTests: XCTestCase {
                 makeComplex(id: uuid(506), position: 5, primary: .hamstrings, components: [component(hinge)])
             ]
         )
-        let statuses = Dictionary(uniqueKeysWithValues: [
-            MuscleGroup.back, .chest, .biceps, .triceps, .quads, .hamstrings
-        ].map {
-            (
-                $0,
-                AdaptiveMuscleVolumeStatus(
-                    muscle: $0,
-                    weeklySetTarget: 8,
-                    dailySetCap: 4,
-                    balance: -4
-                )
-            )
-        })
+        let statuses = dueStatuses([
+            .back, .chest, .biceps, .triceps, .quads, .hamstrings
+        ])
         let proposal = unwrapProposal(AdaptivePlanService.generate(
             program: program,
             exercises: allExercises,
             readiness: readyInputs,
             ledger: TrainingLoadLedger(byMuscle: [:]),
+            exposureStatuses: statuses,
             targetComplexCount: 6,
-            volumeStatuses: statuses,
             capacity: .initial,
             now: now,
             calendar: utcCalendar
         ))
         let components = proposal.complexes.flatMap(\.components)
-        let directSetsByMuscle = Dictionary(grouping: components, by: \.primaryMuscle)
-            .mapValues { $0.reduce(0) { $0 + $1.prescribedSetCount } }
-
-        XCTAssertEqual(proposal.complexes.count, 5)
-        XCTAssertEqual(components.count, 7)
-        XCTAssertEqual(components.reduce(0) { $0 + $1.prescribedSetCount }, 20)
+        XCTAssertLessThanOrEqual(proposal.complexes.count, 5)
+        XCTAssertLessThanOrEqual(components.count, 7)
+        XCTAssertLessThanOrEqual(
+            components.reduce(0) { $0 + $1.prescribedSetCount },
+            15
+        )
         XCTAssertTrue(Dictionary(grouping: components, by: \.primaryMuscle).values.allSatisfy {
             $0.count <= 2
         })
         XCTAssertTrue(components.allSatisfy { $0.prescribedSetCount <= 4 })
-        XCTAssertTrue(directSetsByMuscle.values.allSatisfy { $0 <= 4 })
+        XCTAssertFalse(
+            Set(proposal.complexes.map(\.primaryMuscle)).isSuperset(of: [.chest, .triceps])
+        )
+        XCTAssertFalse(
+            Set(proposal.complexes.map(\.primaryMuscle)).isSuperset(of: [.back, .biceps])
+        )
     }
 
     private func makeComplex(
@@ -1893,6 +2293,32 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             return AdaptivePlanProposal(complexes: [], totalMovements: 0, totalDifficultyCost: 0, muscleSetDose: [:], rejections: [])
         }
         return proposal
+    }
+
+    private func dueStatuses(
+        _ muscles: [MuscleGroup],
+        readiness: [MuscleGroup: MuscleReadinessInput]? = nil,
+        overdueDays: [MuscleGroup: Int] = [:]
+    ) -> [MuscleGroup: AdaptiveMuscleExposureStatus] {
+        let inputs = readiness ?? readyInputs
+        return Dictionary(uniqueKeysWithValues: muscles.map { muscle in
+            let rule = AdaptiveExposureControllerService.defaultRule(for: muscle)
+            let input = inputs[muscle]!
+            return (
+                muscle,
+                AdaptiveMuscleExposureStatus(
+                    muscle: muscle,
+                    rule: rule,
+                    lastDirectExposureAt: now.addingTimeInterval(-10 * 86_400),
+                    nextEligibleAt: now.addingTimeInterval(
+                        -Double(overdueDays[muscle] ?? 0) * 86_400
+                    ),
+                    daysOverdue: overdueDays[muscle] ?? 0,
+                    soreness: input.soreness,
+                    isEligible: rule.isAutomaticPlanningEnabled && !input.isHardBlocked
+                )
+            )
+        })
     }
 
     private func uuid(_ value: Int) -> UUID {

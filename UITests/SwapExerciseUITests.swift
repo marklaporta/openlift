@@ -191,7 +191,7 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Maximum muscle groups: 5"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Maximum exercises: 7"].exists)
         XCTAssertTrue(app.staticTexts["Exercises per muscle: 2"].exists)
-        XCTAssertTrue(app.staticTexts["Maximum working sets: 20"].exists)
+        XCTAssertTrue(app.staticTexts["Maximum working sets: 15"].exists)
 
         let loadDemo = app.buttons["adaptive.loadDemo"]
         XCTAssertTrue(loadDemo.waitForExistence(timeout: 5))
@@ -216,7 +216,7 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Eagerness to train"].firstMatch.exists)
         XCTAssertTrue(
             app.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS %@", "sets/week")
+                NSPredicate(format: "label CONTAINS %@", "normal sets")
             ).firstMatch.waitForExistence(timeout: 5)
         )
 
@@ -349,13 +349,6 @@ final class SwapExerciseUITests: XCTestCase {
         editRestored.tap()
         app.buttons["Skip"].tap()
 
-        let feedbackPicker = app.buttons["adaptive.feedbackPicker"].firstMatch
-        scrollToElement(feedbackPicker, in: app)
-        feedbackPicker.tap()
-        let justRight = app.buttons["Just right"].firstMatch
-        XCTAssertTrue(justRight.waitForExistence(timeout: 5))
-        justRight.tap()
-
         let finish = app.buttons["adaptive.finishWorkout"]
         scrollToElement(finish, in: app)
         finish.tap()
@@ -386,7 +379,7 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["60 × 10"].waitForExistence(timeout: 5))
     }
 
-    func testAdaptiveProposalUsesHistoryForNextDoseAndPrefill() throws {
+    func testAdaptiveProposalUsesHistoryForSelectionAndPrefill() throws {
         let app = XCUIApplication()
         app.launchArguments += [
             "OPENLIFT_UI_TESTING",
@@ -409,15 +402,15 @@ final class SwapExerciseUITests: XCTestCase {
             app.swipeDown()
         }
         XCTAssertTrue(proposedPlan.waitForExistence(timeout: 5))
-        for exercise in ["Flat Dumbbell Press", "Cable Row", "Bayesian Curl", "Cable Lateral Raise"] {
+        for exercise in ["Flat Dumbbell Press", "Cable Row"] {
             let plannedExercise = app.staticTexts[exercise]
             scrollToElement(plannedExercise, in: app)
             XCTAssertTrue(plannedExercise.exists)
         }
 
-        let debtLimitedDose = app.staticTexts["4 sets"].firstMatch
-        scrollToElement(debtLimitedDose, in: app)
-        XCTAssertTrue(debtLimitedDose.exists)
+        let splitDose = app.staticTexts["2 sets"].firstMatch
+        scrollToElement(splitDose, in: app)
+        XCTAssertTrue(splitDose.exists)
         let priorPerformance = app.staticTexts["adaptive.previous.Flat Dumbbell Press"]
         scrollToElement(priorPerformance, in: app)
         XCTAssertEqual(priorPerformance.label, "Previous: 60.0 x 9")

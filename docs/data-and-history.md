@@ -9,8 +9,9 @@ Core models live in [`Models.swift`](../Sources/Models.swift):
 - `TrainingPreference`
 - `Exercise`
 - versioned Adaptive program, muscle-rule, complex, and component records
-- versioned per-muscle volume targets, workout-capacity preferences, and
-  lineage-scoped volume anchors
+- versioned per-muscle exposure/cadence configuration and workout-capacity
+  preferences; legacy volume-target and anchor rows remain inert for migration
+  compatibility
 - raw daily readiness and generated/frozen plan snapshots
 - Adaptive occurrence links, complex feedback, and explicit override events
 - `CycleTemplate`

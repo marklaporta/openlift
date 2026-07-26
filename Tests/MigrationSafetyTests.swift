@@ -92,7 +92,7 @@ final class MigrationSafetyTests: XCTestCase {
             try context.save()
         }
 
-        let schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV8.self)
         let startup = OpenLiftModelContainerFactory.makePersistent(
             schema: schema,
             migrationPlan: OpenLiftSchemaMigrationPlan.self,
@@ -120,6 +120,211 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveMuscleVolumeTarget>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutCapacityPreference>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveMuscleVolumeAnchor>()), 0)
+        XCTAssertEqual(
+            try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleExposureConfiguration>()
+            ),
+            0
+        )
+    }
+
+    func testPopulatedV7StoreMigratesToV8AndSeedsOnlyAfterOpenPlanCompletes() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let storeURL = fixture.working.appendingPathComponent("default.store")
+        let programId = UUID()
+        let lineageId = UUID()
+        let sessionId = UUID()
+        let setEntryId = UUID()
+        let exerciseId = UUID()
+        let planId = UUID()
+        let activatedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        do {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
+            let container = try ModelContainer(
+                for: schema,
+                configurations: [
+                    ModelConfiguration(
+                        "V7RecoveryControllerFixture",
+                        schema: schema,
+                        url: storeURL,
+                        cloudKitDatabase: .none
+                    )
+                ]
+            )
+            let context = ModelContext(container)
+            context.insert(
+                AdaptiveProgram(
+                    id: programId,
+                    lineageId: lineageId,
+                    version: 7,
+                    name: "Existing V7 Profile",
+                    isReviewedForUse: true,
+                    globalMaxMovements: 4,
+                    maxDifficultyCost: 60,
+                    muscleRules: [
+                        AdaptiveMuscleRule(
+                            muscle: .chest,
+                            priorityRank: 1,
+                            rollingSetFloor: 1,
+                            rollingWindowDays: 7,
+                            maxRecoveredDayGap: 2,
+                            maxExercisesPerExposure: 2,
+                            maxSetsPerExercise: 4
+                        )
+                    ],
+                    complexes: []
+                )
+            )
+            context.insert(
+                AdaptiveMuscleVolumeTarget(
+                    adaptiveProgramId: programId,
+                    lineageId: lineageId,
+                    muscle: .chest,
+                    weeklySetTarget: 13,
+                    dailySetCap: 5,
+                    effectiveAt: activatedAt
+                )
+            )
+            context.insert(
+                AdaptiveMuscleVolumeAnchor(
+                    lineageId: lineageId,
+                    muscle: .chest,
+                    activatedAt: activatedAt,
+                    initialBalance: -2,
+                    seededDirectSetEntryIds: [setEntryId]
+                )
+            )
+            context.insert(
+                AdaptiveWorkoutCapacityPreference(
+                    adaptiveProgramId: programId,
+                    maxWorkingSetCount: 20,
+                    updatedAt: activatedAt
+                )
+            )
+            context.insert(
+                Exercise(
+                    id: exerciseId,
+                    name: "Existing Chest Press",
+                    primaryMuscle: .chest,
+                    type: .compound,
+                    equipment: .machine
+                )
+            )
+            context.insert(
+                Session(
+                    id: sessionId,
+                    cycleInstanceId: UUID(),
+                    cycleDayIndex: 0,
+                    finishedAt: activatedAt,
+                    status: .completed,
+                    exportStatus: .success
+                )
+            )
+            context.insert(
+                SetEntry(
+                    id: setEntryId,
+                    sessionId: sessionId,
+                    exerciseId: exerciseId,
+                    setIndex: 0,
+                    weight: 100,
+                    reps: 10,
+                    isLocked: true
+                )
+            )
+            context.insert(
+                GeneratedWorkoutPlan(
+                    id: planId,
+                    localDateKey: "2027-01-15",
+                    timeZoneIdentifier: "America/Los_Angeles",
+                    status: .proposed,
+                    adaptiveProgramId: programId,
+                    adaptiveProgramVersion: 7,
+                    readinessCheckId: UUID(),
+                    plannerVersion: 9,
+                    reasonCodes: [],
+                    complexes: []
+                )
+            )
+            try context.save()
+        }
+
+        let schema = Schema(versionedSchema: OpenLiftSchemaV8.self)
+        let startup = OpenLiftModelContainerFactory.makePersistent(
+            schema: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: ModelConfiguration(
+                "V8RecoveryControllerFixture",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+        )
+
+        XCTAssertNil(startup.issue)
+        let context = ModelContext(startup.container)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<AdaptiveProgram>()).first?.name,
+            "Existing V7 Profile"
+        )
+        let target = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>()).first
+        )
+        XCTAssertEqual(target.weeklySetTarget, 13)
+        XCTAssertEqual(target.dailySetCap, 5)
+        let anchor = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AdaptiveMuscleVolumeAnchor>()).first
+        )
+        XCTAssertEqual(anchor.initialBalance, -2)
+        XCTAssertEqual(anchor.seededDirectSetEntryIds, [setEntryId])
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<SetEntry>()).map(\.id),
+            [setEntryId]
+        )
+        XCTAssertEqual(
+            try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleExposureConfiguration>()
+            ),
+            0
+        )
+        XCTAssertEqual(
+            try AdaptiveExposureControllerService.migrateActiveProgramIfNeeded(
+                modelContext: context,
+                now: activatedAt
+            ),
+            0
+        )
+
+        let plan = try XCTUnwrap(
+            context.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+                .first { $0.id == planId }
+        )
+        plan.status = .completed
+        try context.save()
+        XCTAssertEqual(
+            try AdaptiveExposureControllerService.migrateActiveProgramIfNeeded(
+                modelContext: context,
+                now: activatedAt
+            ),
+            MuscleGroup.allCases.count
+        )
+        XCTAssertEqual(
+            try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleExposureConfiguration>()
+            ),
+            MuscleGroup.allCases.count
+        )
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>()).first?
+                .weeklySetTarget,
+            13
+        )
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<AdaptiveWorkoutCapacityPreference>())
+                .first?.maxWorkingSetCount,
+            15
+        )
     }
 
     func testV5StoreMigratesToV6WithoutChangingWorkoutOrExportData() throws {
@@ -388,7 +593,7 @@ final class MigrationSafetyTests: XCTestCase {
         )
         let legacyCounts = try legacyEntityCounts(in: legacyContainer)
 
-        let v5Schema = Schema(versionedSchema: OpenLiftSchemaV7.self)
+        let v5Schema = Schema(versionedSchema: OpenLiftSchemaV8.self)
         let startup = OpenLiftModelContainerFactory.makePersistent(
             schema: v5Schema,
             migrationPlan: OpenLiftSchemaMigrationPlan.self,
@@ -421,7 +626,7 @@ final class MigrationSafetyTests: XCTestCase {
         let sourceManifestBefore = try persistentStoreManifest(in: fixture.source)
         XCTAssertFalse(sourceManifestBefore.isEmpty)
 
-        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV7.self)
+        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV8.self)
         let workingStoreURL = fixture.working.appendingPathComponent("default.store")
         let workingConfiguration = ModelConfiguration(
             "MigrationFixture",

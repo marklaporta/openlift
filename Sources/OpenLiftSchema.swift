@@ -101,6 +101,17 @@ enum OpenLiftSchemaV7: VersionedSchema {
     ]
 }
 
+/// Replaces weekly target/debt planning with editable per-exposure doses and
+/// recovery clocks. V7 records remain in the schema as inert compatibility
+/// data; no completed session or set entity is rewritten.
+enum OpenLiftSchemaV8: VersionedSchema {
+    static let versionIdentifier = Schema.Version(8, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV7.models + [
+        AdaptiveMuscleExposureConfiguration.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
@@ -109,7 +120,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV4.self,
         OpenLiftSchemaV5.self,
         OpenLiftSchemaV6.self,
-        OpenLiftSchemaV7.self
+        OpenLiftSchemaV7.self,
+        OpenLiftSchemaV8.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -136,6 +148,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV6.self,
             toVersion: OpenLiftSchemaV7.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV7.self,
+            toVersion: OpenLiftSchemaV8.self
         )
     ]
 }
