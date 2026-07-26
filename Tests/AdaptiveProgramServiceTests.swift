@@ -196,7 +196,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(targets.first { $0.muscle == .back }?.weeklySetTarget, 21)
         XCTAssertEqual(targets.first { $0.muscle == .sideDelts }?.weeklySetTarget, 12)
         XCTAssertEqual(targets.first { $0.muscle == .chest }?.weeklySetTarget, 14)
-        XCTAssertEqual(targets.first { $0.muscle == .triceps }?.weeklySetTarget, 14)
+        XCTAssertEqual(targets.first { $0.muscle == .triceps }?.weeklySetTarget, 8)
         XCTAssertEqual(targets.first { $0.muscle == .quads }?.weeklySetTarget, 11)
         XCTAssertEqual(targets.first { $0.muscle == .biceps }?.weeklySetTarget, 8)
         XCTAssertEqual(targets.first { $0.muscle == .hamstrings }?.weeklySetTarget, 6)
@@ -426,7 +426,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertNotEqual(newComplex?.id, originalComplex.id)
     }
 
-    func testRampUpDefaultTargetVectorAdvancesAsNewVersionButCustomizationDoesNot() throws {
+    func testLegacyDefaultTargetVectorAdvancesAsNewVersionButCustomizationDoesNot() throws {
         let exercises = makeRankedExercises()
         let (context, _) = makeContext()
         let first = try AdaptiveProgramService.saveVersion(
@@ -440,7 +440,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         let originalTargets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
             .filter { $0.adaptiveProgramId == first.id }
         for target in originalTargets {
-            target.weeklySetTarget = AdaptiveVolumeControllerService.rampUpWeeklyTarget(
+            target.weeklySetTarget = AdaptiveVolumeControllerService.legacyWeeklyTarget(
                 for: target.muscle
             )
         }
@@ -466,7 +466,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertFalse(first.isActiveVersion)
         XCTAssertEqual(
             originalTargets.first { $0.muscle == .back }?.weeklySetTarget,
-            10
+            12
         )
         let allTargets = try context.fetch(FetchDescriptor<AdaptiveMuscleVolumeTarget>())
         let replacementTargets = AdaptiveVolumeControllerService.targets(
@@ -477,7 +477,7 @@ final class AdaptiveProgramServiceTests: XCTestCase {
         XCTAssertEqual(replacementTargets[.sideDelts]?.weeklySetTarget, 12)
         XCTAssertEqual(replacementTargets[.chest]?.weeklySetTarget, 14)
         XCTAssertEqual(replacementTargets[.biceps]?.weeklySetTarget, 8)
-        XCTAssertEqual(replacementTargets[.triceps]?.weeklySetTarget, 14)
+        XCTAssertEqual(replacementTargets[.triceps]?.weeklySetTarget, 8)
         XCTAssertEqual(replacementTargets[.hamstrings]?.weeklySetTarget, 6)
         XCTAssertEqual(replacementTargets[.quads]?.weeklySetTarget, 11)
         XCTAssertEqual(replacementTargets[.forearms]?.weeklySetTarget, 6)

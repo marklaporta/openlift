@@ -84,11 +84,11 @@ first. Prescriptions approach the accumulated debt within the muscle, exercise,
 and workout caps, distributing work across complementary configured movements
 before piling sets onto one movement.
 
-Initial weekly targets are Back 21, Shoulders 12, Chest 14, Triceps 14, Quads 11,
+Initial weekly targets are Back 21, Shoulders 12, Chest 14, Quads 11,
 Biceps 8, Hamstrings 6, Forearms 6, and Calves 6. Glutes, Abs, and Traps remain
-zero. These steady-state targets represent 6 Back sets across 3.5 weekly
-exposures, 3 Shoulder sets across 4 exposures, 4 Chest and Triceps sets across
-3.5 exposures, and 3 Quad sets across 3.5 exposures (10.5, rounded to the
+zero, and Triceps remains 8. These steady-state targets represent 6 Back sets
+across 3.5 weekly exposures, 3 Shoulder sets across 4 exposures, 4 Chest sets
+across 3.5 exposures, and 3 Quad sets across 3.5 exposures (10.5, rounded to the
 integer target 11). The initial per-muscle daily cap is four. On first activation
 the controller seeds each balance from direct sets completed in the preceding
 seven days across Adaptive, Fixed Cycle, and ad hoc history. Target edits create
