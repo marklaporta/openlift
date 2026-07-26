@@ -457,6 +457,9 @@ enum AdaptiveProgramService {
                    BackMovementPatternService.pattern(for: $0) == .horizontalPull
                }) {
                 selectedExercises = [verticalPull, horizontalPull]
+            } else if muscle == .chest,
+                      let compound = available.first(where: { $0.type == .compound }) {
+                selectedExercises = [compound]
             } else {
                 selectedExercises = [exercise]
             }

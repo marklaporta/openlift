@@ -194,9 +194,15 @@ final class MigrationSafetyTests: XCTestCase {
                 responses: [
                     AdaptiveReadinessResponse(
                         muscle: .back,
-                        soreness: .none,
+                        soreness: .mild,
                         connectiveTissuePain: .none,
                         eagerness: .eager
+                    ),
+                    AdaptiveReadinessResponse(
+                        muscle: .chest,
+                        soreness: .high,
+                        connectiveTissuePain: .none,
+                        eagerness: .neutral
                     )
                 ]
             )
@@ -274,7 +280,16 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).map(\.id), [sessionId])
         XCTAssertEqual(try context.fetch(FetchDescriptor<ExportDiagnostic>()).first?.filename, "workout-existing.json")
         XCTAssertEqual(try context.fetch(FetchDescriptor<AdaptiveProgram>()).first?.id, adaptiveProgramId)
-        XCTAssertEqual(try context.fetch(FetchDescriptor<DailyReadinessCheck>()).first?.id, readinessId)
+        let migratedReadiness = try XCTUnwrap(
+            context.fetch(FetchDescriptor<DailyReadinessCheck>()).first
+        )
+        XCTAssertEqual(migratedReadiness.id, readinessId)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: migratedReadiness.responses.map {
+                ($0.muscle, $0.soreness)
+            }),
+            [.back: .mild, .chest: .high]
+        )
         XCTAssertEqual(try context.fetch(FetchDescriptor<GeneratedWorkoutPlan>()).first?.id, adaptivePlanId)
         XCTAssertEqual(try context.fetch(FetchDescriptor<AdaptiveWorkoutSession>()).first?.id, adaptiveSessionId)
         let migratedSet = try XCTUnwrap(context.fetch(FetchDescriptor<AdaptiveSetEntry>()).first)
