@@ -22,6 +22,9 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: OpenLift
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
         OpenLiftICloudContainerIdentifier: $(OPENLIFT_ICLOUD_CONTAINER)
         BGTaskSchedulerPermittedIdentifiers:
           - com.mark.openlift.export-retry

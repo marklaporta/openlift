@@ -68,6 +68,40 @@ Show destinations:
 xcodebuild -scheme OpenLift -showdestinations
 ```
 
+## TestFlight Deployment
+
+TestFlight requires a paid Apple Developer Program membership and an App Store
+Connect app record for the configured bundle identifier.
+
+Archive locally without uploading:
+
+```bash
+scripts/testflight-deploy.sh archive
+```
+
+Archive and upload:
+
+```bash
+scripts/testflight-deploy.sh
+```
+
+The script assigns a UTC timestamp build number, keeps generated archives under
+`.build/testflight/`, and refuses to deploy a dirty worktree by default.
+
+It can use the Apple account saved in Xcode. For unattended deployment, create
+an App Store Connect API key and provide all three values:
+
+```bash
+ASC_KEY_ID=... \
+ASC_ISSUER_ID=... \
+ASC_PRIVATE_KEY_PATH=/absolute/path/to/AuthKey_....p8 \
+scripts/testflight-deploy.sh
+```
+
+Do not commit the private key. Optional overrides are
+`OPENLIFT_BUILD_NUMBER`, `OPENLIFT_MARKETING_VERSION`,
+`OPENLIFT_TESTFLIGHT_OUTPUT_DIR`, and `OPENLIFT_ALLOW_DIRTY=1`.
+
 ## iCloud Expectations
 
 The app uses iCloud Documents style storage for:
