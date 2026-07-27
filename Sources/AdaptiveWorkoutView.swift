@@ -334,7 +334,7 @@ struct AdaptiveWorkoutView: View {
                             Text("\(exercise.prescribedSetCount) set\(exercise.prescribedSetCount == 1 ? "" : "s")")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            let previous = previousRows(plan: plan, complex: complex, exercise: exercise)
+                            let previous = previousRows(plan: plan, exercise: exercise)
                             Text(
                                 previous.isEmpty
                                     ? "No prior completed sets for prefill"
@@ -977,12 +977,10 @@ struct AdaptiveWorkoutView: View {
                 modelContext: modelContext,
                 prefill: AdaptivePrefillService.prefill(
                     plan: plan,
-                    adaptivePlans: generatedPlans,
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries,
-                    overrides: overrides
+                    rotationSetEntries: rotationSetEntries
                 )
             )
         } catch {
@@ -992,19 +990,15 @@ struct AdaptiveWorkoutView: View {
 
     private func previousRows(
         plan: GeneratedWorkoutPlan,
-        complex: PlannedComplexSnapshot,
         exercise: PlannedExerciseSnapshot
     ) -> [ComparableSetRow] {
         AdaptivePrefillService.rows(
             plan: plan,
-            complex: complex,
             exercise: exercise,
-            adaptivePlans: generatedPlans,
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries,
-            overrides: overrides
+            rotationSetEntries: rotationSetEntries
         )
     }
 
@@ -1329,6 +1323,8 @@ struct AdaptiveWorkoutView: View {
                     difficulty: proposedDifficulty(for: exercise),
                     adaptiveSessions: adaptiveSessions,
                     setEntries: adaptiveSetEntries,
+                    rotationSessions: rotationSessions,
+                    rotationSetEntries: rotationSetEntries,
                     modelContext: modelContext
                 )
             }
@@ -1367,8 +1363,7 @@ struct AdaptiveWorkoutView: View {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries,
-                    overrides: overrides
+                    rotationSetEntries: rotationSetEntries
                 )
                 var prefill: [Int: AdaptiveSetPrefill] = [:]
                 if !previous.isEmpty {
@@ -1394,8 +1389,7 @@ struct AdaptiveWorkoutView: View {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries,
-                    overrides: overrides
+                    rotationSetEntries: rotationSetEntries
                 )
                 var prefillByExerciseId: [UUID: [Int: AdaptiveSetPrefill]] = [:]
                 if !previous.isEmpty {
@@ -1471,8 +1465,7 @@ struct AdaptiveWorkoutView: View {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries,
-                    overrides: overrides
+                    rotationSetEntries: rotationSetEntries
                 )
                 guard !rows.isEmpty else { continue }
                 for setIndex in 1...max(1, component.prescribedSetCount) {

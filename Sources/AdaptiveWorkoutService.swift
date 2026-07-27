@@ -957,6 +957,8 @@ enum AdaptiveWorkoutService {
         difficulty: MovementDifficulty,
         adaptiveSessions: [AdaptiveWorkoutSession],
         setEntries: [AdaptiveSetEntry],
+        rotationSessions: [Session],
+        rotationSetEntries: [SetEntry],
         modelContext: ModelContext,
         now: Date = .now
     ) throws {
@@ -969,9 +971,24 @@ enum AdaptiveWorkoutService {
         }) else {
             throw AdaptiveWorkoutServiceError.plannedExerciseNotFound
         }
+        let replacementRows = AdaptivePrefillService.latestRows(
+            exerciseId: exercise.id,
+            excludingPlanId: plan.id,
+            adaptiveSessions: adaptiveSessions,
+            adaptiveSetEntries: setEntries,
+            rotationSessions: rotationSessions,
+            rotationSetEntries: rotationSetEntries
+        )
         for entry in setEntries where
             entry.adaptiveSessionId == session.id && entry.occurrenceId == occurrenceId {
             entry.exerciseId = exercise.id
+            // Locked rows are completed work being corrected to the right
+            // exercise identity. Only editable rows still contain autofill.
+            guard !entry.isLocked else { continue }
+            let replacement = replacementRows.first(where: { $0.setIndex == entry.setIndex })
+                ?? replacementRows.last
+            entry.weight = replacement?.weight ?? 0
+            entry.reps = replacement?.reps ?? 0
         }
         snapshot.exerciseId = exercise.id
         snapshot.exerciseName = exercise.name

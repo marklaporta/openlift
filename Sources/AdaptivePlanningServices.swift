@@ -2358,46 +2358,19 @@ enum AdaptiveExerciseSelectionService {
 enum AdaptivePrefillService {
     static func rows(
         plan: GeneratedWorkoutPlan,
-        complex: PlannedComplexSnapshot,
         exercise: PlannedExerciseSnapshot,
-        adaptivePlans: [GeneratedWorkoutPlan],
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry],
-        overrides: [AdaptiveOverrideEvent]
+        rotationSetEntries: [SetEntry]
     ) -> [ComparableSetRow] {
-        let substituted = Set(overrides.filter { $0.kind == .substituteExercise }.compactMap(\.occurrenceId))
-        let completedAdaptive = adaptiveSessions
-            .filter { $0.status == .completed && $0.finishedAt != nil && $0.generatedPlanId != plan.id }
-            .sorted { ($0.finishedAt ?? $0.createdAt) > ($1.finishedAt ?? $1.createdAt) }
-
-        for session in completedAdaptive {
-            guard let priorPlan = adaptivePlans.first(where: { $0.id == session.generatedPlanId }),
-                  let priorComplex = priorPlan.complexes.first(where: {
-                      $0.sourceDefinitionId == complex.sourceDefinitionId
-                  }),
-                  let priorExercise = priorComplex.exercises.first(where: {
-                      $0.position == exercise.position && $0.exerciseId == exercise.exerciseId
-                  }),
-                  !substituted.contains(priorExercise.occurrenceId) else { continue }
-            let result = adaptiveRows(
-                sessionId: session.id,
-                occurrenceId: priorExercise.occurrenceId,
-                expectedExerciseId: exercise.exerciseId,
-                entries: adaptiveSetEntries
-            )
-            if !result.isEmpty { return result }
-        }
-
         return latestRows(
             exerciseId: exercise.exerciseId,
             excludingPlanId: plan.id,
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries,
-            overrides: overrides
+            rotationSetEntries: rotationSetEntries
         )
     }
 
@@ -2407,10 +2380,8 @@ enum AdaptivePrefillService {
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry],
-        overrides: [AdaptiveOverrideEvent]
+        rotationSetEntries: [SetEntry]
     ) -> [ComparableSetRow] {
-        let substituted = Set(overrides.filter { $0.kind == .substituteExercise }.compactMap(\.occurrenceId))
         let completedAdaptive = adaptiveSessions
             .filter {
                 $0.status == .completed
@@ -2425,7 +2396,6 @@ enum AdaptivePrefillService {
                         && $0.exerciseId == exerciseId
                         && $0.isLocked
                         && $0.reps > 0
-                        && !substituted.contains($0.occurrenceId)
                 }
                 .sorted { $0.setIndex < $1.setIndex }
                 .map { ComparableSetRow(setIndex: $0.setIndex, weight: $0.weight, reps: $0.reps, isLocked: true) }
@@ -2448,26 +2418,21 @@ enum AdaptivePrefillService {
 
     static func prefill(
         plan: GeneratedWorkoutPlan,
-        adaptivePlans: [GeneratedWorkoutPlan],
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry],
-        overrides: [AdaptiveOverrideEvent]
+        rotationSetEntries: [SetEntry]
     ) -> [UUID: [Int: AdaptiveSetPrefill]] {
         var result: [UUID: [Int: AdaptiveSetPrefill]] = [:]
         for complex in plan.complexes {
             for exercise in complex.exercises {
                 let previous = rows(
                     plan: plan,
-                    complex: complex,
                     exercise: exercise,
-                    adaptivePlans: adaptivePlans,
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries,
-                    overrides: overrides
+                    rotationSetEntries: rotationSetEntries
                 )
                 guard !previous.isEmpty else { continue }
                 for index in 1...exercise.prescribedSetCount {
@@ -2480,24 +2445,6 @@ enum AdaptivePrefillService {
             }
         }
         return result
-    }
-
-    private static func adaptiveRows(
-        sessionId: UUID,
-        occurrenceId: UUID,
-        expectedExerciseId: UUID,
-        entries: [AdaptiveSetEntry]
-    ) -> [ComparableSetRow] {
-        entries
-            .filter {
-                $0.adaptiveSessionId == sessionId
-                    && $0.occurrenceId == occurrenceId
-                    && $0.exerciseId == expectedExerciseId
-                    && $0.isLocked
-                    && $0.reps > 0
-            }
-            .sorted { $0.setIndex < $1.setIndex }
-            .map { ComparableSetRow(setIndex: $0.setIndex, weight: $0.weight, reps: $0.reps, isLocked: true) }
     }
 }
 

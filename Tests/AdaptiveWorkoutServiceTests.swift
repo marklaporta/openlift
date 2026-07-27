@@ -504,6 +504,8 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             difficulty: .hard,
             adaptiveSessions: [session],
             setEntries: rows,
+            rotationSessions: [],
+            rotationSetEntries: [],
             modelContext: context
         )
 
@@ -516,6 +518,99 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertTrue(rows.first?.isLocked == true)
         XCTAssertEqual(rows.last?.weight, 0)
         XCTAssertFalse(rows.last?.isLocked == true)
+    }
+
+    func testFrozenSubstitutionRefreshesEditablePrefillAndClearsItWithoutHistory() throws {
+        let (context, _) = makeContext()
+        let (program, press) = makeProgram()
+        let fly = Exercise(
+            name: "Cable Fly",
+            primaryMuscle: .chest,
+            type: .isolation,
+            equipment: .cable
+        )
+        let noHistoryFly = Exercise(
+            name: "Machine Fly",
+            primaryMuscle: .chest,
+            type: .isolation,
+            equipment: .machine
+        )
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: readyInputs,
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: press, check: check)
+        context.insert(plan)
+        context.insert(fly)
+        context.insert(noHistoryFly)
+        let snapshot = try XCTUnwrap(plan.complexes.first?.exercises.first)
+        let session = try AdaptiveWorkoutService.freeze(
+            plan: plan,
+            modelContext: context,
+            prefill: [
+                snapshot.occurrenceId: [
+                    1: AdaptiveSetPrefill(weight: 100, reps: 5),
+                    2: AdaptiveSetPrefill(weight: 90, reps: 8)
+                ]
+            ]
+        )
+        let rows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+            .filter { $0.adaptiveSessionId == session.id }
+            .sorted { $0.setIndex < $1.setIndex }
+        let historicalSession = AdaptiveWorkoutSession(
+            generatedPlanId: UUID(),
+            createdAt: Date(timeIntervalSince1970: 100),
+            finishedAt: Date(timeIntervalSince1970: 200),
+            status: .completed,
+            exportStatus: .success
+        )
+        let historicalRow = AdaptiveSetEntry(
+            adaptiveSessionId: historicalSession.id,
+            occurrenceId: UUID(),
+            exerciseId: fly.id,
+            setIndex: 1,
+            weight: 30,
+            reps: 12,
+            isLocked: true
+        )
+
+        try AdaptiveWorkoutService.substitute(
+            plan: plan,
+            occurrenceId: snapshot.occurrenceId,
+            fromExerciseId: press.id,
+            to: fly,
+            difficulty: .easy,
+            adaptiveSessions: [session, historicalSession],
+            setEntries: rows + [historicalRow],
+            rotationSessions: [],
+            rotationSetEntries: [],
+            modelContext: context
+        )
+
+        XCTAssertEqual(rows.map(\.exerciseId), [fly.id, fly.id])
+        XCTAssertEqual(rows.map(\.weight), [30, 30])
+        XCTAssertEqual(rows.map(\.reps), [12, 12])
+        XCTAssertTrue(rows.allSatisfy { !$0.isLocked })
+
+        try AdaptiveWorkoutService.substitute(
+            plan: plan,
+            occurrenceId: snapshot.occurrenceId,
+            fromExerciseId: fly.id,
+            to: noHistoryFly,
+            difficulty: .easy,
+            adaptiveSessions: [session, historicalSession],
+            setEntries: rows + [historicalRow],
+            rotationSessions: [],
+            rotationSetEntries: [],
+            modelContext: context
+        )
+
+        XCTAssertEqual(rows.map(\.exerciseId), [noHistoryFly.id, noHistoryFly.id])
+        XCTAssertEqual(rows.map(\.weight), [0, 0])
+        XCTAssertEqual(rows.map(\.reps), [0, 0])
     }
 
     func testRegenerationIsRejectedAfterFirstLockedSet() throws {
@@ -632,7 +727,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(events.first?.muscle, .chest)
     }
 
-    func testAdaptivePrefillPrefersSameOccurrenceContextAndKeepsValuesEditable() throws {
+    func testAdaptivePrefillUsesNewestExerciseOccurrenceAcrossWorkoutContexts() throws {
         let (context, _) = makeContext()
         let (program, exercise) = makeProgram()
         let check = try AdaptiveWorkoutService.makeReadinessCheck(
@@ -693,16 +788,14 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
 
         let prefill = AdaptivePrefillService.prefill(
             plan: currentPlan,
-            adaptivePlans: [priorPlan, currentPlan],
             adaptiveSessions: [priorSession],
             adaptiveSetEntries: priorRows,
             rotationSessions: [newerAdHoc],
-            rotationSetEntries: [adHocRow],
-            overrides: []
+            rotationSetEntries: [adHocRow]
         )
         let currentOccurrence = currentPlan.complexes.first!.exercises.first!.occurrenceId
-        XCTAssertEqual(prefill[currentOccurrence]?[1], AdaptiveSetPrefill(weight: 60, reps: 9))
-        XCTAssertEqual(prefill[currentOccurrence]?[2], AdaptiveSetPrefill(weight: 60, reps: 8))
+        XCTAssertEqual(prefill[currentOccurrence]?[1], AdaptiveSetPrefill(weight: 70, reps: 7))
+        XCTAssertEqual(prefill[currentOccurrence]?[2], AdaptiveSetPrefill(weight: 70, reps: 7))
 
         context.insert(currentPlan)
         _ = try AdaptiveWorkoutService.freeze(
@@ -711,9 +804,68 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             prefill: prefill
         )
         let created = try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).sorted { $0.setIndex < $1.setIndex }
-        XCTAssertEqual(created.map(\.weight), [60, 60])
-        XCTAssertEqual(created.map(\.reps), [9, 8])
+        XCTAssertEqual(created.map(\.weight), [70, 70])
+        XCTAssertEqual(created.map(\.reps), [7, 7])
         XCTAssertTrue(created.allSatisfy { !$0.isLocked })
+    }
+
+    func testAdaptivePrefillIncludesLatestOccurrenceIntroducedBySubstitution() throws {
+        let (context, _) = makeContext()
+        let (program, configuredExercise) = makeProgram()
+        let replacement = Exercise(
+            name: "Cable Fly",
+            primaryMuscle: .chest,
+            type: .isolation,
+            equipment: .cable
+        )
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: readyInputs,
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+        let priorPlan = try makeProposal(program: program, exercise: configuredExercise, check: check)
+        context.insert(priorPlan)
+        context.insert(replacement)
+        let priorOccurrence = priorPlan.complexes.first!.exercises.first!.occurrenceId
+        try AdaptiveWorkoutService.substituteProposedExercise(
+            plan: priorPlan,
+            occurrenceId: priorOccurrence,
+            to: replacement,
+            modelContext: context
+        )
+        let priorSession = try AdaptiveWorkoutService.freeze(plan: priorPlan, modelContext: context)
+        let substitutedRow = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+                .first { $0.adaptiveSessionId == priorSession.id && $0.setIndex == 1 }
+        )
+        substitutedRow.weight = 70
+        substitutedRow.reps = 6
+        substitutedRow.isLocked = true
+        priorPlan.status = .completed
+        priorSession.status = .completed
+        priorSession.finishedAt = Date(timeIntervalSince1970: 200)
+        try context.save()
+        let substitution = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AdaptiveOverrideEvent>())
+                .first { $0.occurrenceId == priorOccurrence && $0.kind == .substituteExercise }
+        )
+        XCTAssertEqual(substitution.replacementExerciseId, replacement.id)
+        XCTAssertEqual(substitutedRow.exerciseId, replacement.id)
+        let currentPlan = try makeProposal(program: program, exercise: replacement, check: check)
+
+        let prefill = AdaptivePrefillService.prefill(
+            plan: currentPlan,
+            adaptiveSessions: [priorSession],
+            adaptiveSetEntries: try context.fetch(FetchDescriptor<AdaptiveSetEntry>()),
+            rotationSessions: [],
+            rotationSetEntries: []
+        )
+
+        let currentOccurrence = currentPlan.complexes.first!.exercises.first!.occurrenceId
+        XCTAssertEqual(prefill[currentOccurrence]?[1], AdaptiveSetPrefill(weight: 70, reps: 6))
+        XCTAssertEqual(prefill[currentOccurrence]?[2], AdaptiveSetPrefill(weight: 70, reps: 6))
     }
 
     @MainActor
@@ -1075,6 +1227,8 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             difficulty: .hard,
             adaptiveSessions: [session],
             setEntries: rows,
+            rotationSessions: [],
+            rotationSetEntries: [],
             modelContext: context
         )
         rows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
