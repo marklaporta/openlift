@@ -1,5 +1,6 @@
 .DS_Store
 DerivedData/
+.build/
 .env
 .env.*
 *.xcuserstate
