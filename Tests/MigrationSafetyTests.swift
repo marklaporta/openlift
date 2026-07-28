@@ -40,6 +40,154 @@ private enum UnsupportedMigrationPlan: SchemaMigrationPlan {
 }
 
 final class MigrationSafetyTests: XCTestCase {
+    func testV8StoreMigratesToV9PreservesHistoryAndReopensNewParallelRecords() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let storeURL = fixture.working.appendingPathComponent("default.store")
+        let sessionId = UUID()
+        let exerciseId = UUID()
+
+        do {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV8.self)
+            let container = try ModelContainer(
+                for: schema,
+                configurations: [
+                    ModelConfiguration(
+                        "V8FixedCycleReadinessFixture",
+                        schema: schema,
+                        url: storeURL,
+                        cloudKitDatabase: .none
+                    )
+                ]
+            )
+            let context = ModelContext(container)
+            context.insert(
+                Exercise(
+                    id: exerciseId,
+                    name: "Migration Press",
+                    primaryMuscle: .chest,
+                    type: .compound,
+                    equipment: .dumbbell
+                )
+            )
+            context.insert(
+                Session(
+                    id: sessionId,
+                    cycleInstanceId: UUID(),
+                    cycleDayIndex: 1,
+                    cycleNameSnapshot: "Existing Cycle",
+                    dayLabelSnapshot: "Push",
+                    finishedAt: Date(timeIntervalSince1970: 100),
+                    status: .completed,
+                    exportStatus: .success
+                )
+            )
+            context.insert(
+                SetEntry(
+                    sessionId: sessionId,
+                    exerciseId: exerciseId,
+                    setIndex: 1,
+                    weight: 50,
+                    reps: 10,
+                    isLocked: true
+                )
+            )
+            try context.save()
+        }
+
+        let schema = Schema(versionedSchema: OpenLiftSchemaV9.self)
+        let startup = OpenLiftModelContainerFactory.makePersistent(
+            schema: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: ModelConfiguration(
+                "V9FixedCycleReadinessFixture",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+        )
+        XCTAssertNil(startup.issue)
+        var context = ModelContext(startup.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 1)
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<FixedCycleReadinessObservation>()),
+            0
+        )
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<FixedCycleOccurrenceOverride>()),
+            0
+        )
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<FixedCycleExerciseSnapshot>()),
+            0
+        )
+        context.insert(
+            FixedCycleReadinessObservation(
+                sessionId: sessionId,
+                localDateKey: "2026-07-27",
+                timeZoneIdentifier: "America/Los_Angeles",
+                revision: 1,
+                responses: [
+                    FixedCycleReadinessResponse(
+                        muscle: .chest,
+                        soreness: .none,
+                        connectiveTissuePain: .none,
+                        eagerness: .eager
+                    )
+                ]
+            )
+        )
+        context.insert(
+            FixedCycleOccurrenceOverride(
+                sessionId: sessionId,
+                kind: .skipExercise,
+                slotPosition: 1,
+                exerciseId: exerciseId,
+                muscle: .chest,
+                reasonCode: "recovery"
+            )
+        )
+        context.insert(
+            FixedCycleExerciseSnapshot(
+                sessionId: sessionId,
+                position: 0,
+                exerciseId: exerciseId,
+                exerciseName: "Migration Press",
+                muscle: .chest,
+                statusRawValue: "completed"
+            )
+        )
+        try context.save()
+
+        let reopened = try ModelContainer(
+            for: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configurations: [
+                ModelConfiguration(
+                    "V9FixedCycleReadinessFixtureReopen",
+                    schema: schema,
+                    url: storeURL,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        context = ModelContext(reopened)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 1)
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<FixedCycleReadinessObservation>()),
+            1
+        )
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<FixedCycleOccurrenceOverride>()),
+            1
+        )
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<FixedCycleExerciseSnapshot>()),
+            1
+        )
+    }
+
     func testV6StoreMigratesToV7WithoutChangingWorkoutOrDesignData() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }

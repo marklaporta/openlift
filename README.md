@@ -68,6 +68,10 @@ That file is ignored by git. Start from:
 
 - The app seeds a built-in exercise catalog on first launch.
 - If no template exists and no published cycle is available in iCloud, the app now creates a built-in `4D Upper/Lower` starter template.
+- Fixed Cycle and Adaptive Floating remain separate, explicitly selected training modes.
+- The Push/Pull A/B rollout is a completion-driven Fixed Cycle: Pull A, Push A, Pull B, Push B.
+- Fixed Cycle requires a dated readiness observation before working sets can be changed or the workout can be completed. Readiness is advisory and never changes the cycle or dose.
+- Both modes use literal repeat-last exercise effort. Fixed Cycle prefers the same stable cycle-instance day and falls back to the newest cross-mode effort; Adaptive and ad hoc use the newest cross-mode effort.
 - Completed workouts export to `OpenLift/exports`.
 - Draft snapshots export to `OpenLift/exports/drafts`.
 - Published cycle JSON files are discovered from `OpenLift/cycles`.

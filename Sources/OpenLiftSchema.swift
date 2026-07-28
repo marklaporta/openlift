@@ -112,6 +112,20 @@ enum OpenLiftSchemaV8: VersionedSchema {
     ]
 }
 
+/// Adds Fixed Cycle readiness audit records, occurrence-only skip provenance,
+/// and immutable ordered occurrence snapshots as parallel entities. No shipped
+/// V1-V8 entity is altered.
+enum OpenLiftSchemaV9: VersionedSchema {
+    static let versionIdentifier = Schema.Version(9, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV8.models + [
+        FixedCycleReadinessObservation.self,
+        FixedCycleReadinessResponse.self,
+        FixedCycleOccurrenceOverride.self,
+        FixedCycleExerciseSnapshot.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
@@ -121,7 +135,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV5.self,
         OpenLiftSchemaV6.self,
         OpenLiftSchemaV7.self,
-        OpenLiftSchemaV8.self
+        OpenLiftSchemaV8.self,
+        OpenLiftSchemaV9.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -152,6 +167,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV7.self,
             toVersion: OpenLiftSchemaV8.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV8.self,
+            toVersion: OpenLiftSchemaV9.self
         )
     ]
 }

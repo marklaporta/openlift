@@ -3,7 +3,7 @@ import SwiftData
 
 @main
 struct OpenLiftApp: App {
-    private static let schema = Schema(versionedSchema: OpenLiftSchemaV8.self)
+    private static let schema = Schema(versionedSchema: OpenLiftSchemaV9.self)
 
     private static let startup: OpenLiftContainerStartup = {
         AppRuntime.prepareForUITesting()
@@ -19,11 +19,46 @@ struct OpenLiftApp: App {
             schema: schema,
             cloudKitDatabase: .none
         )
-        return OpenLiftModelContainerFactory.makePersistent(
+        let startup = OpenLiftModelContainerFactory.makePersistent(
             schema: schema,
             migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configuration: configuration
         )
+        if startup.issue == nil, AppRuntime.shouldPreparePushPullRollout {
+            let modelContext = ModelContext(startup.container)
+            do {
+                let result = try BootstrapDataService.preparePushPullABRollout(
+                    modelContext: modelContext,
+                    archivedDraftsConfirmed: AppRuntime.archivedPushPullDraftsAreConfirmed
+                )
+                print(
+                    "OPENLIFT_PUSH_PULL_ROLLOUT_RESULT applied=\(result.didApply) template=\(result.templateId) cycle=\(result.cycleId)"
+                )
+            } catch {
+                print("OPENLIFT_PUSH_PULL_ROLLOUT_FAILED \(error.localizedDescription)")
+            }
+        }
+        if startup.issue == nil, AppRuntime.shouldRepairJuly27AdaptiveInclineCurl {
+            let modelContext = ModelContext(startup.container)
+            do {
+                let result = try BootstrapDataService.repairJuly27AdaptiveInclineCurl(
+                    modelContext: modelContext,
+                    backupConfirmed: AppRuntime.july27AdaptiveInclineCurlBackupIsConfirmed
+                )
+                let exportOutcome = try AdaptiveExportService.retryCompletedSessionExport(
+                    sessionId: result.sessionId,
+                    modelContext: modelContext
+                )
+                print(
+                    "OPENLIFT_JULY_27_INCLINE_CURL_REPAIR_RESULT applied=\(result.didApply) session=\(result.sessionId) export=\(exportOutcome.status.rawValue) file=\(exportOutcome.filename)"
+                )
+            } catch {
+                print(
+                    "OPENLIFT_JULY_27_INCLINE_CURL_REPAIR_FAILED \(error.localizedDescription)"
+                )
+            }
+        }
+        return startup
     }()
 
     private static var sharedModelContainer: ModelContainer {

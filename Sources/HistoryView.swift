@@ -530,6 +530,9 @@ private struct SessionDetailView: View {
     @Query private var setEntries: [SetEntry]
     @Query private var adHocFeedback: [AdHocExerciseFeedback]
     @Query private var exportDiagnostics: [ExportDiagnostic]
+    @Query private var fixedReadiness: [FixedCycleReadinessObservation]
+    @Query private var fixedOverrides: [FixedCycleOccurrenceOverride]
+    @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
 
     let session: Session
     @State private var exportError: String?
@@ -554,6 +557,42 @@ private struct SessionDetailView: View {
                         .font(.caption)
                         .foregroundStyle(exportDiagnostic.status == .failed ? .red : .secondary)
                     LabeledContent("File", value: exportDiagnostic.filename)
+                }
+            }
+
+            let observations = fixedReadiness
+                .filter { $0.sessionId == session.id }
+                .sorted {
+                    if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                    return $0.revision < $1.revision
+                }
+            if !observations.isEmpty {
+                Section("Readiness") {
+                    ForEach(observations) { observation in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(observation.localDateKey) · revision \(observation.revision)")
+                                .font(.headline)
+                            Text(observation.responses.sorted {
+                                $0.muscle.rawValue < $1.muscle.rawValue
+                            }.map {
+                                "\($0.muscle.displayName): \($0.soreness.displayName), \($0.connectiveTissuePain.displayName), \($0.eagerness.displayName)"
+                            }.joined(separator: "\n"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            let skips = fixedOverrides.filter { $0.sessionId == session.id }
+            if !skips.isEmpty {
+                Section("Skipped") {
+                    ForEach(skips) { item in
+                        LabeledContent(
+                            item.muscle?.displayName ?? "Exercise",
+                            value: item.reasonCode
+                        )
+                    }
                 }
             }
 
@@ -612,11 +651,33 @@ private struct SessionDetailView: View {
     private var groupedExercises: [(exercise: Exercise, sets: [SetEntry])] {
         let sessionSets = setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked }
         let grouped = Dictionary(grouping: sessionSets, by: { $0.exerciseId })
+        let daySlots: [CycleSlot] = activeCycles
+            .first(where: { $0.id == session.cycleInstanceId })
+            .flatMap { cycle in templates.first(where: { $0.id == cycle.templateId }) }
+            .flatMap { template -> [CycleSlot]? in
+                let days = CycleOrdering.sortedDays(template.days)
+                guard days.indices.contains(session.cycleDayIndex) else { return nil }
+                return CycleOrdering.sortedSlots(days[session.cycleDayIndex].slots)
+            } ?? []
+        let snapshots = fixedSnapshots.filter { $0.sessionId == session.id }
+        let positionByExercise = Dictionary(
+            (
+                snapshots.isEmpty
+                    ? daySlots.enumerated().map { ($0.element.exerciseId, $0.offset) }
+                    : snapshots.map { ($0.exerciseId, $0.position) }
+            ),
+            uniquingKeysWith: min
+        )
         return grouped.compactMap { exerciseId, sets in
             guard let exercise = exercises.first(where: { $0.id == exerciseId }) else { return nil }
             return (exercise: exercise, sets: sets.sorted { $0.setIndex < $1.setIndex })
         }
-        .sorted { $0.exercise.name < $1.exercise.name }
+        .sorted {
+            let lhs = positionByExercise[$0.exercise.id] ?? Int.max
+            let rhs = positionByExercise[$1.exercise.id] ?? Int.max
+            if lhs != rhs { return lhs < rhs }
+            return $0.exercise.name < $1.exercise.name
+        }
     }
 
     private func feedbackRating(for exerciseId: UUID) -> ComplexFeedbackRating? {
@@ -628,12 +689,34 @@ private struct SessionDetailView: View {
 
     private func retryExport() {
         do {
+            let template = activeCycles
+                .first(where: { $0.id == session.cycleInstanceId })
+                .flatMap { cycle in templates.first(where: { $0.id == cycle.templateId }) }
+            let day = template.flatMap { value -> CycleDay? in
+                let days = CycleOrdering.sortedDays(value.days)
+                return days.indices.contains(session.cycleDayIndex)
+                    ? days[session.cycleDayIndex]
+                    : nil
+            }
             _ = try SessionExportService.exportAndTrack(
                 session: session,
                 cycleName: cycleName,
                 exercises: exercises,
                 setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
                 requireICloudMirror: true,
+                fixedCycleMetadata: {
+                    guard let template, let day else { return nil }
+                    return SessionExportService.fixedCycleMetadata(
+                        session: session,
+                        template: template,
+                        day: day,
+                        exercises: exercises,
+                        setEntries: setEntries,
+                        readiness: fixedReadiness,
+                        overrides: fixedOverrides,
+                        snapshots: fixedSnapshots
+                    )
+                }(),
                 modelContext: modelContext
             )
             try modelContext.save()

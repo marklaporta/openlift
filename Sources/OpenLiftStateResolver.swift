@@ -13,10 +13,6 @@ enum OpenLiftStateResolver {
             latestExport: latestExport
         )
 
-        if let recentCycleName,
-           let recent = BootstrapDataService.matchingTemplate(named: recentCycleName, in: templates) {
-            return recent
-        }
         if let preferredTemplateId,
            let preferred = templates.first(where: { $0.id == preferredTemplateId }) {
             return preferred
@@ -24,6 +20,10 @@ enum OpenLiftStateResolver {
         if let preferredTemplateName,
            let preferred = templates.first(where: { $0.name.caseInsensitiveCompare(preferredTemplateName) == .orderedSame }) {
             return preferred
+        }
+        if let recentCycleName,
+           let recent = BootstrapDataService.matchingTemplate(named: recentCycleName, in: templates) {
+            return recent
         }
         if let fb2d = templates.first(where: { $0.name.caseInsensitiveCompare("FB 2D") == .orderedSame }) {
             return fb2d

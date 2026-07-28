@@ -1160,7 +1160,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(result[.init(muscle: .chest, type: .compound)]?.exercise.id, flat.id)
     }
 
-    func testDoseChangesAreBoundedAndOneTooLittleTapDoesNotIncrease() {
+    func testFeedbackAndRecoveryNeverChangeRepeatLastDose() {
         XCTAssertEqual(
             DoseRecommendationService.recommend(
                 currentSetCount: 1,
@@ -1179,7 +1179,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
                 latestPerformance: .moreRepsAtSameWeight,
                 recoveredOnTime: true
             ).prescribedSetCount,
-            2
+            1
         )
         XCTAssertEqual(
             DoseRecommendationService.recommend(
@@ -1201,7 +1201,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
                 latestPerformance: .matched,
                 recoveredOnTime: true
             ).prescribedSetCount,
-            2
+            3
         )
         XCTAssertTrue(
             DoseRecommendationService.recommend(

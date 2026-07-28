@@ -795,7 +795,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         )
         let currentOccurrence = currentPlan.complexes.first!.exercises.first!.occurrenceId
         XCTAssertEqual(prefill[currentOccurrence]?[1], AdaptiveSetPrefill(weight: 70, reps: 7))
-        XCTAssertEqual(prefill[currentOccurrence]?[2], AdaptiveSetPrefill(weight: 70, reps: 7))
+        XCTAssertNil(prefill[currentOccurrence]?[2])
 
         context.insert(currentPlan)
         _ = try AdaptiveWorkoutService.freeze(
@@ -804,8 +804,8 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             prefill: prefill
         )
         let created = try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).sorted { $0.setIndex < $1.setIndex }
-        XCTAssertEqual(created.map(\.weight), [70, 70])
-        XCTAssertEqual(created.map(\.reps), [7, 7])
+        XCTAssertEqual(created.map(\.weight), [70])
+        XCTAssertEqual(created.map(\.reps), [7])
         XCTAssertTrue(created.allSatisfy { !$0.isLocked })
     }
 
@@ -865,7 +865,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
 
         let currentOccurrence = currentPlan.complexes.first!.exercises.first!.occurrenceId
         XCTAssertEqual(prefill[currentOccurrence]?[1], AdaptiveSetPrefill(weight: 70, reps: 6))
-        XCTAssertEqual(prefill[currentOccurrence]?[2], AdaptiveSetPrefill(weight: 70, reps: 6))
+        XCTAssertNil(prefill[currentOccurrence]?[2])
     }
 
     @MainActor

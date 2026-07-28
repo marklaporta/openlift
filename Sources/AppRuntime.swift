@@ -8,6 +8,18 @@ enum AppRuntime {
     static let shouldPrepareAdaptiveRollout = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_PREPARE_ADAPTIVE_ROLLOUT"
     )
+    static let shouldPreparePushPullRollout = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_PREPARE_PUSH_PULL_ROLLOUT"
+    )
+    static let archivedPushPullDraftsAreConfirmed = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_ARCHIVED_PUSH_PULL_DRAFTS_CONFIRMED"
+    )
+    static let shouldRepairJuly27AdaptiveInclineCurl = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_REPAIR_2026_07_27_ADAPTIVE_INCLINE_CURL"
+    )
+    static let july27AdaptiveInclineCurlBackupIsConfirmed = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_2026_07_27_ADAPTIVE_INCLINE_CURL_BACKUP_CONFIRMED"
+    )
     static let shouldDisableGluteProgramming = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_DISABLE_GLUTE_PROGRAMMING"
     )

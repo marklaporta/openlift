@@ -42,6 +42,7 @@
 		F1000000000000000000000C /* AdaptiveWorkoutService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000C /* AdaptiveWorkoutService.swift */; };
 		F1000000000000000000000D /* AdaptiveWorkoutServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000D /* AdaptiveWorkoutServiceTests.swift */; };
 		F1000000000000000000000E /* AdaptiveWorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000E /* AdaptiveWorkoutView.swift */; };
+		F1000000000000000000000F /* FixedCyclePushPullTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000F /* FixedCyclePushPullTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -107,6 +108,7 @@
 		F2000000000000000000000C /* AdaptiveWorkoutService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveWorkoutService.swift; sourceTree = "<group>"; };
 		F2000000000000000000000D /* AdaptiveWorkoutServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveWorkoutServiceTests.swift; sourceTree = "<group>"; };
 		F2000000000000000000000E /* AdaptiveWorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveWorkoutView.swift; sourceTree = "<group>"; };
+		F2000000000000000000000F /* FixedCyclePushPullTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixedCyclePushPullTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -120,6 +122,7 @@
 				AE461DEF18F8275C02EE014A /* CycleOrderingTests.swift */,
 				7CFB35CE5B48A79BFE463927 /* ExerciseSwapServiceTests.swift */,
 				F20000000000000000000004 /* ExerciseCatalogServiceTests.swift */,
+				F2000000000000000000000F /* FixedCyclePushPullTests.swift */,
 				F20000000000000000000002 /* MigrationSafetyTests.swift */,
 				5A8CF670E4C6344D76DEA364 /* PublishedCycleServiceTests.swift */,
 				F20000000000000000000006 /* TrainingModeServiceTests.swift */,
@@ -350,6 +353,7 @@
 				86A1C57B01274387BB6C6705 /* CycleOrderingTests.swift in Sources */,
 				9BF4260727BBA3F3B619B825 /* ExerciseSwapServiceTests.swift in Sources */,
 				F10000000000000000000004 /* ExerciseCatalogServiceTests.swift in Sources */,
+				F1000000000000000000000F /* FixedCyclePushPullTests.swift in Sources */,
 				F10000000000000000000002 /* MigrationSafetyTests.swift in Sources */,
 				8E534C6712920AB206BE35B7 /* PublishedCycleServiceTests.swift in Sources */,
 				F10000000000000000000006 /* TrainingModeServiceTests.swift in Sources */,

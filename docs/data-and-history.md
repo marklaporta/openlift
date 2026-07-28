@@ -19,6 +19,7 @@ Core models live in [`Models.swift`](../Sources/Models.swift):
 - `Session`
 - `SetEntry`
 - `SessionSlotOverride`
+- append-only Fixed Cycle readiness revisions and occurrence-level skip records
 
 ## What Counts As History
 
@@ -34,6 +35,13 @@ hoc sets will be load/recovery evidence for Adaptive planning. Direct sets count
 toward the exercise primary muscle's set-rate target; secondary muscles receive
 recovery context but no target credit. Ad hoc work is not automatically
 same-complex performance evidence. Drafts and unlocked sets do not count.
+
+Exercise effort history is shared across modes by canonical exercise identity.
+Fixed Cycle first searches completed nonzero occurrences of the same stable
+cycle-instance day, skipping zero-set omissions, and then falls back to the newest qualifying
+Fixed Cycle, Adaptive, or ad hoc effort. Adaptive and ad hoc have no stable
+cycle-day identity and use the global newest effort directly. Prefill copies
+the literal completed set count, weights, and reps without conversion.
 
 Legacy Rotation `Session` and `SetEntry` shapes remain unchanged for copied-store
 migration safety. Adaptive planning/execution provenance lives in parallel
@@ -73,6 +81,14 @@ The app can rebuild missing completed sessions from export files during bootstra
 Rotation and ad hoc workouts remain backward-readable through the v1 JSON
 shape. Ad hoc exercise entries may add the optional `volume_feedback` field;
 older files decode with that field missing.
+
+New Fixed Cycle exports add optional `fixed_cycle` metadata without changing the
+legacy fields. It records template/cycle-instance/day identity, ordered planned exercises,
+dated readiness revisions, occurrence-level skips and reasons, canonical
+exercise IDs, and actual completed set rows. Older payloads still decode, and
+hydration deduplicates the new parallel records by their stable UUIDs.
+Draft recovery snapshots use the same optional metadata, so a readiness-only day
+is mirrored without being promoted to a completed workout or load exposure.
 
 Adaptive workouts use additive schema v2 JSON. The payload records
 `workout_kind: adaptive`, the session UUID, raw readiness/version, planner

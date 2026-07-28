@@ -832,6 +832,11 @@ enum AdaptiveWorkoutService {
         modelContext.insert(session)
         for complex in plan.complexes.sorted(by: { $0.position < $1.position }) {
             for exercise in complex.exercises.sorted(by: { $0.position < $1.position }) {
+                let previous = prefill[exercise.occurrenceId] ?? [:]
+                let setCount = previous.isEmpty
+                    ? exercise.prescribedSetCount
+                    : previous.keys.max() ?? previous.count
+                exercise.prescribedSetCount = max(1, setCount)
                 for setIndex in 1...exercise.prescribedSetCount {
                     let prior = prefill[exercise.occurrenceId]?[setIndex]
                     modelContext.insert(

@@ -2355,7 +2355,201 @@ enum AdaptiveExerciseSelectionService {
     }
 }
 
+enum ExerciseEffortSourceKind: String, Equatable {
+    case fixedCycle
+    case adaptive
+    case adHoc
+}
+
+enum ExerciseEffortMatchKind: String, Equatable {
+    case sameCycleDay
+    case globalLatest
+}
+
+struct ExerciseEffortLookupResult: Equatable {
+    let sessionId: UUID
+    let completedAt: Date
+    let sourceKind: ExerciseEffortSourceKind
+    let matchKind: ExerciseEffortMatchKind
+    let cycleName: String?
+    let dayLabel: String?
+    let rows: [ComparableSetRow]
+}
+
+/// The one repeat-last lookup used by Fixed Cycle and Adaptive. It copies
+/// literal completed rows; readiness, feedback, recovery timing, and missed
+/// days never adjust the result.
+enum ExerciseEffortLookupService {
+    static func fixedCycleEffort(
+        exerciseId: UUID,
+        cycleInstanceId: UUID,
+        cycleDayIndex: Int,
+        excludingSessionId: UUID? = nil,
+        adaptiveSessions: [AdaptiveWorkoutSession],
+        adaptiveSetEntries: [AdaptiveSetEntry],
+        rotationSessions: [Session],
+        rotationSetEntries: [SetEntry]
+    ) -> ExerciseEffortLookupResult? {
+        let sameDay = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
+            guard session.id != excludingSessionId,
+                  session.status == .completed,
+                  session.cycleInstanceId == cycleInstanceId,
+                  session.cycleDayIndex == cycleDayIndex,
+                  session.dayLabelSnapshot != "Off-Schedule" else {
+                return nil
+            }
+            return rotationResult(
+                session: session,
+                exerciseId: exerciseId,
+                matchKind: .sameCycleDay,
+                entries: rotationSetEntries
+            )
+        }
+        if let result = newest(sameDay) {
+            return result
+        }
+        return globalEffort(
+            exerciseId: exerciseId,
+            excludingSessionId: excludingSessionId,
+            excludingPlanId: nil,
+            adaptiveSessions: adaptiveSessions,
+            adaptiveSetEntries: adaptiveSetEntries,
+            rotationSessions: rotationSessions,
+            rotationSetEntries: rotationSetEntries
+        )
+    }
+
+    static func globalEffort(
+        exerciseId: UUID,
+        excludingSessionId: UUID? = nil,
+        excludingPlanId: UUID? = nil,
+        adaptiveSessions: [AdaptiveWorkoutSession],
+        adaptiveSetEntries: [AdaptiveSetEntry],
+        rotationSessions: [Session],
+        rotationSetEntries: [SetEntry]
+    ) -> ExerciseEffortLookupResult? {
+        let adaptive = adaptiveSessions.compactMap { session -> ExerciseEffortLookupResult? in
+            guard session.status == .completed,
+                  session.id != excludingSessionId,
+                  session.generatedPlanId != excludingPlanId else {
+                return nil
+            }
+            let rows = adaptiveSetEntries
+                .filter {
+                    $0.adaptiveSessionId == session.id
+                        && $0.exerciseId == exerciseId
+                        && $0.isLocked
+                        && $0.reps > 0
+                }
+                .sorted { $0.setIndex < $1.setIndex }
+                .map {
+                    ComparableSetRow(
+                        setIndex: $0.setIndex,
+                        weight: $0.weight,
+                        reps: $0.reps,
+                        isLocked: true
+                    )
+                }
+            guard !rows.isEmpty else { return nil }
+            return ExerciseEffortLookupResult(
+                sessionId: session.id,
+                completedAt: session.finishedAt ?? session.createdAt,
+                sourceKind: .adaptive,
+                matchKind: .globalLatest,
+                cycleName: nil,
+                dayLabel: nil,
+                rows: rows
+            )
+        }
+
+        let rotation = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
+            guard session.id != excludingSessionId else { return nil }
+            return rotationResult(
+                session: session,
+                exerciseId: exerciseId,
+                matchKind: .globalLatest,
+                entries: rotationSetEntries
+            )
+        }
+        return newest(adaptive + rotation)
+    }
+
+    private static func rotationResult(
+        session: Session,
+        exerciseId: UUID,
+        matchKind: ExerciseEffortMatchKind,
+        entries: [SetEntry]
+    ) -> ExerciseEffortLookupResult? {
+        guard session.status == .completed else { return nil }
+        let rows = entries
+            .filter {
+                $0.sessionId == session.id
+                    && $0.exerciseId == exerciseId
+                    && $0.isLocked
+                    && $0.reps > 0
+            }
+            .sorted { $0.setIndex < $1.setIndex }
+            .map {
+                ComparableSetRow(
+                    setIndex: $0.setIndex,
+                    weight: $0.weight,
+                    reps: $0.reps,
+                    isLocked: true
+                )
+            }
+        guard !rows.isEmpty else { return nil }
+        return ExerciseEffortLookupResult(
+            sessionId: session.id,
+            completedAt: session.finishedAt ?? session.createdAt,
+            sourceKind: session.dayLabelSnapshot == "Off-Schedule" ? .adHoc : .fixedCycle,
+            matchKind: matchKind,
+            cycleName: session.cycleNameSnapshot,
+            dayLabel: session.dayLabelSnapshot,
+            rows: rows
+        )
+    }
+
+    private static func newest(
+        _ results: [ExerciseEffortLookupResult]
+    ) -> ExerciseEffortLookupResult? {
+        results.max {
+            if $0.completedAt != $1.completedAt {
+                return $0.completedAt < $1.completedAt
+            }
+            return $0.sessionId.uuidString < $1.sessionId.uuidString
+        }
+    }
+
+}
+
 enum AdaptivePrefillService {
+    /// Makes repeat-last history authoritative for the proposed dose while
+    /// leaving the configured/profile count as the editable fallback when no
+    /// qualifying completed effort exists.
+    static func applyRepeatLastSetCounts(
+        to plan: GeneratedWorkoutPlan,
+        adaptiveSessions: [AdaptiveWorkoutSession],
+        adaptiveSetEntries: [AdaptiveSetEntry],
+        rotationSessions: [Session],
+        rotationSetEntries: [SetEntry]
+    ) {
+        for complex in plan.complexes {
+            for exercise in complex.exercises {
+                let previous = latestRows(
+                    exerciseId: exercise.exerciseId,
+                    excludingPlanId: plan.id,
+                    adaptiveSessions: adaptiveSessions,
+                    adaptiveSetEntries: adaptiveSetEntries,
+                    rotationSessions: rotationSessions,
+                    rotationSetEntries: rotationSetEntries
+                )
+                if !previous.isEmpty {
+                    exercise.prescribedSetCount = previous.count
+                }
+            }
+        }
+    }
+
     static func rows(
         plan: GeneratedWorkoutPlan,
         exercise: PlannedExerciseSnapshot,
@@ -2382,38 +2576,14 @@ enum AdaptivePrefillService {
         rotationSessions: [Session],
         rotationSetEntries: [SetEntry]
     ) -> [ComparableSetRow] {
-        let completedAdaptive = adaptiveSessions
-            .filter {
-                $0.status == .completed
-                    && $0.finishedAt != nil
-                    && $0.generatedPlanId != excludingPlanId
-            }
-        var fallback: [(Date, [ComparableSetRow])] = []
-        for session in completedAdaptive {
-            let rows = adaptiveSetEntries
-                .filter {
-                    $0.adaptiveSessionId == session.id
-                        && $0.exerciseId == exerciseId
-                        && $0.isLocked
-                        && $0.reps > 0
-                }
-                .sorted { $0.setIndex < $1.setIndex }
-                .map { ComparableSetRow(setIndex: $0.setIndex, weight: $0.weight, reps: $0.reps, isLocked: true) }
-            if !rows.isEmpty { fallback.append((session.finishedAt ?? session.createdAt, rows)) }
-        }
-        for session in rotationSessions where session.status == .completed && session.finishedAt != nil {
-            let rows = rotationSetEntries
-                .filter {
-                    $0.sessionId == session.id
-                        && $0.exerciseId == exerciseId
-                        && $0.isLocked
-                        && $0.reps > 0
-                }
-                .sorted { $0.setIndex < $1.setIndex }
-                .map { ComparableSetRow(setIndex: $0.setIndex, weight: $0.weight, reps: $0.reps, isLocked: true) }
-            if !rows.isEmpty { fallback.append((session.finishedAt ?? session.createdAt, rows)) }
-        }
-        return fallback.max(by: { $0.0 < $1.0 })?.1 ?? []
+        ExerciseEffortLookupService.globalEffort(
+            exerciseId: exerciseId,
+            excludingPlanId: excludingPlanId,
+            adaptiveSessions: adaptiveSessions,
+            adaptiveSetEntries: adaptiveSetEntries,
+            rotationSessions: rotationSessions,
+            rotationSetEntries: rotationSetEntries
+        )?.rows ?? []
     }
 
     static func prefill(
@@ -2435,9 +2605,12 @@ enum AdaptivePrefillService {
                     rotationSetEntries: rotationSetEntries
                 )
                 guard !previous.isEmpty else { continue }
-                for index in 1...exercise.prescribedSetCount {
-                    let row = previous.first(where: { $0.setIndex == index }) ?? previous.last!
-                    result[exercise.occurrenceId, default: [:]][index] = AdaptiveSetPrefill(
+                // Preserve the literal qualifying effort, including its exact
+                // set count. `freeze` makes this count authoritative for the
+                // new occurrence instead of extending or truncating it to the
+                // planner/profile default.
+                for (index, row) in previous.enumerated() {
+                    result[exercise.occurrenceId, default: [:]][index + 1] = AdaptiveSetPrefill(
                         weight: row.weight,
                         reps: row.reps
                     )
@@ -2569,35 +2742,13 @@ enum DoseRecommendationService {
                 reasonCode: "pain_block"
             )
         }
-        let tooMuchCount = recentFeedback.suffix(2).filter { $0 == .tooMuch }.count
-        if recentFeedback.last == .tooMuch || (tooMuchCount > 0 && !recoveredOnTime) {
-            return DoseRecommendation(
-                prescribedSetCount: max(minimumSetCount, currentSetCount - 1),
-                isPainBlocked: false,
-                reasonCode: "feedback_decrease_one_set"
-            )
-        }
-        let repeatedTooLittle = recentFeedback.suffix(3).filter { $0 == .tooLittle }.count >= 2
-        if repeatedTooLittle,
-           allowsPositiveProgression ?? recoveredOnTime,
-           latestPerformance?.isMatchedOrImproved == true {
-            return DoseRecommendation(
-                prescribedSetCount: min(maximumSetCount, currentSetCount + 1),
-                isPainBlocked: false,
-                reasonCode: "repeated_too_little_increase_one_set"
-            )
-        }
-        if latestPerformance == .regressed && !recoveredOnTime {
-            return DoseRecommendation(
-                prescribedSetCount: max(minimumSetCount, currentSetCount - 1),
-                isPainBlocked: false,
-                reasonCode: "regression_with_under_recovery"
-            )
-        }
+        // Historical feedback remains available for review and pain may still
+        // block Adaptive scheduling, but no feedback/readiness/performance path
+        // is allowed to change the repeat-last dose.
         return DoseRecommendation(
             prescribedSetCount: currentSetCount,
             isPainBlocked: false,
-            reasonCode: "hold_dose"
+            reasonCode: "repeat_last_only"
         )
     }
 }

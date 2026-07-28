@@ -73,6 +73,9 @@ enum SessionExportService {
         let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
         let setEntries = try modelContext.fetch(FetchDescriptor<SetEntry>())
         let adHocFeedback = try modelContext.fetch(FetchDescriptor<AdHocExerciseFeedback>())
+        let fixedReadiness = try modelContext.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
+        let fixedOverrides = try modelContext.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>())
+        let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
 
         for session in retryableSessions {
             let cycleName = exportCycleName(
@@ -80,6 +83,31 @@ enum SessionExportService {
                 activeCycles: activeCycles,
                 templates: templates
             )
+            let fixedTemplate = activeCycles
+                .first(where: { $0.id == session.cycleInstanceId })
+                .flatMap { cycle in templates.first(where: { $0.id == cycle.templateId }) }
+                ?? templates.first(where: {
+                    $0.name.caseInsensitiveCompare(session.cycleNameSnapshot ?? "") == .orderedSame
+                })
+            let fixedMetadata: FixedCycleMetadata?
+            if session.dayLabelSnapshot != "Off-Schedule",
+               let template = fixedTemplate {
+                let days = CycleOrdering.sortedDays(template.days)
+                fixedMetadata = days.indices.contains(session.cycleDayIndex)
+                    ? fixedCycleMetadata(
+                        session: session,
+                        template: template,
+                        day: days[session.cycleDayIndex],
+                        exercises: exercises,
+                        setEntries: setEntries,
+                        readiness: fixedReadiness,
+                        overrides: fixedOverrides,
+                        snapshots: fixedSnapshots
+                    )
+                    : nil
+            } else {
+                fixedMetadata = nil
+            }
             do {
                 _ = try exportAndTrack(
                     session: session,
@@ -88,6 +116,7 @@ enum SessionExportService {
                     setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
                     requireICloudMirror: true,
                     adHocFeedback: adHocFeedback.filter { $0.sessionId == session.id },
+                    fixedCycleMetadata: fixedMetadata,
                     modelContext: modelContext,
                     environment: environment
                 )
@@ -162,29 +191,77 @@ enum SessionExportService {
         iso8601Formatter.date(from: value) ?? fractionalISO8601Formatter.date(from: value)
     }
 
-    struct ExportSet: Codable {
+    struct ExportSet: Codable, Sendable {
         let set_index: Int
         let weight: Double
         let reps: Int
     }
 
-    struct ExportExercise: Codable {
+    struct ExportExercise: Codable, Sendable {
+        let exercise_id: String?
         let exercise_name: String
         let muscle: String
         let sets: [ExportSet]
         let volume_feedback: String?
 
         init(
+            exercise_id: String? = nil,
             exercise_name: String,
             muscle: String,
             sets: [ExportSet],
             volume_feedback: String? = nil
         ) {
+            self.exercise_id = exercise_id
             self.exercise_name = exercise_name
             self.muscle = muscle
             self.sets = sets
             self.volume_feedback = volume_feedback
         }
+    }
+
+    struct FixedReadinessResponsePayload: Codable, Equatable, Sendable {
+        let muscle: String
+        let soreness: String
+        let connective_tissue_pain: String
+        let eagerness: String
+    }
+
+    struct FixedReadinessPayload: Codable, Equatable, Sendable {
+        let observation_id: String
+        let local_date_key: String
+        let time_zone_identifier: String
+        let revision: Int
+        let created_at: String
+        let responses: [FixedReadinessResponsePayload]
+    }
+
+    struct FixedOccurrencePayload: Codable, Equatable, Sendable {
+        let position: Int
+        let exercise_id: String
+        let exercise_name: String
+        let muscle: String
+        let status: String
+        let skip_reason: String?
+    }
+
+    struct FixedSkipPayload: Codable, Equatable, Sendable {
+        let override_id: String
+        let kind: String
+        let slot_position: Int?
+        let exercise_id: String?
+        let muscle: String?
+        let reason: String
+        let created_at: String
+    }
+
+    struct FixedCycleMetadata: Codable, Equatable, Sendable {
+        let schema_version: Int
+        let template_id: String
+        let cycle_instance_id: String?
+        let day_label: String
+        let ordered_exercises: [FixedOccurrencePayload]
+        let readiness: [FixedReadinessPayload]
+        let skips: [FixedSkipPayload]
     }
 
     struct ExportPayload: Codable {
@@ -194,6 +271,7 @@ enum SessionExportService {
         let date: String
         let exercises: [ExportExercise]
         let workout_kind: String?
+        let fixed_cycle: FixedCycleMetadata?
 
         init(
             session_id: String,
@@ -201,7 +279,8 @@ enum SessionExportService {
             cycle_day_index: Int,
             date: String,
             exercises: [ExportExercise],
-            workout_kind: String? = nil
+            workout_kind: String? = nil,
+            fixed_cycle: FixedCycleMetadata? = nil
         ) {
             self.session_id = session_id
             self.cycle_name = cycle_name
@@ -209,6 +288,7 @@ enum SessionExportService {
             self.date = date
             self.exercises = exercises
             self.workout_kind = workout_kind
+            self.fixed_cycle = fixed_cycle
         }
     }
 
@@ -303,6 +383,157 @@ enum SessionExportService {
         let date: Date
         let exercises: [ExerciseSnapshot]
         let entries: [SetEntrySnapshot]
+        let fixedCycleMetadata: FixedCycleMetadata?
+    }
+
+    static func fixedCycleMetadata(
+        session: Session,
+        template: CycleTemplate,
+        day: CycleDay,
+        exercises: [Exercise],
+        setEntries: [SetEntry],
+        readiness: [FixedCycleReadinessObservation],
+        overrides: [FixedCycleOccurrenceOverride],
+        snapshots: [FixedCycleExerciseSnapshot] = []
+    ) -> FixedCycleMetadata {
+        let exerciseById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
+        let sessionOverrides = overrides.filter { $0.sessionId == session.id }
+        let skippedMuscles = Set(sessionOverrides.filter {
+            $0.kind == .skipMuscle
+        }.compactMap(\.muscle))
+        let skippedSlots = Dictionary(
+            uniqueKeysWithValues: sessionOverrides.compactMap { item -> (Int, String)? in
+                guard item.kind == .skipExercise, let position = item.slotPosition else { return nil }
+                return (position, item.reasonCode)
+            }
+        )
+        let muscleReasons = Dictionary(
+            uniqueKeysWithValues: sessionOverrides.compactMap { item -> (MuscleGroup, String)? in
+                guard item.kind == .skipMuscle, let muscle = item.muscle else { return nil }
+                return (muscle, item.reasonCode)
+            }
+        )
+        let sessionSnapshots = snapshots.filter { $0.sessionId == session.id }
+        let sortedSnapshots = sessionSnapshots.sorted {
+            if $0.position != $1.position { return $0.position < $1.position }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        let payloadForSnapshot: (FixedCycleExerciseSnapshot) -> FixedOccurrencePayload = { snapshot in
+            let reason = skippedSlots[snapshot.position] ?? muscleReasons[snapshot.muscle]
+            let completed = setEntries.contains { entry in
+                entry.sessionId == session.id
+                    && entry.exerciseId == snapshot.exerciseId
+                    && entry.isLocked
+                    && entry.reps > 0
+            }
+            let status = snapshot.statusRawValue == "planned"
+                ? (reason != nil ? "skipped" : (completed ? "completed" : "zero_set"))
+                : snapshot.statusRawValue
+            return FixedOccurrencePayload(
+                position: snapshot.position,
+                exercise_id: snapshot.exerciseId.uuidString,
+                exercise_name: snapshot.exerciseName,
+                muscle: snapshot.muscle.rawValue,
+                status: status,
+                skip_reason: snapshot.skipReason ?? reason
+            )
+        }
+        let payloadForSlot: (CycleSlot) -> FixedOccurrencePayload? = { slot in
+            guard let exercise = exerciseById[slot.exerciseId] else { return nil }
+            let reason = skippedSlots[slot.position] ?? muscleReasons[slot.muscle]
+            let completed = setEntries.contains {
+                $0.sessionId == session.id
+                    && $0.exerciseId == slot.exerciseId
+                    && $0.isLocked
+                    && $0.reps > 0
+            }
+            return FixedOccurrencePayload(
+                position: slot.position,
+                exercise_id: exercise.id.uuidString,
+                exercise_name: exercise.name,
+                muscle: slot.muscle.rawValue,
+                status: reason != nil || skippedMuscles.contains(slot.muscle)
+                    ? "skipped"
+                    : (completed ? "completed" : "zero_set"),
+                skip_reason: reason
+            )
+        }
+        let ordered: [FixedOccurrencePayload]
+        if !sessionSnapshots.isEmpty
+            && !sessionSnapshots.contains(where: { $0.statusRawValue == "planned" }) {
+            // A completed occurrence owns an immutable final snapshot. Export
+            // retries must not consult a template that may have changed later.
+            ordered = sortedSnapshots.map(payloadForSnapshot)
+        } else if !sessionSnapshots.isEmpty {
+            // Draft-time snapshots are staged only to retain performed work
+            // across a persistent removal. Merge that evidence with the
+            // current day so later additions or replacements in the same
+            // draft are not lost when the final snapshot is published.
+            let current = CycleOrdering.sortedSlots(day.slots).compactMap(payloadForSlot)
+            let currentExerciseIds = Set(day.slots.map(\.exerciseId))
+            let retainedPerformed = sortedSnapshots.filter { snapshot in
+                !currentExerciseIds.contains(snapshot.exerciseId)
+                    && setEntries.contains { entry in
+                        entry.sessionId == session.id
+                            && entry.exerciseId == snapshot.exerciseId
+                            && entry.isLocked
+                            && entry.reps > 0
+                    }
+            }.map(payloadForSnapshot)
+            ordered = (current + retainedPerformed).sorted {
+                if $0.position != $1.position { return $0.position < $1.position }
+                return $0.exercise_id < $1.exercise_id
+            }
+        } else {
+            ordered = CycleOrdering.sortedSlots(day.slots).compactMap(payloadForSlot)
+        }
+        let iso = ISO8601DateFormatter()
+        return FixedCycleMetadata(
+            schema_version: 2,
+            template_id: template.id.uuidString,
+            cycle_instance_id: session.cycleInstanceId.uuidString,
+            day_label: day.label,
+            ordered_exercises: ordered,
+            readiness: readiness
+                .filter { $0.sessionId == session.id }
+                .sorted {
+                    if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                    return $0.revision < $1.revision
+                }
+                .map { observation in
+                    FixedReadinessPayload(
+                        observation_id: observation.id.uuidString,
+                        local_date_key: observation.localDateKey,
+                        time_zone_identifier: observation.timeZoneIdentifier,
+                        revision: observation.revision,
+                        created_at: iso.string(from: observation.createdAt),
+                        responses: observation.responses
+                            .sorted { $0.muscle.rawValue < $1.muscle.rawValue }
+                            .map {
+                                FixedReadinessResponsePayload(
+                                    muscle: $0.muscle.rawValue,
+                                    soreness: $0.soreness.rawValue,
+                                    connective_tissue_pain: $0.connectiveTissuePain.rawValue,
+                                    eagerness: $0.eagerness.rawValue
+                                )
+                            }
+                    )
+                },
+            skips: sessionOverrides.sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }.map {
+                FixedSkipPayload(
+                    override_id: $0.id.uuidString,
+                    kind: $0.kind.rawValue,
+                    slot_position: $0.slotPosition,
+                    exercise_id: $0.exerciseId?.uuidString,
+                    muscle: $0.muscle?.rawValue,
+                    reason: $0.reasonCode,
+                    created_at: iso.string(from: $0.createdAt)
+                )
+            }
+        )
     }
 
     @discardableResult
@@ -313,17 +544,25 @@ enum SessionExportService {
         setEntries: [SetEntry],
         requireICloudMirror: Bool = false,
         adHocFeedback: [AdHocExerciseFeedback] = [],
+        fixedCycleMetadata: FixedCycleMetadata? = nil,
         environment: ExportEnvironment = .live()
     ) throws -> ExportWriteOutcome {
         let loggedEntries = setEntries.filter { $0.reps > 0 }
         let grouped = Dictionary(grouping: loggedEntries, by: { $0.exerciseId })
 
+        let orderedPositions = Dictionary(
+            fixedCycleMetadata?.ordered_exercises.compactMap { item in
+                UUID(uuidString: item.exercise_id).map { ($0, item.position) }
+            } ?? [],
+            uniquingKeysWith: min
+        )
         let exportExercises: [ExportExercise] = grouped.compactMap { exerciseId, entries in
             guard let ex = exercises.first(where: { $0.id == exerciseId }) else { return nil }
             let sets = entries
                 .sorted { $0.setIndex < $1.setIndex }
                 .map { ExportSet(set_index: $0.setIndex, weight: $0.weight, reps: $0.reps) }
             return ExportExercise(
+                exercise_id: ex.id.uuidString,
                 exercise_name: ex.name,
                 muscle: ex.primaryMuscle.rawValue,
                 sets: sets,
@@ -333,7 +572,14 @@ enum SessionExportService {
                     .rating.rawValue
             )
         }
-        .sorted { $0.exercise_name < $1.exercise_name }
+        .sorted {
+            let left = $0.exercise_id.flatMap(UUID.init(uuidString:))
+                .flatMap { orderedPositions[$0] } ?? Int.max
+            let right = $1.exercise_id.flatMap(UUID.init(uuidString:))
+                .flatMap { orderedPositions[$0] } ?? Int.max
+            if left != right { return left < right }
+            return $0.exercise_name < $1.exercise_name
+        }
 
         let payload = ExportPayload(
             session_id: session.id.uuidString,
@@ -341,7 +587,8 @@ enum SessionExportService {
             cycle_day_index: session.cycleDayIndex,
             date: ISO8601DateFormatter().string(from: session.finishedAt ?? .now),
             exercises: exportExercises,
-            workout_kind: session.dayLabelSnapshot == "Off-Schedule" ? "ad_hoc" : "rotation"
+            workout_kind: session.dayLabelSnapshot == "Off-Schedule" ? "ad_hoc" : "rotation",
+            fixed_cycle: fixedCycleMetadata
         )
 
         let data = try JSONEncoder.pretty.encode(payload)
@@ -365,6 +612,7 @@ enum SessionExportService {
         setEntries: [SetEntry],
         requireICloudMirror: Bool,
         adHocFeedback: [AdHocExerciseFeedback] = [],
+        fixedCycleMetadata: FixedCycleMetadata? = nil,
         modelContext: ModelContext,
         environment: ExportEnvironment = .live()
     ) throws -> ExportWriteOutcome {
@@ -376,6 +624,7 @@ enum SessionExportService {
                 setEntries: setEntries,
                 requireICloudMirror: requireICloudMirror,
                 adHocFeedback: adHocFeedback,
+                fixedCycleMetadata: fixedCycleMetadata,
                 environment: environment
             )
             session.exportStatus = outcome.status
@@ -577,6 +826,7 @@ enum SessionExportService {
                 .sorted { $0.setIndex < $1.setIndex }
                 .map { ExportSet(set_index: $0.setIndex, weight: $0.weight, reps: $0.reps) }
             return ExportExercise(
+                exercise_id: exercise.id.uuidString,
                 exercise_name: exercise.name,
                 muscle: exercise.muscle,
                 sets: sets
@@ -590,7 +840,8 @@ enum SessionExportService {
             cycle_day_index: snapshot.cycleDayIndex,
             date: ISO8601DateFormatter().string(from: snapshot.date),
             exercises: exportExercises,
-            workout_kind: "rotation"
+            workout_kind: "rotation",
+            fixed_cycle: snapshot.fixedCycleMetadata
         )
 
         let data = try JSONEncoder.pretty.encode(payload)
@@ -994,6 +1245,23 @@ enum AdaptiveReadinessExportService {
 }
 
 enum AdaptiveExportService {
+    enum CompletedSessionRetryError: LocalizedError {
+        case sessionMissing(UUID)
+        case planMissing(UUID)
+        case readinessMissing(UUID)
+
+        var errorDescription: String? {
+            switch self {
+            case .sessionMissing(let id):
+                return "Completed Adaptive session \(id.uuidString) is missing."
+            case .planMissing(let id):
+                return "Generated plan \(id.uuidString) is missing."
+            case .readinessMissing(let id):
+                return "Readiness check \(id.uuidString) is missing."
+            }
+        }
+    }
+
     struct ReadinessResponseV2: Codable, Equatable {
         let muscle: String
         let soreness: String
@@ -1340,6 +1608,134 @@ enum AdaptiveExportService {
             }
         }
         return sessions.filter { $0.exportStatus == .success }.count
+    }
+
+    /// Retries exactly one completed Adaptive session. Explicit live-data
+    /// repairs use this instead of the broad background retry so unrelated
+    /// pending export rows and diagnostics remain untouched.
+    @MainActor
+    @discardableResult
+    static func retryCompletedSessionExport(
+        sessionId: UUID,
+        modelContext: ModelContext,
+        environment: SessionExportService.ExportEnvironment = .live()
+    ) throws -> SessionExportService.ExportWriteOutcome {
+        let sessions = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+        guard let session = sessions.first(where: {
+            $0.id == sessionId && $0.status == .completed
+        }) else {
+            throw CompletedSessionRetryError.sessionMissing(sessionId)
+        }
+        let plans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        guard let plan = plans.first(where: { $0.id == session.generatedPlanId }) else {
+            throw CompletedSessionRetryError.planMissing(session.generatedPlanId)
+        }
+        let checks = try modelContext.fetch(FetchDescriptor<DailyReadinessCheck>())
+        guard let readiness = checks.first(where: { $0.id == plan.readinessCheckId }) else {
+            throw CompletedSessionRetryError.readinessMissing(plan.readinessCheckId)
+        }
+        let entries = try modelContext.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let overrides = try modelContext.fetch(FetchDescriptor<AdaptiveOverrideEvent>())
+        let feedback = try modelContext.fetch(FetchDescriptor<ComplexFeedback>())
+        do {
+            let payloadData = try encode(
+                makePayload(
+                    plan: plan,
+                    session: session,
+                    readiness: readiness,
+                    setEntries: entries,
+                    exercises: exercises,
+                    overrides: overrides,
+                    feedback: feedback
+                )
+            )
+            try replaceExistingExportCopies(
+                data: payloadData,
+                sessionId: sessionId,
+                environment: environment
+            )
+            let outcome = try exportAndTrack(
+                plan: plan,
+                session: session,
+                readiness: readiness,
+                setEntries: entries,
+                exercises: exercises,
+                overrides: overrides,
+                feedback: feedback,
+                requireICloudMirror: true,
+                modelContext: modelContext,
+                environment: environment
+            )
+            try modelContext.save()
+            return outcome
+        } catch {
+            try? modelContext.save()
+            throw error
+        }
+    }
+
+    /// Replaces only valid Adaptive export copies carrying the target session
+    /// ID. This preserves old filenames while ensuring recovery cannot select
+    /// a stale same-session fallback after a one-time data repair.
+    private static func replaceExistingExportCopies(
+        data: Data,
+        sessionId: UUID,
+        environment: SessionExportService.ExportEnvironment
+    ) throws {
+        var destinations: [(directory: URL, coordinated: Bool)] = []
+        if let iCloud = environment.iCloudContainerURL {
+            destinations.append(
+                (
+                    SessionExportService.exportDirectory(
+                        containerURL: iCloud,
+                        relativeSubdirectory: "exports"
+                    ),
+                    true
+                )
+            )
+        }
+        if let documents = environment.localDocumentsURL {
+            destinations.append(
+                (
+                    documents
+                        .appendingPathComponent("OpenLift", isDirectory: true)
+                        .appendingPathComponent("exports", isDirectory: true),
+                    false
+                )
+            )
+        }
+
+        var visitedPaths = Set<String>()
+        for destination in destinations {
+            let directory = destination.directory.standardizedFileURL
+            guard visitedPaths.insert(directory.path).inserted,
+                  let files = try? FileManager.default.contentsOfDirectory(
+                      at: directory,
+                      includingPropertiesForKeys: nil,
+                      options: [.skipsHiddenFiles]
+                  ) else {
+                continue
+            }
+            for file in files where
+                file.pathExtension == "json"
+                    && file.lastPathComponent.hasPrefix("workout-") {
+                guard let oldData = try? Data(contentsOf: file),
+                      let oldPayload = decode(oldData),
+                      oldPayload.session_id == sessionId.uuidString,
+                      oldData != data else {
+                    continue
+                }
+                if destination.coordinated {
+                    try environment.coordinatedWrite(data, file)
+                } else {
+                    try data.write(to: file, options: [.atomic])
+                }
+                guard (try? Data(contentsOf: file)) == data else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+            }
+        }
     }
 
     static func loadPayloads() -> [PayloadV2] {
