@@ -17,6 +17,65 @@ V8 adds parallel per-muscle exposure configuration. The V7 and V8 lightweight
 migrations do not alter legacy sessions, completed Adaptive snapshots, volume
 rows, or export records. Exposure-controller rows are initialized only after
 the store opens successfully and no open Adaptive plan would be invalidated.
+V9 adds only parallel Fixed Cycle readiness-response, occurrence-skip, and
+ordered completed-occurrence snapshot entities. No shipped V1-V8 entity shape
+or checksum is modified.
+
+## Push/Pull A/B one-time rollout
+
+`BootstrapDataService.preparePushPullABRollout` is an explicit migration
+operation, not normal bootstrap seeding. Before invoking it against a real
+store, quiesce OpenLift and make a verified copy of the SQLite store together
+with its `-wal` and `-shm` sidecars under the procedure below. The operation:
+
+1. refuses any active Fixed Cycle or Adaptive draft containing locked, entered,
+   or nonzero work;
+2. preserves completed history and the old template;
+3. retires only an empty old draft;
+4. creates or reuses the Push/Pull A/B template without overwriting a
+   previously edited copy;
+5. selects Fixed Cycle and Push A for the initial workout; and
+6. writes a durable rollout marker referencing the created template.
+
+The marker is checked before any pointer mutation. Re-running the operation
+after success cannot rewind the pointer even if the user later selects Adaptive.
+The command-line launch argument is
+`OPENLIFT_PREPARE_PUSH_PULL_ROLLOUT`; it must be used only after backup and
+live-state inspection. If entered drafts were explicitly preserved in that
+backup, `OPENLIFT_ARCHIVED_PUSH_PULL_DRAFTS_CONFIRMED` authorizes the rollout
+to retire unlocked Fixed Cycle draft rows and preserve locked Adaptive work as
+a completed session while dropping only its editable autofill rows. Locked
+Fixed Cycle work and malformed Adaptive drafts still block. Merely launching
+or upgrading the app never runs either path.
+
+## July 27 Adaptive Incline Curl one-time repair
+
+`BootstrapDataService.repairJuly27AdaptiveInclineCurl` is an explicit,
+idempotent live-data repair for the completed `2026-07-27` Adaptive session
+`08476AD8-9550-4A33-94DF-55B12E6161F2` and Incline Curl exercise
+`96C071BF-05E2-467C-8357-CFE375C5C162`, archived by the Push/Pull rollout. It
+runs only when both
+`OPENLIFT_REPAIR_2026_07_27_ADAPTIVE_INCLINE_CURL` and
+`OPENLIFT_2026_07_27_ADAPTIVE_INCLINE_CURL_BACKUP_CONFIRMED` are supplied.
+The second argument may be supplied only after OpenLift is quiesced and a
+verified copy of the SQLite store plus its `-wal` and `-shm` sidecars exists.
+
+The repair additionally requires the durable Push/Pull rollout marker, Fixed
+Cycle mode, and the marked cycle still pointing at Push A. It refuses ambiguous
+July 27 sessions, ambiguous Incline Curl occurrences, or any entry shape other
+than the known single locked `20 lb × 13` set (or the exact repaired state).
+It inserts locked sets 2 and 3 at `20 lb × 9` and `20 lb × 7`, preserves every
+other row and all Fixed Cycle state, writes a durable repair marker, and marks
+the completed Adaptive session export pending. Startup immediately invokes the
+Adaptive exporter for that repaired session only, so the canonical session
+export is replaced with the corrected payload without touching unrelated
+pending export metadata. Before writing the canonical filename, the retry also
+replaces every valid local or iCloud Adaptive export copy whose payload carries
+that exact session ID; this prevents recovery from selecting one of the older
+single-set fallback files. Filenames are preserved and unrelated or malformed
+files are not changed. Re-running the two arguments validates the marker and
+repaired state without adding or changing sets, while still allowing a pending
+export retry to finish.
 
 ## Startup failure contract
 

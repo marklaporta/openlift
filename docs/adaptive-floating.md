@@ -61,7 +61,7 @@ clock. The persisted lateral-delt raw value remains `sideDelts` so old stores
 continue to decode.
 
 Cycle contains the one Adaptive profile editor. A profile stores strict muscle
-priorities, editable per-exposure doses, editable recovery cadence, optional
+priorities, editable fallback doses, editable recovery cadence, optional
 exercise splits, enablement, and workout capacity. The initial capacity is five
 muscle groups, seven exercises, no more than two exercises per muscle, and
 fifteen working sets. The automatic planner never prescribes more than four sets
@@ -144,8 +144,12 @@ Saving an edit creates a new immutable profile and complex version. The starter 
 labelled as requiring review and cannot invent catalog exercises for a missing
 muscle.
 
-The volume settings and capacity are user-editable. Saving always creates a new
-profile version; existing completed plans and exports retain their snapshots.
+Fallback volume settings and capacity are user-editable. When qualifying
+exercise history exists, the next execution instead copies that effort's exact
+set count, weights, and reps. The user may edit the copy; no readiness,
+feedback, recovery, or performance label changes the set count automatically.
+Saving always creates a new profile version; existing completed plans and
+exports retain their snapshots.
 
 ## Readiness before difficulty
 
@@ -166,8 +170,8 @@ idempotent `adaptive_readiness` snapshot is then mirrored asynchronously under
 hydrated by the completed-workout importer. A local recovery copy remains
 pending rather than being reported as an iCloud success.
 
-None and Light soreness are automatically trainable with normal set dosing and
-progression. Light loses an otherwise equal scheduling tie to None. Moderate
+None and Light soreness are automatically trainable. Light loses an otherwise
+equal scheduling tie to None. Moderate
 and Heavy both hold the muscle out of automatic proposals; manual Add Complex
 and exercise edits remain available without a warning or confirmation.
 
@@ -182,7 +186,8 @@ chest does not bar triceps the next day, and secondary loading from back does
 not bar biceps. Shoulders are explicitly eligible on consecutive days when
 their current readiness is clear; soreness and pain answers still override.
 
-Completed Rotation and ad hoc sets contribute to the muscle load/recovery
-ledger. Ad hoc volume feedback is retained and may contribute conservatively to
-a future dose recommendation, but ad hoc work and substitutions remain excluded
-from like-for-like Adaptive-complex performance comparisons.
+Completed Fixed Cycle and ad hoc sets contribute to the muscle load/recovery
+ledger and to global canonical-exercise repeat-last lookup. Ad hoc volume
+feedback is retained as a note but cannot change a future dose. Ad hoc work and
+substitutions remain excluded from like-for-like Adaptive-complex performance
+comparisons.

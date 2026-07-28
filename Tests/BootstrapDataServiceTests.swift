@@ -1115,6 +1115,36 @@ final class CycleActivationConfirmationTests: XCTestCase {
 }
 
 final class OpenLiftStateResolverTests: XCTestCase {
+    func testPreferredTemplateOverridesRecentHistoryDuringExplicitActivation() {
+        let previous = CycleTemplate(
+            name: "4D Upper/Lower",
+            days: [CycleDay(label: "Upper A", slots: [])]
+        )
+        let requested = CycleTemplate(
+            name: "Push/Pull A/B",
+            days: [CycleDay(label: "Push A", slots: [])]
+        )
+        let recent = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            cycleNameSnapshot: previous.name,
+            createdAt: Date(timeIntervalSince1970: 100),
+            finishedAt: Date(timeIntervalSince1970: 120),
+            status: .completed,
+            exportStatus: .success
+        )
+
+        let selected = OpenLiftStateResolver.preferredTemplate(
+            templates: [previous, requested],
+            sessions: [recent],
+            latestExport: nil,
+            preferredTemplateId: requested.id,
+            preferredTemplateName: requested.name
+        )
+
+        XCTAssertEqual(selected?.id, requested.id)
+    }
+
     func testDraftSessionIdsOnlyIncludesDraftsForRequestedCycle() {
         let targetCycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 0)
         let otherCycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 1)

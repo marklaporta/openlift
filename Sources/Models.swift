@@ -73,6 +73,11 @@ enum ExportSessionKind: String, Codable {
     case adaptiveReadiness
 }
 
+enum FixedCycleOccurrenceOverrideKind: String, Codable, CaseIterable, Hashable {
+    case skipExercise
+    case skipMuscle
+}
+
 /// Persistent evidence for the distinction between a recovery mirror, a file
 /// queued in the ubiquitous container, and an item confirmed uploaded by iCloud.
 @Model
@@ -1212,5 +1217,128 @@ final class SessionSlotOverride {
         self.sessionId = sessionId
         self.slotPosition = slotPosition
         self.exerciseId = exerciseId
+    }
+}
+
+/// An immutable, dated readiness revision associated with one Fixed Cycle
+/// draft. The draft can span local dates, so more than one observation may
+/// legitimately point at the same session.
+@Model
+final class FixedCycleReadinessObservation {
+    @Attribute(.unique) var id: UUID
+    var sessionId: UUID
+    var localDateKey: String
+    var timeZoneIdentifier: String
+    var revision: Int
+    var createdAt: Date
+    @Relationship(deleteRule: .cascade) var responses: [FixedCycleReadinessResponse]
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        localDateKey: String,
+        timeZoneIdentifier: String,
+        revision: Int,
+        createdAt: Date = .now,
+        responses: [FixedCycleReadinessResponse]
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.localDateKey = localDateKey
+        self.timeZoneIdentifier = timeZoneIdentifier
+        self.revision = revision
+        self.createdAt = createdAt
+        self.responses = responses
+    }
+}
+
+@Model
+final class FixedCycleReadinessResponse {
+    @Attribute(.unique) var id: UUID
+    var muscle: MuscleGroup
+    var soreness: SorenessLevel
+    var connectiveTissuePain: ConnectiveTissuePainLevel
+    var eagerness: EagernessLevel
+
+    init(
+        id: UUID = UUID(),
+        muscle: MuscleGroup,
+        soreness: SorenessLevel,
+        connectiveTissuePain: ConnectiveTissuePainLevel,
+        eagerness: EagernessLevel
+    ) {
+        self.id = id
+        self.muscle = muscle
+        self.soreness = soreness
+        self.connectiveTissuePain = connectiveTissuePain
+        self.eagerness = eagerness
+    }
+}
+
+/// Occurrence-only provenance. These rows never mutate the template and are
+/// retained after completion for history/export recovery.
+@Model
+final class FixedCycleOccurrenceOverride {
+    @Attribute(.unique) var id: UUID
+    var sessionId: UUID
+    var kind: FixedCycleOccurrenceOverrideKind
+    var slotPosition: Int?
+    var exerciseId: UUID?
+    var muscle: MuscleGroup?
+    var reasonCode: String
+    var createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        kind: FixedCycleOccurrenceOverrideKind,
+        slotPosition: Int? = nil,
+        exerciseId: UUID? = nil,
+        muscle: MuscleGroup? = nil,
+        reasonCode: String,
+        createdAt: Date = .now
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.kind = kind
+        self.slotPosition = slotPosition
+        self.exerciseId = exerciseId
+        self.muscle = muscle
+        self.reasonCode = reasonCode
+        self.createdAt = createdAt
+    }
+}
+
+/// Immutable ordered membership for a completed Fixed Cycle occurrence. This
+/// keeps history/export retries independent of later template edits.
+@Model
+final class FixedCycleExerciseSnapshot {
+    @Attribute(.unique) var id: UUID
+    var sessionId: UUID
+    var position: Int
+    var exerciseId: UUID
+    var exerciseName: String
+    var muscle: MuscleGroup
+    var statusRawValue: String
+    var skipReason: String?
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        position: Int,
+        exerciseId: UUID,
+        exerciseName: String,
+        muscle: MuscleGroup,
+        statusRawValue: String,
+        skipReason: String? = nil
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.position = position
+        self.exerciseId = exerciseId
+        self.exerciseName = exerciseName
+        self.muscle = muscle
+        self.statusRawValue = statusRawValue
+        self.skipReason = skipReason
     }
 }

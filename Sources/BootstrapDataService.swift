@@ -2,6 +2,69 @@ import Foundation
 import SwiftData
 
 enum BootstrapDataService {
+    enum July27AdaptiveInclineCurlRepairError: LocalizedError, Equatable {
+        case backupConfirmationRequired
+        case pushAStateMissing
+        case targetSessionNotFound
+        case ambiguousTargetSessions(count: Int)
+        case inclineCurlExerciseMissing
+        case inclineCurlOccurrenceNotFound
+        case ambiguousInclineCurlOccurrences(count: Int)
+        case unexpectedExistingSets
+        case completedRepairStateMissing
+
+        var errorDescription: String? {
+            switch self {
+            case .backupConfirmationRequired:
+                return "A verified backup of the live SQLite store and its WAL/SHM sidecars must be confirmed before repairing the July 27 Adaptive Incline Curl sets."
+            case .pushAStateMissing:
+                return "The marked Push/Pull A/B Fixed Cycle is not currently active on Push A. Refusing to run the live-data repair."
+            case .targetSessionNotFound:
+                return "No completed Adaptive session for 2026-07-27 was found."
+            case .ambiguousTargetSessions(let count):
+                return "Found \(count) completed Adaptive sessions for 2026-07-27. Refusing to choose one."
+            case .inclineCurlExerciseMissing:
+                return "The Incline Curl exercise is missing or ambiguous in the exercise catalog."
+            case .inclineCurlOccurrenceNotFound:
+                return "The July 27 Adaptive plan does not contain an Incline Curl occurrence."
+            case .ambiguousInclineCurlOccurrences(let count):
+                return "The July 27 Adaptive plan contains \(count) Incline Curl occurrences. Refusing to choose one."
+            case .unexpectedExistingSets:
+                return "The July 27 Incline Curl rows do not match either the known single saved set (20 lb × 13) or the completed repaired state. Refusing to overwrite unexpected workout data."
+            case .completedRepairStateMissing:
+                return "The one-time July 27 Incline Curl repair is marked complete, but its repaired session or exact set state is missing."
+            }
+        }
+    }
+
+    struct July27AdaptiveInclineCurlRepairResult: Equatable {
+        let sessionId: UUID
+        let didApply: Bool
+    }
+
+    enum PushPullRolloutError: LocalizedError, Equatable {
+        case nonEmptyDraft(sessionId: UUID)
+        case requiredExerciseMissing(String)
+        case completedRolloutStateMissing
+
+        var errorDescription: String? {
+            switch self {
+            case .nonEmptyDraft(let sessionId):
+                return "The current draft \(sessionId.uuidString) contains entered or locked work. Preserve it and resolve that draft before activating Push/Pull A/B."
+            case .requiredExerciseMissing(let name):
+                return "Required Push/Pull exercise '\(name)' is missing from the catalog."
+            case .completedRolloutStateMissing:
+                return "The Push/Pull A/B rollout is already marked complete, but its template or cycle is missing. Refusing to recreate it or reset a pointer automatically."
+            }
+        }
+    }
+
+    struct PushPullRolloutResult: Equatable {
+        let templateId: UUID
+        let cycleId: UUID
+        let didApply: Bool
+    }
+
     struct WorkoutImportResult {
         var imported = 0
         var skippedExisting = 0
@@ -267,10 +330,12 @@ enum BootstrapDataService {
     ) throws -> WorkoutImportResult {
         let catalog = try ensureExerciseCatalog(modelContext: modelContext)
         let exercisesByName = Dictionary(uniqueKeysWithValues: catalog.map { ($0.name.lowercased(), $0) })
+        let exercisesById = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
         var sessionsById: [UUID: Session] = [:]
         for session in try modelContext.fetch(FetchDescriptor<Session>()) {
             sessionsById[session.id] = session
         }
+        let availableCycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
         var entriesByKey: [ImportedSetKey: SetEntry] = [:]
         for entry in try modelContext.fetch(FetchDescriptor<SetEntry>()) {
             let key = ImportedSetKey(
@@ -289,6 +354,17 @@ enum BootstrapDataService {
         }
 
         var result = WorkoutImportResult()
+        var readinessIds = Set(
+            try modelContext.fetch(FetchDescriptor<FixedCycleReadinessObservation>()).map(\.id)
+        )
+        var fixedOverrideIds = Set(
+            try modelContext.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>()).map(\.id)
+        )
+        var fixedSnapshotKeys = Set(
+            try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>()).map {
+                "\($0.sessionId.uuidString)|\($0.position)|\($0.exerciseId.uuidString)"
+            }
+        )
 
         for export in exports {
             guard let sessionId = UUID(uuidString: export.session_id),
@@ -298,11 +374,15 @@ enum BootstrapDataService {
             if let existing = sessionsById[sessionId] {
                 session = existing
                 result.skippedExisting += 1
-                guard export.workout_kind == "ad_hoc" else { continue }
             } else {
+                let destinationCycle = export.fixed_cycle
+                    .flatMap { UUID(uuidString: $0.template_id) }
+                    .flatMap { templateId in
+                        availableCycles.first(where: { $0.templateId == templateId })
+                    } ?? cycle
                 session = Session(
                     id: sessionId,
-                    cycleInstanceId: cycle.id,
+                    cycleInstanceId: destinationCycle.id,
                     cycleDayIndex: export.cycle_day_index,
                     cycleNameSnapshot: export.cycle_name,
                     dayLabelSnapshot: export.workout_kind == "ad_hoc"
@@ -327,7 +407,18 @@ enum BootstrapDataService {
             }
 
             for exportExercise in export.exercises {
-                guard let exercise = exercisesByName[exportExercise.exercise_name.lowercased()] else {
+                let orderedMetadata = export.fixed_cycle?.ordered_exercises ?? []
+                let metadataExerciseId = orderedMetadata.first(where: {
+                    $0.exercise_name.caseInsensitiveCompare(exportExercise.exercise_name)
+                        == .orderedSame
+                }).flatMap { UUID(uuidString: $0.exercise_id) }
+                guard let exercise = resolveImportedExercise(
+                    id: exportExercise.exercise_id.flatMap(UUID.init(uuidString:))
+                        ?? metadataExerciseId,
+                    name: exportExercise.exercise_name,
+                    byId: exercisesById,
+                    byName: exercisesByName
+                ) else {
                     result.skippedUnknownExercises += 1
                     continue
                 }
@@ -371,12 +462,141 @@ enum BootstrapDataService {
                     }
                 }
             }
+
+            if let metadata = export.fixed_cycle {
+                session.dayLabelSnapshot = metadata.day_label
+                for payload in metadata.readiness {
+                    guard let id = UUID(uuidString: payload.observation_id),
+                          !readinessIds.contains(id) else { continue }
+                    let responses = payload.responses.compactMap { response -> FixedCycleReadinessResponse? in
+                        guard let muscle = MuscleGroup(rawValue: response.muscle),
+                              let soreness = SorenessLevel.decodeStoredOrExportedValue(response.soreness),
+                              let pain = ConnectiveTissuePainLevel(rawValue: response.connective_tissue_pain),
+                              let eagerness = EagernessLevel(rawValue: response.eagerness) else {
+                            return nil
+                        }
+                        return FixedCycleReadinessResponse(
+                            muscle: muscle,
+                            soreness: soreness,
+                            connectiveTissuePain: pain,
+                            eagerness: eagerness
+                        )
+                    }
+                    guard responses.count == payload.responses.count else { continue }
+                    modelContext.insert(
+                        FixedCycleReadinessObservation(
+                            id: id,
+                            sessionId: session.id,
+                            localDateKey: payload.local_date_key,
+                            timeZoneIdentifier: payload.time_zone_identifier,
+                            revision: payload.revision,
+                            createdAt: SessionExportService.parseExportDate(payload.created_at) ?? finishedAt,
+                            responses: responses
+                        )
+                    )
+                    readinessIds.insert(id)
+                }
+                for payload in metadata.skips {
+                    guard let id = UUID(uuidString: payload.override_id),
+                          !fixedOverrideIds.contains(id),
+                          let kind = FixedCycleOccurrenceOverrideKind(rawValue: payload.kind) else {
+                        continue
+                    }
+                    modelContext.insert(
+                        FixedCycleOccurrenceOverride(
+                            id: id,
+                            sessionId: session.id,
+                            kind: kind,
+                            slotPosition: payload.slot_position,
+                            exerciseId: payload.exercise_id.flatMap(UUID.init(uuidString:)),
+                            muscle: payload.muscle.flatMap(MuscleGroup.init(rawValue:)),
+                            reasonCode: payload.reason,
+                            createdAt: SessionExportService.parseExportDate(payload.created_at) ?? finishedAt
+                        )
+                    )
+                    fixedOverrideIds.insert(id)
+                }
+                for payload in metadata.ordered_exercises {
+                    guard let exerciseId = UUID(uuidString: payload.exercise_id),
+                          let muscle = MuscleGroup(rawValue: payload.muscle) else {
+                        continue
+                    }
+                    let key = "\(session.id.uuidString)|\(payload.position)|\(exerciseId.uuidString)"
+                    guard !fixedSnapshotKeys.contains(key) else { continue }
+                    modelContext.insert(
+                        FixedCycleExerciseSnapshot(
+                            sessionId: session.id,
+                            position: payload.position,
+                            exerciseId: exerciseId,
+                            exerciseName: payload.exercise_name,
+                            muscle: muscle,
+                            statusRawValue: payload.status,
+                            skipReason: payload.skip_reason
+                        )
+                    )
+                    fixedSnapshotKeys.insert(key)
+                }
+            }
         }
 
         if modelContext.hasChanges {
             try modelContext.save()
         }
         return result
+    }
+
+    static func resolveImportedExercise(
+        id: UUID?,
+        name: String,
+        byId: [UUID: Exercise],
+        byName: [String: Exercise]
+    ) -> Exercise? {
+        if let id, let exact = byId[id] {
+            return exact
+        }
+        if let exact = byName[name.lowercased()] {
+            return exact
+        }
+        let canonicalCatalog = Dictionary(
+            byName.values.map { (canonicalExerciseName($0.name), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let canonical = canonicalExerciseName(name)
+        if let exact = canonicalCatalog[canonical] {
+            return exact
+        }
+        for alias in safeExerciseAliases(for: canonical) {
+            if let match = canonicalCatalog[alias] {
+                return match
+            }
+        }
+        return nil
+    }
+
+    private static func canonicalExerciseName(_ name: String) -> String {
+        name.lowercased()
+            .replacingOccurrences(of: "dumbell", with: "dumbbell")
+            .replacingOccurrences(of: "ez-bar", with: "ez bar")
+            .replacingOccurrences(of: "ezbar", with: "ez bar")
+            .unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+    }
+
+    private static func safeExerciseAliases(for canonical: String) -> [String] {
+        switch canonical {
+        case "stifflegdeadlift", "stiffleggedeadlift", "sldl":
+            return ["stifflegdeadlift", "stiffleggedeadlift", "sldl"]
+        case "singlearmdumbbellrow", "singlearmdumbellrow", "singlearmdbrow":
+            return ["singlearmdumbbellrow", "singlearmdumbellrow", "singlearmdbrow"]
+        case "dumbbellpreachercurl", "dumbellpreachercurl", "dbpreachercurl":
+            return ["dumbbellpreachercurl", "dumbellpreachercurl", "dbpreachercurl"]
+        case "overheadezbarextension", "overheadezextension", "ezbaroverheadextension":
+            return ["overheadezbarextension", "overheadezextension", "ezbaroverheadextension"]
+        default:
+            return []
+        }
     }
 
     /// Performs the one-time, explicit device rollout requested by the user:
@@ -427,6 +647,530 @@ enum BootstrapDataService {
             modelContext: modelContext
         )
         return result
+    }
+
+    /// Explicit, one-time rollout path. Callers are responsible for quiescing
+    /// and backing up the live store before invoking this mutation.
+    ///
+    /// A successfully active Push/Pull cycle is the durable idempotency
+    /// predicate. Re-running this function never rewinds its pointer.
+    @discardableResult
+    static func preparePushPullABRollout(
+        modelContext: ModelContext,
+        archivedDraftsConfirmed: Bool = false
+    ) throws -> PushPullRolloutResult {
+        do {
+            return try preparePushPullABRolloutTransaction(
+                modelContext: modelContext,
+                archivedDraftsConfirmed: archivedDraftsConfirmed
+            )
+        } catch {
+            // The caller may continue normal startup work after reporting a
+            // blocked rollout. Do not leave unsaved migration mutations in the
+            // context where an unrelated later save could commit them.
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    private static func preparePushPullABRolloutTransaction(
+        modelContext: ModelContext,
+        archivedDraftsConfirmed: Bool
+    ) throws -> PushPullRolloutResult {
+        let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let cycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+        let sessions = try modelContext.fetch(FetchDescriptor<Session>())
+        let entries = try modelContext.fetch(FetchDescriptor<SetEntry>())
+        let adaptiveSessions = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+        let adaptiveEntries = try modelContext.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        let generatedPlans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        let preferences = try modelContext.fetch(FetchDescriptor<TrainingPreference>())
+        let adaptivePrograms = try modelContext.fetch(FetchDescriptor<AdaptiveProgram>())
+        if let marker = preferences.first(where: { $0.key == pushPullRolloutMarkerKey }) {
+            guard let templateId = UUID(uuidString: marker.modeRawValue),
+                  let template = templates.first(where: { $0.id == templateId }),
+                  let cycle = cycles.first(where: { $0.templateId == template.id }) else {
+                throw PushPullRolloutError.completedRolloutStateMissing
+            }
+            return PushPullRolloutResult(
+                templateId: template.id,
+                cycleId: cycle.id,
+                didApply: false
+            )
+        }
+        let preferredTemplateId = UserDefaults.standard
+            .string(forKey: "openlift.lastActivatedTemplateId")
+            .flatMap(UUID.init(uuidString:))
+
+        let activeCycle = OpenLiftStateResolver.activeCycle(
+            activeCycles: cycles,
+            templates: templates,
+            sessions: sessions,
+            latestExport: nil,
+            preferredTemplateId: preferredTemplateId
+        )
+        let activeTemplate = activeCycle.flatMap { cycle in
+            templates.first(where: { $0.id == cycle.templateId })
+        }
+        let activeDrafts = sessions.filter {
+            $0.status == .draft && (activeCycle == nil || $0.cycleInstanceId == activeCycle?.id)
+        }
+        for draft in activeDrafts {
+            let draftEntries = entries.filter { $0.sessionId == draft.id }
+            let containsLockedWork = draftEntries.contains(where: \.isLocked)
+            let containsEnteredWork = draftEntries.contains(where: {
+                $0.weight != 0 || $0.reps != 0
+            })
+            if containsLockedWork || (containsEnteredWork && !archivedDraftsConfirmed) {
+                throw PushPullRolloutError.nonEmptyDraft(sessionId: draft.id)
+            }
+        }
+        for draft in adaptiveSessions where draft.status == .draft {
+            let draftEntries = adaptiveEntries.filter { $0.adaptiveSessionId == draft.id }
+            let containsEnteredWork = draftEntries.contains(where: {
+                $0.isLocked || $0.weight != 0 || $0.reps != 0
+            })
+            guard containsEnteredWork else { continue }
+            guard archivedDraftsConfirmed,
+                  draftEntries.contains(where: { $0.isLocked && $0.reps > 0 }),
+                  !draftEntries.contains(where: { $0.isLocked && $0.reps <= 0 }),
+                  let plan = generatedPlans.first(where: {
+                      $0.id == draft.generatedPlanId
+                  }) else {
+                throw PushPullRolloutError.nonEmptyDraft(sessionId: draft.id)
+            }
+            // The archived live-container backup protects the original draft.
+            // Preserve completed work in live history and drop only editable
+            // autofill rows, matching normal Adaptive completion semantics.
+            for entry in draftEntries where !entry.isLocked || entry.reps <= 0 {
+                modelContext.delete(entry)
+            }
+            draft.status = .completed
+            draft.finishedAt = .now
+            plan.status = .completed
+        }
+
+        let exercises = try ensureExerciseCatalog(modelContext: modelContext)
+        let template: CycleTemplate
+        if let existing = templates.first(where: {
+            canonical($0.name) == canonical(pushPullABTemplateName)
+        }) {
+            // Never overwrite a previously seeded, user-edited template.
+            template = existing
+        } else {
+            template = try pushPullABTemplate(
+                exercises: exercises,
+                sourceTemplate: activeTemplate,
+                sourceAdaptiveProgram: TrainingModeService.resolvedMode(preferences: preferences)
+                    == .adaptive
+                    ? AdaptiveProgramService.activeProgram(from: adaptivePrograms)
+                    : nil
+            )
+            modelContext.insert(template)
+        }
+
+        for draft in activeDrafts {
+            for entry in entries where entry.sessionId == draft.id {
+                modelContext.delete(entry)
+            }
+            for override in try modelContext.fetch(FetchDescriptor<SessionSlotOverride>())
+            where override.sessionId == draft.id {
+                modelContext.delete(override)
+            }
+            modelContext.delete(draft)
+        }
+
+        let cycle = cycles.first(where: { $0.templateId == template.id })
+            ?? ActiveCycleInstance(
+                templateId: template.id,
+                currentDayIndex: pushPullRolloutStartingDayIndex
+            )
+        if cycle.modelContext == nil {
+            modelContext.insert(cycle)
+        }
+        cycle.currentDayIndex = pushPullRolloutStartingDayIndex
+        try cycle.validate(template: template)
+        let modeRows = preferences.filter { $0.key == TrainingModeService.activeModeKey }
+        if let mode = modeRows.first {
+            mode.modeRawValue = TrainingMode.rotation.rawValue
+            for duplicate in modeRows.dropFirst() {
+                modelContext.delete(duplicate)
+            }
+        } else {
+            modelContext.insert(
+                TrainingPreference(modeRawValue: TrainingMode.rotation.rawValue)
+            )
+        }
+        modelContext.insert(
+            TrainingPreference(
+                key: pushPullRolloutMarkerKey,
+                modeRawValue: template.id.uuidString
+            )
+        )
+        try modelContext.save()
+
+        UserDefaults.standard.set(template.id.uuidString, forKey: "openlift.lastActivatedTemplateId")
+        UserDefaults.standard.set(template.name, forKey: "openlift.lastActivatedTemplateName")
+        return PushPullRolloutResult(
+            templateId: template.id,
+            cycleId: cycle.id,
+            didApply: true
+        )
+    }
+
+    static let pushPullABTemplateName = "Push/Pull A/B"
+    static let pushPullRolloutMarkerKey = "push-pull-ab-fixed-cycle-rollout-v1"
+    static let pushPullRolloutStartingDayIndex = 1
+    static let july27AdaptiveInclineCurlRepairMarkerKey =
+        "repair-2026-07-27-adaptive-incline-curl-v1"
+    static let july27AdaptiveInclineCurlSessionId =
+        UUID(uuidString: "08476AD8-9550-4A33-94DF-55B12E6161F2")!
+    static let july27AdaptiveInclineCurlExerciseId =
+        UUID(uuidString: "96C071BF-05E2-467C-8357-CFE375C5C162")!
+
+    /// Explicit, backup-gated repair for the completed July 27 Adaptive
+    /// workout archived during the Push/Pull rollout.
+    ///
+    /// The live precondition is deliberately narrow: Fixed Cycle must still be
+    /// on the marked Push A rollout state, and Incline Curl must contain either
+    /// the known single saved 20 x 13 row or the exact repaired rows. The
+    /// repair touches no cycle, template, plan, or unrelated workout row.
+    @discardableResult
+    static func repairJuly27AdaptiveInclineCurl(
+        modelContext: ModelContext,
+        backupConfirmed: Bool = false
+    ) throws -> July27AdaptiveInclineCurlRepairResult {
+        guard backupConfirmed else {
+            throw July27AdaptiveInclineCurlRepairError.backupConfirmationRequired
+        }
+        do {
+            return try repairJuly27AdaptiveInclineCurlTransaction(modelContext: modelContext)
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    private static func repairJuly27AdaptiveInclineCurlTransaction(
+        modelContext: ModelContext
+    ) throws -> July27AdaptiveInclineCurlRepairResult {
+        let preferences = try modelContext.fetch(FetchDescriptor<TrainingPreference>())
+        let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let cycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+        guard TrainingModeService.resolvedMode(preferences: preferences) == .rotation,
+              let rolloutMarker = preferences.first(where: {
+                  $0.key == pushPullRolloutMarkerKey
+              }),
+              let templateId = UUID(uuidString: rolloutMarker.modeRawValue),
+              let template = templates.first(where: { $0.id == templateId }),
+              let cycle = cycles.first(where: { $0.templateId == templateId }) else {
+            throw July27AdaptiveInclineCurlRepairError.pushAStateMissing
+        }
+        let days = CycleOrdering.sortedDays(template.days)
+        guard days.indices.contains(cycle.currentDayIndex),
+              days[cycle.currentDayIndex].label.caseInsensitiveCompare("Push A") == .orderedSame else {
+            throw July27AdaptiveInclineCurlRepairError.pushAStateMissing
+        }
+
+        let plans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        let sessions = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+        let entries = try modelContext.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let repairMarker = preferences.first(where: {
+            $0.key == july27AdaptiveInclineCurlRepairMarkerKey
+        })
+
+        if let repairMarker {
+            guard let markedSessionId = UUID(uuidString: repairMarker.modeRawValue),
+                  markedSessionId == july27AdaptiveInclineCurlSessionId,
+                  let markedSession = sessions.first(where: {
+                      $0.id == markedSessionId && $0.status == .completed
+                  }),
+                  let markedPlan = plans.first(where: {
+                      $0.id == markedSession.generatedPlanId
+                          && $0.localDateKey == "2026-07-27"
+                  }),
+                  let target = try resolveJuly27InclineCurlTarget(
+                      plan: markedPlan,
+                      session: markedSession,
+                      entries: entries,
+                      exercises: exercises
+                  ),
+                  hasExactJuly27InclineCurlSets(
+                      target.entries,
+                      exerciseId: target.exerciseId
+                  ) else {
+                throw July27AdaptiveInclineCurlRepairError.completedRepairStateMissing
+            }
+            return July27AdaptiveInclineCurlRepairResult(
+                sessionId: markedSession.id,
+                didApply: false
+            )
+        }
+
+        guard let session = sessions.first(where: {
+            $0.id == july27AdaptiveInclineCurlSessionId
+                && $0.status == .completed
+        }) else {
+            throw July27AdaptiveInclineCurlRepairError.targetSessionNotFound
+        }
+        guard let plan = plans.first(where: {
+                  $0.id == session.generatedPlanId
+                      && $0.localDateKey == "2026-07-27"
+              }),
+              let target = try resolveJuly27InclineCurlTarget(
+                  plan: plan,
+                  session: session,
+                  entries: entries,
+                  exercises: exercises
+              ) else {
+            throw July27AdaptiveInclineCurlRepairError.inclineCurlOccurrenceNotFound
+        }
+
+        if !hasExactJuly27InclineCurlSets(
+            target.entries,
+            exerciseId: target.exerciseId
+        ) {
+            guard target.entries.count == 1,
+                  let saved = target.entries.first,
+                  saved.exerciseId == target.exerciseId,
+                  saved.setIndex == 1,
+                  saved.weight == 20,
+                  saved.reps == 13,
+                  saved.isLocked else {
+                throw July27AdaptiveInclineCurlRepairError.unexpectedExistingSets
+            }
+            modelContext.insert(
+                AdaptiveSetEntry(
+                    adaptiveSessionId: session.id,
+                    occurrenceId: target.occurrenceId,
+                    exerciseId: target.exerciseId,
+                    setIndex: 2,
+                    weight: 20,
+                    reps: 9,
+                    isLocked: true
+                )
+            )
+            modelContext.insert(
+                AdaptiveSetEntry(
+                    adaptiveSessionId: session.id,
+                    occurrenceId: target.occurrenceId,
+                    exerciseId: target.exerciseId,
+                    setIndex: 3,
+                    weight: 20,
+                    reps: 7,
+                    isLocked: true
+                )
+            )
+        }
+
+        // Force the normal Adaptive exporter to replace the canonical file
+        // for this completed session with a payload built from repaired rows.
+        session.exportStatus = .pending
+        modelContext.insert(
+            TrainingPreference(
+                key: july27AdaptiveInclineCurlRepairMarkerKey,
+                modeRawValue: session.id.uuidString
+            )
+        )
+        try modelContext.save()
+        return July27AdaptiveInclineCurlRepairResult(
+            sessionId: session.id,
+            didApply: true
+        )
+    }
+
+    private struct July27InclineCurlTarget {
+        let occurrenceId: UUID
+        let exerciseId: UUID
+        let entries: [AdaptiveSetEntry]
+    }
+
+    private static func resolveJuly27InclineCurlTarget(
+        plan: GeneratedWorkoutPlan,
+        session: AdaptiveWorkoutSession,
+        entries: [AdaptiveSetEntry],
+        exercises: [Exercise]
+    ) throws -> July27InclineCurlTarget? {
+        guard let exercise = exercises.first(where: {
+            $0.id == july27AdaptiveInclineCurlExerciseId
+                && canonical($0.name) == canonical("Incline Curl")
+        }) else {
+            throw July27AdaptiveInclineCurlRepairError.inclineCurlExerciseMissing
+        }
+        let snapshots = plan.complexes
+            .flatMap(\.exercises)
+            .filter { $0.exerciseId == july27AdaptiveInclineCurlExerciseId }
+        guard !snapshots.isEmpty else { return nil }
+        guard snapshots.count == 1, let snapshot = snapshots.first else {
+            throw July27AdaptiveInclineCurlRepairError.ambiguousInclineCurlOccurrences(
+                count: snapshots.count
+            )
+        }
+        let targetEntries = entries
+            .filter {
+                $0.adaptiveSessionId == session.id
+                    && $0.occurrenceId == snapshot.occurrenceId
+            }
+            .sorted { lhs, rhs in
+                if lhs.setIndex != rhs.setIndex { return lhs.setIndex < rhs.setIndex }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+        return July27InclineCurlTarget(
+            occurrenceId: snapshot.occurrenceId,
+            exerciseId: exercise.id,
+            entries: targetEntries
+        )
+    }
+
+    private static func hasExactJuly27InclineCurlSets(
+        _ entries: [AdaptiveSetEntry],
+        exerciseId: UUID
+    ) -> Bool {
+        guard entries.count == 3 else { return false }
+        return zip(entries, [13, 9, 7]).enumerated().allSatisfy { index, pair in
+            let (entry, reps) = pair
+            return entry.exerciseId == exerciseId
+                && entry.setIndex == index + 1
+                && entry.weight == 20
+                && entry.reps == reps
+                && entry.isLocked
+        }
+    }
+
+    static func pushPullABTemplate(
+        exercises: [Exercise],
+        sourceTemplate: CycleTemplate?,
+        sourceAdaptiveProgram: AdaptiveProgram? = nil
+    ) throws -> CycleTemplate {
+        let byName = Dictionary(uniqueKeysWithValues: exercises.map {
+            ($0.name.lowercased(), $0)
+        })
+        func required(_ name: String) throws -> Exercise {
+            guard let value = byName[name.lowercased()] else {
+                throw PushPullRolloutError.requiredExerciseMissing(name)
+            }
+            return value
+        }
+
+        let sourceDays = sourceTemplate.map { CycleOrdering.sortedDays($0.days) } ?? []
+        func sourceSlots(_ muscle: MuscleGroup, variant: Int) -> [CycleSlot] {
+            let adaptiveCandidates = sourceAdaptiveProgram?.complexes
+                .filter(\.isEnabled)
+                .sorted { $0.position < $1.position }
+                .flatMap { complex in
+                    complex.components.sorted { $0.position < $1.position }
+                }
+                .filter { component in
+                    component.primaryMuscle == muscle
+                        && exercises.contains(where: { $0.id == component.exerciseId })
+                }
+                .reduce(into: [AdaptiveComplexComponent]()) { result, component in
+                    guard !result.contains(where: { $0.exerciseId == component.exerciseId }) else {
+                        return
+                    }
+                    result.append(component)
+                } ?? []
+            if !adaptiveCandidates.isEmpty {
+                return adaptiveCandidates.map {
+                    CycleSlot(
+                        muscle: muscle,
+                        exerciseId: $0.exerciseId,
+                        defaultSetCount: min(3, max(1, $0.prescribedSetCount))
+                    )
+                }
+            }
+            let suffix = variant % 2 == 0 ? "a" : "b"
+            let variantDays = sourceDays.filter {
+                canonical($0.label).hasSuffix(suffix)
+            }
+            let candidates = (variantDays.isEmpty ? sourceDays : variantDays)
+                .flatMap { CycleOrdering.sortedSlots($0.slots) }
+                .filter { $0.muscle == muscle }
+            let unique = candidates.reduce(into: [CycleSlot]()) { result, slot in
+                guard !result.contains(where: { $0.exerciseId == slot.exerciseId }) else { return }
+                result.append(slot)
+            }
+            if !unique.isEmpty { return unique }
+            guard let fallback = exercises
+                .filter({ $0.isActive && $0.primaryMuscle == muscle })
+                .sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
+                .first else {
+                return []
+            }
+            return [CycleSlot(muscle: muscle, exerciseId: fallback.id)]
+        }
+
+        func copied(
+            _ muscle: MuscleGroup,
+            variant: Int,
+            position: inout Int
+        ) -> [CycleSlot] {
+            sourceSlots(muscle, variant: variant).map { source in
+                defer { position += 1 }
+                return CycleSlot(
+                    position: position,
+                    muscle: muscle,
+                    exerciseId: source.exerciseId,
+                    defaultSetCount: source.defaultSetCount
+                )
+            }
+        }
+
+        func pullDay(label: String, variant: Int, reversedBack: Bool) throws -> CycleDay {
+            let pulldown = try required("Lat Pulldown")
+            let cableRow = try required("Chest-Supported Cable Row")
+            let back = reversedBack ? [cableRow, pulldown] : [pulldown, cableRow]
+            var position = 0
+            var slots = back.map { exercise -> CycleSlot in
+                defer { position += 1 }
+                return CycleSlot(position: position, muscle: .back, exerciseId: exercise.id)
+            }
+            slots += copied(.biceps, variant: variant, position: &position)
+            slots += copied(.hamstrings, variant: variant, position: &position)
+            slots += copied(.forearms, variant: variant, position: &position)
+            return CycleDay(label: label, slots: slots)
+        }
+
+        func pushDay(label: String, variant: Int) throws -> CycleDay {
+            let chest = variant == 0
+                ? [try required("Incline Dumbbell Press"), try required("Flat Cable Flye")]
+                : [try required("Flat Dumbbell Press"), try required("Incline Cable Flye")]
+            var position = 0
+            var slots = chest.map { exercise -> CycleSlot in
+                defer { position += 1 }
+                return CycleSlot(position: position, muscle: .chest, exerciseId: exercise.id)
+            }
+            slots += copied(.triceps, variant: variant, position: &position)
+            slots += copied(.quads, variant: variant, position: &position)
+            slots += copied(.sideDelts, variant: variant, position: &position)
+            slots += copied(.calves, variant: variant, position: &position)
+            return CycleDay(label: label, slots: slots)
+        }
+
+        let days = [
+            try pullDay(label: "Pull A", variant: 0, reversedBack: false),
+            try pushDay(label: "Push A", variant: 0),
+            try pullDay(label: "Pull B", variant: 1, reversedBack: true),
+            try pushDay(label: "Push B", variant: 1)
+        ]
+        for (index, day) in days.enumerated() { day.position = index }
+        let template = CycleTemplate(
+            name: pushPullABTemplateName,
+            days: days,
+            // Pools are copied intact. Slots remain day-scoped direct choices,
+            // so later edits cannot leak into another day through a shared pool.
+            rotationPools: sourceTemplate?.rotationPools.map { pool in
+                RotationPool(
+                    key: pool.key,
+                    entries: pool.entries.map { RotationPoolEntry(exerciseId: $0.exerciseId) }
+                )
+            } ?? []
+        )
+        try template.validate(
+            exercisesById: Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
+        )
+        return template
     }
 
     static func defaultStarterTemplate(exercises: [Exercise]) throws -> CycleTemplate {
@@ -561,9 +1305,12 @@ enum BootstrapDataService {
         ("Incline Dumbbell Press", .chest, .compound, .dumbbell),
         ("Flat Dumbbell Press", .chest, .compound, .dumbbell),
         ("Cable Fly", .chest, .isolation, .cable),
+        ("Flat Cable Flye", .chest, .isolation, .cable),
+        ("Incline Cable Flye", .chest, .isolation, .cable),
         ("Cable Row", .back, .compound, .cable),
         ("Lat Pulldown", .back, .compound, .machine),
         ("Chest Supported Row", .back, .compound, .machine),
+        ("Chest-Supported Cable Row", .back, .compound, .cable),
         ("Helms Row", .back, .compound, .dumbbell),
         ("Single-Arm Dumbbell Row", .back, .compound, .dumbbell),
         ("Assisted Pull-Up", .back, .compound, .machine),

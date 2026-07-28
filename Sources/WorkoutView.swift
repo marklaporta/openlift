@@ -1,6 +1,342 @@
 import SwiftUI
 import SwiftData
 
+enum FixedCycleWorkoutError: LocalizedError, Equatable {
+    case incompleteReadiness(MuscleGroup)
+    case readinessRequired
+    case qualifyingSetRequired
+    case exerciseAlreadyExists
+    case cannotReplacePerformedExercise
+
+    var errorDescription: String? {
+        switch self {
+        case .incompleteReadiness(let muscle):
+            return "Complete readiness for \(muscle.displayName)."
+        case .readinessRequired:
+            return "Submit today's readiness before editing or finishing this workout."
+        case .qualifyingSetRequired:
+            return "Complete and lock at least one working set before finishing the workout."
+        case .exerciseAlreadyExists:
+            return "That exercise is already configured in this muscle block."
+        case .cannotReplacePerformedExercise:
+            return "This exercise already has completed work in the draft. Keep that evidence or remove it explicitly before replacing the future slot."
+        }
+    }
+}
+
+enum FixedCycleWorkoutService {
+    static let allClear = MuscleReadinessInput(
+        soreness: .none,
+        connectiveTissuePain: .none,
+        eagerness: .eager
+    )
+
+    static func localDateKey(
+        for date: Date,
+        calendar: Calendar = .current
+    ) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+
+    static func requiredMuscles(for day: CycleDay) -> [MuscleGroup] {
+        CycleOrdering.sortedSlots(day.slots).reduce(into: [MuscleGroup]()) { result, slot in
+            if !result.contains(slot.muscle) {
+                result.append(slot.muscle)
+            }
+        }
+    }
+
+    static func latestObservation(
+        sessionId: UUID,
+        localDateKey: String,
+        observations: [FixedCycleReadinessObservation]
+    ) -> FixedCycleReadinessObservation? {
+        observations
+            .filter { $0.sessionId == sessionId && $0.localDateKey == localDateKey }
+            .max {
+                if $0.revision != $1.revision { return $0.revision < $1.revision }
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+    }
+
+    static func makeReadinessObservation(
+        sessionId: UUID,
+        day: CycleDay,
+        inputs: [MuscleGroup: MuscleReadinessInput],
+        existing: [FixedCycleReadinessObservation],
+        now: Date = .now,
+        calendar: Calendar = .current,
+        timeZone: TimeZone = .current
+    ) throws -> FixedCycleReadinessObservation {
+        let dateKey = localDateKey(for: now, calendar: calendar)
+        let muscles = requiredMuscles(for: day)
+        let responses = try muscles.map { muscle -> FixedCycleReadinessResponse in
+            guard let value = inputs[muscle] else {
+                throw FixedCycleWorkoutError.incompleteReadiness(muscle)
+            }
+            return FixedCycleReadinessResponse(
+                muscle: muscle,
+                soreness: value.soreness,
+                connectiveTissuePain: value.connectiveTissuePain,
+                eagerness: value.eagerness
+            )
+        }
+        let revision = existing
+            .filter { $0.sessionId == sessionId && $0.localDateKey == dateKey }
+            .map(\.revision)
+            .max()
+            .map { $0 + 1 } ?? 1
+        return FixedCycleReadinessObservation(
+            sessionId: sessionId,
+            localDateKey: dateKey,
+            timeZoneIdentifier: timeZone.identifier,
+            revision: revision,
+            createdAt: now,
+            responses: responses
+        )
+    }
+
+    static func canExecute(
+        sessionId: UUID,
+        now: Date,
+        observations: [FixedCycleReadinessObservation],
+        calendar: Calendar = .current
+    ) -> Bool {
+        latestObservation(
+            sessionId: sessionId,
+            localDateKey: localDateKey(for: now, calendar: calendar),
+            observations: observations
+        ) != nil
+    }
+
+    static func hasQualifyingSet(sessionId: UUID, entries: [SetEntry]) -> Bool {
+        entries.contains {
+            $0.sessionId == sessionId && $0.isLocked && $0.reps > 0
+        }
+    }
+
+    static func hasQualifyingSet(
+        sessionId: UUID,
+        exerciseIds: Set<UUID>,
+        entries: [SetEntry]
+    ) -> Bool {
+        entries.contains {
+            $0.sessionId == sessionId
+                && exerciseIds.contains($0.exerciseId)
+                && $0.isLocked
+                && $0.reps > 0
+        }
+    }
+
+    /// A persistent template removal may take effect immediately while locked
+    /// work from the current occurrence must remain visible in final history.
+    /// Stage the whole pre-edit occurrence once so relaunch and export retry do
+    /// not depend on the later template shape.
+    static func stageOccurrenceSnapshotsIfNeeded(
+        sessionId: UUID,
+        day: CycleDay,
+        exercises: [Exercise],
+        existingSnapshots: [FixedCycleExerciseSnapshot],
+        modelContext: ModelContext
+    ) {
+        guard !existingSnapshots.contains(where: { $0.sessionId == sessionId }) else { return }
+        let exercisesById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
+        for slot in CycleOrdering.sortedSlots(day.slots) {
+            guard let exercise = exercisesById[slot.exerciseId] else { continue }
+            modelContext.insert(
+                FixedCycleExerciseSnapshot(
+                    sessionId: sessionId,
+                    position: slot.position,
+                    exerciseId: exercise.id,
+                    exerciseName: exercise.name,
+                    muscle: slot.muscle,
+                    statusRawValue: "planned"
+                )
+            )
+        }
+    }
+
+    static func prefillEffort(
+        exerciseId: UUID,
+        session: Session,
+        adaptiveSessions: [AdaptiveWorkoutSession],
+        adaptiveSetEntries: [AdaptiveSetEntry],
+        rotationSessions: [Session],
+        rotationSetEntries: [SetEntry]
+    ) -> ExerciseEffortLookupResult? {
+        ExerciseEffortLookupService.fixedCycleEffort(
+            exerciseId: exerciseId,
+            cycleInstanceId: session.cycleInstanceId,
+            cycleDayIndex: session.cycleDayIndex,
+            excludingSessionId: session.id,
+            adaptiveSessions: adaptiveSessions,
+            adaptiveSetEntries: adaptiveSetEntries,
+            rotationSessions: rotationSessions,
+            rotationSetEntries: rotationSetEntries
+        )
+    }
+
+    static func replaceExercise(
+        slot: CycleSlot,
+        currentExerciseId: UUID? = nil,
+        with exercise: Exercise,
+        sessionId: UUID,
+        entries: [SetEntry],
+        slotOverrides: [SessionSlotOverride] = [],
+        modelContext: ModelContext
+    ) throws {
+        let replacedExerciseId = currentExerciseId ?? slot.exerciseId
+        guard replacedExerciseId != exercise.id else { return }
+        let current = entries.filter {
+            $0.sessionId == sessionId && $0.exerciseId == replacedExerciseId
+        }
+        guard !current.contains(where: { $0.isLocked && $0.reps > 0 }) else {
+            throw FixedCycleWorkoutError.cannotReplacePerformedExercise
+        }
+        for entry in current { modelContext.delete(entry) }
+        for occurrenceOverride in slotOverrides where
+            occurrenceOverride.sessionId == sessionId
+                && occurrenceOverride.slotPosition == slot.position {
+            modelContext.delete(occurrenceOverride)
+        }
+        slot.exerciseId = exercise.id
+    }
+
+    @discardableResult
+    static func addMovement(
+        exercise: Exercise,
+        to day: CycleDay,
+        sessionId: UUID,
+        defaultSetCount: Int,
+        modelContext: ModelContext
+    ) throws -> CycleSlot {
+        let ordered = CycleOrdering.sortedSlots(day.slots)
+        guard !ordered.contains(where: {
+            $0.muscle == exercise.primaryMuscle && $0.exerciseId == exercise.id
+        }) else {
+            throw FixedCycleWorkoutError.exerciseAlreadyExists
+        }
+        let insertion = (ordered.lastIndex(where: { $0.muscle == exercise.primaryMuscle })
+            .map { $0 + 1 }) ?? ordered.count
+        for index in insertion..<ordered.count {
+            ordered[index].position += 1
+        }
+        let slot = CycleSlot(
+            position: insertion,
+            muscle: exercise.primaryMuscle,
+            exerciseId: exercise.id,
+            defaultSetCount: max(1, defaultSetCount)
+        )
+        day.slots.append(slot)
+        return slot
+    }
+
+    static func skipExercise(
+        slot: CycleSlot,
+        sessionId: UUID,
+        reasonCode: String,
+        entries: [SetEntry],
+        existingOverrides: [FixedCycleOccurrenceOverride],
+        modelContext: ModelContext
+    ) {
+        guard !existingOverrides.contains(where: {
+            $0.sessionId == sessionId
+                && $0.kind == .skipExercise
+                && $0.slotPosition == slot.position
+        }) else { return }
+        for entry in entries where
+            entry.sessionId == sessionId && entry.exerciseId == slot.exerciseId {
+            modelContext.delete(entry)
+        }
+        modelContext.insert(
+            FixedCycleOccurrenceOverride(
+                sessionId: sessionId,
+                kind: .skipExercise,
+                slotPosition: slot.position,
+                exerciseId: slot.exerciseId,
+                muscle: slot.muscle,
+                reasonCode: reasonCode
+            )
+        )
+    }
+
+    static func skipMuscle(
+        muscle: MuscleGroup,
+        day: CycleDay,
+        sessionId: UUID,
+        reasonCode: String,
+        entries: [SetEntry],
+        existingOverrides: [FixedCycleOccurrenceOverride],
+        modelContext: ModelContext
+    ) {
+        guard !existingOverrides.contains(where: {
+            $0.sessionId == sessionId && $0.kind == .skipMuscle && $0.muscle == muscle
+        }) else { return }
+        let ids = Set(day.slots.filter { $0.muscle == muscle }.map(\.exerciseId))
+        for entry in entries where entry.sessionId == sessionId && ids.contains(entry.exerciseId) {
+            modelContext.delete(entry)
+        }
+        modelContext.insert(
+            FixedCycleOccurrenceOverride(
+                sessionId: sessionId,
+                kind: .skipMuscle,
+                muscle: muscle,
+                reasonCode: reasonCode
+            )
+        )
+    }
+
+    static func removeExercisePersistently(
+        slot: CycleSlot,
+        from day: CycleDay,
+        sessionId: UUID,
+        entries: [SetEntry],
+        modelContext: ModelContext
+    ) {
+        let current = entries.filter {
+            $0.sessionId == sessionId && $0.exerciseId == slot.exerciseId
+        }
+        if !current.contains(where: { $0.isLocked && $0.reps > 0 }) {
+            for entry in current { modelContext.delete(entry) }
+        }
+        day.slots.removeAll { $0 === slot }
+        modelContext.delete(slot)
+        normalizePositions(day)
+    }
+
+    static func removeMusclePersistently(
+        muscle: MuscleGroup,
+        from day: CycleDay,
+        sessionId: UUID,
+        entries: [SetEntry],
+        modelContext: ModelContext
+    ) {
+        let slots = day.slots.filter { $0.muscle == muscle }
+        for slot in slots {
+            removeExercisePersistently(
+                slot: slot,
+                from: day,
+                sessionId: sessionId,
+                entries: entries,
+                modelContext: modelContext
+            )
+        }
+    }
+
+    private static func normalizePositions(_ day: CycleDay) {
+        for (index, slot) in CycleOrdering.sortedSlots(day.slots).enumerated() {
+            slot.position = index
+        }
+    }
+}
+
 struct WorkoutView: View {
     @Environment(\.modelContext) private var modelContext
 
@@ -11,11 +347,27 @@ struct WorkoutView: View {
     @Query private var setEntries: [SetEntry]
     @Query private var slotOverrides: [SessionSlotOverride]
     @Query private var trainingPreferences: [TrainingPreference]
+    @Query private var adaptiveSessions: [AdaptiveWorkoutSession]
+    @Query private var adaptiveSetEntries: [AdaptiveSetEntry]
+    @Query private var adaptiveReadinessChecks: [DailyReadinessCheck]
+    @Query private var fixedReadiness: [FixedCycleReadinessObservation]
+    @Query private var fixedOverrides: [FixedCycleOccurrenceOverride]
+    @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
 
     @State private var errorMessage: String?
     @State private var draftExportTask: Task<Void, Never>?
     @State private var swapContext: SwapContext?
+    @State private var addMovementContext: AddMovementContext?
     @State private var historyContext: ExerciseHistoryContext?
+    @State private var readinessInputs = Dictionary(
+        uniqueKeysWithValues: MuscleGroup.allCases.map {
+            ($0, FixedCycleWorkoutService.allClear)
+        }
+    )
+    @State private var observedLocalDateKey = FixedCycleWorkoutService.localDateKey(for: .now)
+    @State private var pendingFixedMutation: PendingFixedMutation?
+    @State private var skippedReason = "user_choice"
+    private let dateRefresh = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     private var trainingMode: TrainingMode {
         TrainingModeService.resolvedMode(preferences: trainingPreferences)
@@ -57,6 +409,19 @@ struct WorkoutView: View {
         return orderedDays[cycle.currentDayIndex]
     }
 
+    private var latestFixedReadiness: FixedCycleReadinessObservation? {
+        guard let draftSession else { return nil }
+        return FixedCycleWorkoutService.latestObservation(
+            sessionId: draftSession.id,
+            localDateKey: observedLocalDateKey,
+            observations: fixedReadiness
+        )
+    }
+
+    private var isFixedExecutionEnabled: Bool {
+        latestFixedReadiness != nil
+    }
+
     var body: some View {
         Group {
             if trainingMode == .adaptive {
@@ -71,6 +436,7 @@ struct WorkoutView: View {
                 currentExercise: currentExercise,
                 exercises: exercises,
                 slotMuscle: context.slot.muscle,
+                navigationTitle: "Replace Exercise in \(context.dayLabel)",
                 onSelect: { selected in
                     applySwap(
                         sessionId: context.sessionId,
@@ -94,6 +460,29 @@ struct WorkoutView: View {
                 }
             )
         }
+        .sheet(item: $addMovementContext) { context in
+            ExerciseSwapSheet(
+                currentExercise: nil,
+                exercises: exercises,
+                slotMuscle: context.defaultMuscle,
+                navigationTitle: "Add Movement to \(context.day.label)",
+                onSelect: { selected in
+                    addPersistentMovement(selected, day: context.day, sessionId: context.sessionId)
+                    addMovementContext = nil
+                },
+                onCreate: { name, muscle, type, equipment in
+                    createExerciseAndAdd(
+                        name: name,
+                        muscle: muscle,
+                        type: type,
+                        equipment: equipment,
+                        day: context.day,
+                        sessionId: context.sessionId
+                    )
+                    addMovementContext = nil
+                }
+            )
+        }
         .sheet(item: $historyContext) { context in
             ExerciseHistorySheet(
                 exerciseName: context.exerciseName,
@@ -104,54 +493,193 @@ struct WorkoutView: View {
             guard trainingMode == .rotation else { return }
             await prepareWorkoutState()
         }
+        .onReceive(dateRefresh) { now in
+            refreshLocalDate(now)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            refreshLocalDate(.now)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+            refreshLocalDate(.now)
+        }
         .alert("Validation Error", isPresented: .constant(errorMessage != nil), actions: {
             Button("OK") { errorMessage = nil }
         }, message: {
             Text(errorMessage ?? "Unknown error")
         })
+        .alert(
+            pendingFixedMutation?.title ?? "Confirm Change",
+            isPresented: Binding(
+                get: { pendingFixedMutation != nil },
+                set: { if !$0 { pendingFixedMutation = nil } }
+            )
+        ) {
+            if let pendingFixedMutation {
+                Button(pendingFixedMutation.confirmationLabel, role: .destructive) {
+                    applyPendingFixedMutation(pendingFixedMutation)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingFixedMutation = nil
+            }
+        } message: {
+            Text(pendingFixedMutation?.message ?? "")
+        }
     }
 
     private var rotationWorkoutContent: some View {
         NavigationStack {
             List {
                 if let draftSession, let activeDay {
-                    Section {
-                        Text("\(activeDay.label) · Draft session")
-                            .font(.headline)
-                            .lineLimit(1)
-                    }
-
-                    ForEach(resolvedSlots(for: activeDay, sessionId: draftSession.id)) { resolved in
-                        let resolvedExercise = exercises.first(where: { $0.id == resolved.exerciseId })
-                        ExerciseSection(
-                            slot: resolved.slot,
-                            exercise: resolvedExercise,
-                            entries: entries(for: resolved.exerciseId, sessionId: draftSession.id),
-                            onAddSet: { addSet(for: resolved.exerciseId, sessionId: draftSession.id) },
-                            onRemoveSet: { removeSet(for: resolved.exerciseId, sessionId: draftSession.id) },
-                            onSwap: {
-                                swapContext = SwapContext(
-                                    sessionId: draftSession.id,
-                                    slot: resolved.slot,
-                                    currentExerciseId: resolved.exerciseId
-                                )
-                            },
-                            onHistory: {
-                                guard let resolvedExercise else { return }
-                                historyContext = ExerciseHistoryContext(
-                                    exerciseId: resolvedExercise.id,
-                                    exerciseName: resolvedExercise.name
-                                )
-                            },
-                            onEntryUpdated: { scheduleDraftExport() }
+                    if latestFixedReadiness == nil {
+                        fixedReadinessEntry(
+                            session: draftSession,
+                            day: activeDay
                         )
-                    }
-
-                    Section {
-                        Button("Finish Workout") {
-                            finishWorkout()
+                    } else {
+                        Section {
+                            Text("\(activeDay.label) · Draft session")
+                                .font(.headline)
+                                .lineLimit(1)
                         }
-                        .buttonStyle(.borderedProminent)
+
+                        fixedRecoverySection(day: activeDay)
+
+                        ForEach(resolvedSlots(for: activeDay, sessionId: draftSession.id)) { resolved in
+                            let resolvedExercise = exercises.first(where: { $0.id == resolved.exerciseId })
+                            let source = prefillEffort(
+                                exerciseId: resolved.exerciseId,
+                                session: draftSession
+                            )
+                            ExerciseSection(
+                                slot: resolved.slot,
+                                exercise: resolvedExercise,
+                                entries: entries(for: resolved.exerciseId, sessionId: draftSession.id),
+                                isExecutionEnabled: isFixedExecutionEnabled,
+                                prefillSource: source.map(prefillSourceText),
+                                onAddSet: { addSet(for: resolved.exerciseId, sessionId: draftSession.id) },
+                                onRemoveSet: { removeSet(for: resolved.exerciseId, sessionId: draftSession.id) },
+                                onSwap: {
+                                    swapContext = SwapContext(
+                                        sessionId: draftSession.id,
+                                        slot: resolved.slot,
+                                        currentExerciseId: resolved.exerciseId,
+                                        dayLabel: activeDay.label
+                                    )
+                                },
+                                onHistory: {
+                                    guard let resolvedExercise else { return }
+                                    historyContext = ExerciseHistoryContext(
+                                        exerciseId: resolvedExercise.id,
+                                        exerciseName: resolvedExercise.name
+                                    )
+                                },
+                                onSkipToday: {
+                                    skipExerciseToday(
+                                        resolved.slot,
+                                        sessionId: draftSession.id,
+                                        reasonCode: skippedReason
+                                    )
+                                },
+                                onSkipMuscleToday: {
+                                    skipMuscleToday(
+                                        resolved.slot.muscle,
+                                        day: activeDay,
+                                        sessionId: draftSession.id,
+                                        reasonCode: skippedReason
+                                    )
+                                },
+                                onRemoveFuture: {
+                                    pendingFixedMutation = .removeExercise(
+                                        day: activeDay,
+                                        slot: resolved.slot,
+                                        sessionId: draftSession.id,
+                                        exerciseName: resolvedExercise?.name ?? "exercise"
+                                    )
+                                },
+                                onRemoveMuscleFuture: {
+                                    pendingFixedMutation = .removeMuscle(
+                                        day: activeDay,
+                                        muscle: resolved.slot.muscle,
+                                        sessionId: draftSession.id
+                                    )
+                                },
+                                onEntryUpdated: { scheduleDraftExport() }
+                            )
+                        }
+
+                        let retained = retainedRemovedExercises(
+                            sessionId: draftSession.id,
+                            day: activeDay
+                        )
+                        if !retained.isEmpty {
+                            Section("Completed Work Retained for This Workout") {
+                                ForEach(retained) { exercise in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(exercise.name)
+                                            .font(.headline)
+                                        ForEach(entries(
+                                            for: exercise.id,
+                                            sessionId: draftSession.id
+                                        ).filter { $0.isLocked && $0.reps > 0 }) { entry in
+                                            Text(
+                                                "S\(entry.setIndex) · \(entry.weight, specifier: "%.1f") × \(entry.reps)"
+                                            )
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        }
+                                        Text("The template removal applies to future workouts; these completed sets remain in this occurrence.")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+
+                        let skipped = fixedOverrides.filter {
+                            $0.sessionId == draftSession.id
+                        }
+                        if !skipped.isEmpty {
+                            Section("Skipped This Workout") {
+                                ForEach(skipped) { item in
+                                    HStack {
+                                        Text(skippedLabel(item))
+                                        Spacer()
+                                        Button("Restore") {
+                                            restoreSkip(item, day: activeDay, sessionId: draftSession.id)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Section("Occurrence Actions") {
+                            Picker("Skip reason", selection: $skippedReason) {
+                                Text("Recovery").tag("recovery")
+                                Text("Time").tag("time")
+                                Text("Equipment").tag("equipment")
+                                Text("Other").tag("user_choice")
+                            }
+                        }
+
+                        Section {
+                            Button("Add Movement to \(activeDay.label)") {
+                                addMovementContext = AddMovementContext(
+                                    day: activeDay,
+                                    sessionId: draftSession.id,
+                                    defaultMuscle: CycleOrdering.sortedSlots(activeDay.slots).last?.muscle ?? .chest
+                                )
+                            }
+                            .disabled(!isFixedExecutionEnabled)
+                        }
+
+                        Section {
+                            Button("Finish Workout") {
+                                finishWorkout()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!isFixedExecutionEnabled)
+                        }
                     }
                 } else {
                     ContentUnavailableView(
@@ -175,6 +703,7 @@ struct WorkoutView: View {
     }
 
     private func prepareWorkoutState() async {
+        refreshLocalDate(.now)
         do {
             try bootstrapDataIfNeeded()
             try ensureDraftSession()
@@ -384,6 +913,15 @@ struct WorkoutView: View {
     private func finishWorkout() {
         do {
             guard let cycle = activeCycle, let template = activeTemplate, let session = draftSession else { return }
+            guard isFixedExecutionEnabled else {
+                throw FixedCycleWorkoutError.readinessRequired
+            }
+            guard FixedCycleWorkoutService.hasQualifyingSet(
+                sessionId: session.id,
+                entries: setEntries
+            ) else {
+                throw FixedCycleWorkoutError.qualifyingSetRequired
+            }
             let dayIndex = cycle.currentDayIndex
 
             // Keep only confirmed logged sets in completed sessions/history/export.
@@ -402,6 +940,46 @@ struct WorkoutView: View {
             if dayIndex >= 0, dayIndex < orderedDays.count {
                 session.dayLabelSnapshot = orderedDays[dayIndex].label
             }
+            let persistedFixedSnapshots = try modelContext
+                .fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
+            let fixedMetadata = dayIndex >= 0 && dayIndex < orderedDays.count
+                ? SessionExportService.fixedCycleMetadata(
+                    session: session,
+                    template: template,
+                    day: orderedDays[dayIndex],
+                    exercises: exercises,
+                    setEntries: setEntries,
+                    readiness: fixedReadiness,
+                    overrides: fixedOverrides,
+                    snapshots: persistedFixedSnapshots
+                )
+                : nil
+            for item in fixedMetadata?.ordered_exercises ?? [] {
+                guard let exerciseId = UUID(uuidString: item.exercise_id),
+                      let muscle = MuscleGroup(rawValue: item.muscle) else {
+                    continue
+                }
+                if let existing = persistedFixedSnapshots.first(where: {
+                    $0.sessionId == session.id
+                        && $0.position == item.position
+                        && $0.exerciseId == exerciseId
+                }) {
+                    existing.statusRawValue = item.status
+                    existing.skipReason = item.skip_reason
+                } else {
+                    modelContext.insert(
+                        FixedCycleExerciseSnapshot(
+                            sessionId: session.id,
+                            position: item.position,
+                            exerciseId: exerciseId,
+                            exerciseName: item.exercise_name,
+                            muscle: muscle,
+                            statusRawValue: item.status,
+                            skipReason: item.skip_reason
+                        )
+                    )
+                }
+            }
 
             do {
                 let exportOutcome = try SessionExportService.exportAndTrack(
@@ -410,6 +988,7 @@ struct WorkoutView: View {
                     exercises: exercises,
                     setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
                     requireICloudMirror: !AppRuntime.isUITesting,
+                    fixedCycleMetadata: fixedMetadata,
                     modelContext: modelContext
                 )
                 if exportOutcome.status == .success {
@@ -436,7 +1015,12 @@ struct WorkoutView: View {
         }
     }
 
-    private func prefillValues(exerciseId: UUID, setIndex: Int, preferredSessionId: UUID? = nil) -> (weight: Double, reps: Int) {
+    private func prefillValues(
+        exerciseId: UUID,
+        setIndex: Int,
+        preferredSessionId: UUID? = nil,
+        effort: ExerciseEffortLookupResult? = nil
+    ) -> (weight: Double, reps: Int) {
         if let preferredSessionId {
             if let exact = setEntries.first(where: {
                 $0.sessionId == preferredSessionId && $0.exerciseId == exerciseId && $0.setIndex == setIndex
@@ -451,23 +1035,20 @@ struct WorkoutView: View {
             }
         }
 
-        let completedIds = sessions
-            .filter { $0.status == .completed && $0.id != preferredSessionId }
-            .sorted { ($0.finishedAt ?? $0.createdAt) > ($1.finishedAt ?? $1.createdAt) }
-            .map(\.id)
+        if let rows = effort?.rows, !rows.isEmpty {
+            let row = rows.first(where: { $0.setIndex == setIndex }) ?? rows.last!
+            return (row.weight, row.reps)
+        }
 
-        for sessionId in completedIds {
-            if let exact = setEntries.first(where: {
-                $0.sessionId == sessionId && $0.exerciseId == exerciseId && $0.setIndex == setIndex
-            }) {
-                return (exact.weight, exact.reps)
-            }
-            if let fallback = setEntries
-                .filter({ $0.sessionId == sessionId && $0.exerciseId == exerciseId })
-                .sorted(by: { $0.setIndex > $1.setIndex })
-                .first {
-                return (fallback.weight, fallback.reps)
-            }
+        if let global = ExerciseEffortLookupService.globalEffort(
+            exerciseId: exerciseId,
+            adaptiveSessions: adaptiveSessions,
+            adaptiveSetEntries: adaptiveSetEntries,
+            rotationSessions: sessions,
+            rotationSetEntries: setEntries
+        ), !global.rows.isEmpty {
+            let row = global.rows.first(where: { $0.setIndex == setIndex }) ?? global.rows.last!
+            return (row.weight, row.reps)
         }
         return (0, 0)
     }
@@ -477,23 +1058,23 @@ struct WorkoutView: View {
             throw OpenLiftValidationError.invalidCurrentDayIndex(index: cycle.currentDayIndex, dayCount: template.days.count)
         }
 
-        let previousDaySession = mostRecentCompletedSession(
-            templateName: template.name,
-            cycleDayIndex: cycle.currentDayIndex
-        )
-
         let day = CycleOrdering.sortedDays(template.days)[cycle.currentDayIndex]
         for slot in CycleOrdering.sortedSlots(day.slots) {
-            let setCount = suggestedSetCount(
+            let effort = FixedCycleWorkoutService.prefillEffort(
                 exerciseId: slot.exerciseId,
-                previousDaySessionId: previousDaySession?.id
-            ) ?? slot.defaultSetCount
+                session: session,
+                adaptiveSessions: adaptiveSessions,
+                adaptiveSetEntries: adaptiveSetEntries,
+                rotationSessions: sessions,
+                rotationSetEntries: setEntries
+            )
+            let setCount = effort?.rows.count ?? slot.defaultSetCount
 
             for setIndex in 1...max(1, setCount) {
                 let prefills = prefillValues(
                     exerciseId: slot.exerciseId,
                     setIndex: setIndex,
-                    preferredSessionId: previousDaySession?.id
+                    effort: effort
                 )
                 let entry = SetEntry(
                     sessionId: session.id,
@@ -509,24 +1090,6 @@ struct WorkoutView: View {
         }
     }
 
-    private func suggestedSetCount(exerciseId: UUID, previousDaySessionId: UUID?) -> Int? {
-        guard let previousDaySessionId else { return nil }
-        let matching = setEntries
-            .filter { $0.sessionId == previousDaySessionId && $0.exerciseId == exerciseId && $0.reps > 0 }
-        guard !matching.isEmpty else { return nil }
-        return matching.map(\.setIndex).max()
-    }
-
-    private func mostRecentCompletedSession(templateName: String, cycleDayIndex: Int) -> Session? {
-        OpenLiftStateResolver.mostRecentCompletedSession(
-            sessions: sessions,
-            activeCycles: activeCycles,
-            templates: templates,
-            templateName: templateName,
-            cycleDayIndex: cycleDayIndex
-        )
-    }
-
     private func entries(for exerciseId: UUID, sessionId: UUID) -> [SetEntry] {
         setEntries
             .filter { $0.sessionId == sessionId && $0.exerciseId == exerciseId }
@@ -535,6 +1098,9 @@ struct WorkoutView: View {
 
     private func addSet(for exerciseId: UUID, sessionId: UUID) {
         do {
+            guard isFixedExecutionEnabled else {
+                throw FixedCycleWorkoutError.readinessRequired
+            }
             let current = entries(for: exerciseId, sessionId: sessionId)
             let newIndex = (current.last?.setIndex ?? 0) + 1
             let prefills = prefillValues(exerciseId: exerciseId, setIndex: newIndex, preferredSessionId: sessionId)
@@ -556,6 +1122,9 @@ struct WorkoutView: View {
 
     private func removeSet(for exerciseId: UUID, sessionId: UUID) {
         do {
+            guard isFixedExecutionEnabled else {
+                throw FixedCycleWorkoutError.readinessRequired
+            }
             guard let last = entries(for: exerciseId, sessionId: sessionId).last else { return }
             modelContext.delete(last)
             try modelContext.save()
@@ -566,7 +1135,16 @@ struct WorkoutView: View {
     }
 
     private func resolvedSlots(for day: CycleDay, sessionId: UUID) -> [ResolvedWorkoutSlot] {
-        CycleOrdering.sortedSlots(day.slots).map { slot in
+        let occurrenceOverrides = fixedOverrides.filter { $0.sessionId == sessionId }
+        let skippedMuscles = Set(occurrenceOverrides.filter {
+            $0.kind == .skipMuscle
+        }.compactMap(\.muscle))
+        let skippedPositions = Set(occurrenceOverrides.filter {
+            $0.kind == .skipExercise
+        }.compactMap(\.slotPosition))
+        return CycleOrdering.sortedSlots(day.slots).filter {
+            !skippedMuscles.contains($0.muscle) && !skippedPositions.contains($0.position)
+        }.map { slot in
             let overrideExerciseId = slotOverrides.first {
                 $0.sessionId == sessionId && $0.slotPosition == slot.position
             }?.exerciseId
@@ -577,46 +1155,72 @@ struct WorkoutView: View {
         }
     }
 
+    private func retainedRemovedExercises(
+        sessionId: UUID,
+        day: CycleDay
+    ) -> [Exercise] {
+        let configured = Set(day.slots.map(\.exerciseId))
+        let stagedPosition = Dictionary(
+            fixedSnapshots
+                .filter { $0.sessionId == sessionId && !configured.contains($0.exerciseId) }
+                .map { ($0.exerciseId, $0.position) },
+            uniquingKeysWith: min
+        )
+        let retainedIds = Set(setEntries.filter {
+            $0.sessionId == sessionId
+                && $0.isLocked
+                && $0.reps > 0
+                && !configured.contains($0.exerciseId)
+        }.map(\.exerciseId))
+        return exercises.filter { retainedIds.contains($0.id) }.sorted {
+            let left = stagedPosition[$0.id] ?? Int.max
+            let right = stagedPosition[$1.id] ?? Int.max
+            if left != right { return left < right }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
     private func applySwap(sessionId: UUID, slot: CycleSlot, fromExerciseId: UUID, toExerciseId: UUID) {
         guard fromExerciseId != toExerciseId else { return }
 
         do {
-            let oldEntries = entries(for: fromExerciseId, sessionId: sessionId)
-            let existingTargetEntries = entries(for: toExerciseId, sessionId: sessionId)
-
-            for entry in oldEntries {
-                modelContext.delete(entry)
+            guard isFixedExecutionEnabled else {
+                throw FixedCycleWorkoutError.readinessRequired
             }
-
-            let setCount = max(1, oldEntries.count > 0 ? oldEntries.count : slot.defaultSetCount)
-            if existingTargetEntries.isEmpty {
-                for setIndex in 1...setCount {
-                    let prefills = prefillValues(exerciseId: toExerciseId, setIndex: setIndex)
-                    let entry = SetEntry(
-                        sessionId: sessionId,
-                        exerciseId: toExerciseId,
-                        setIndex: setIndex,
-                        weight: prefills.weight,
-                        reps: prefills.reps,
-                        isLocked: false
-                    )
-                    try entry.validate()
-                    modelContext.insert(entry)
-                }
-            }
-
-            if let existingOverride = slotOverrides.first(where: { $0.sessionId == sessionId && $0.slotPosition == slot.position }) {
-                if toExerciseId == slot.exerciseId {
-                    modelContext.delete(existingOverride)
-                } else {
-                    existingOverride.exerciseId = toExerciseId
-                }
-            } else if toExerciseId != slot.exerciseId {
+            guard let exercise = exercises.first(where: { $0.id == toExerciseId }),
+                  let session = sessions.first(where: { $0.id == sessionId }) else { return }
+            let oldCount = max(1, entries(for: fromExerciseId, sessionId: sessionId).count)
+            try FixedCycleWorkoutService.replaceExercise(
+                slot: slot,
+                currentExerciseId: fromExerciseId,
+                with: exercise,
+                sessionId: sessionId,
+                entries: setEntries,
+                slotOverrides: slotOverrides,
+                modelContext: modelContext
+            )
+            let effort = FixedCycleWorkoutService.prefillEffort(
+                exerciseId: exercise.id,
+                session: session,
+                adaptiveSessions: adaptiveSessions,
+                adaptiveSetEntries: adaptiveSetEntries,
+                rotationSessions: sessions,
+                rotationSetEntries: setEntries
+            )
+            let setCount = effort?.rows.count ?? oldCount
+            for setIndex in 1...max(1, setCount) {
+                let values = prefillValues(
+                    exerciseId: exercise.id,
+                    setIndex: setIndex,
+                    effort: effort
+                )
                 modelContext.insert(
-                    SessionSlotOverride(
+                    SetEntry(
                         sessionId: sessionId,
-                        slotPosition: slot.position,
-                        exerciseId: toExerciseId
+                        exerciseId: exercise.id,
+                        setIndex: setIndex,
+                        weight: values.weight,
+                        reps: values.reps
                     )
                 )
             }
@@ -674,6 +1278,479 @@ struct WorkoutView: View {
         }
     }
 
+    @ViewBuilder
+    private func fixedReadinessEntry(session: Session, day: CycleDay) -> some View {
+        ReadinessEntrySections(
+            title: "1 · Readiness",
+            guidance: [
+                "Adjust anything that is not at its recovered default, then submit once.",
+                "Readiness is recorded for context. Fixed Cycle order and dose do not change automatically."
+            ],
+            muscles: FixedCycleWorkoutService.requiredMuscles(for: day),
+            statusText: fixedReadinessStatusText(for:),
+            sorenessSelection: sorenessBinding,
+            painSelection: painBinding,
+            eagernessSelection: eagernessBinding,
+            submitLabel: "Submit Readiness",
+            submitAccessibilityIdentifier: "fixed.submitReadiness",
+            accessibilityPrefix: "fixed",
+            onSubmit: {
+                submitReadiness(session: session, day: day)
+            },
+            onCancel: nil
+        )
+    }
+
+    private func fixedReadinessStatusText(for muscle: MuscleGroup) -> String? {
+        guard let exposure = latestExposure(for: muscle) else {
+            return "No completed direct exposure recorded."
+        }
+        return "\(exposure.setCount) direct working set\(exposure.setCount == 1 ? "" : "s") · \(exposure.kind) · \(daysSince(exposure.date)) day\(daysSince(exposure.date) == 1 ? "" : "s") ago"
+    }
+
+    @ViewBuilder
+    private func fixedRecoverySection(day: CycleDay) -> some View {
+        Section("Recent Recovery Evidence") {
+            ForEach(FixedCycleWorkoutService.requiredMuscles(for: day), id: \.self) { muscle in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(muscle.displayName)
+                        .font(.headline)
+                    if let exposure = latestExposure(for: muscle) {
+                        Text(
+                            "\(exposure.setCount) direct working set\(exposure.setCount == 1 ? "" : "s") · \(exposure.kind) · \(exposure.date.formatted(date: .abbreviated, time: .omitted)) · \(daysSince(exposure.date)) day\(daysSince(exposure.date) == 1 ? "" : "s") ago"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    } else {
+                        Text("No completed direct exposure recorded.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let observation = latestReadinessResponse(for: muscle) {
+                        Text(
+                            "Latest readiness: \(observation.soreness.displayName) soreness · \(observation.connectiveTissuePain.displayName) pain · \(observation.dateKey)"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(
+                            observation.connectiveTissuePain == .none
+                                && observation.soreness.allowsAutomaticTraining
+                                ? Color.secondary
+                                : Color.orange
+                        )
+                    }
+                    if let skip = latestCompletedSkip(for: muscle) {
+                        Text("Most recent omission: \(skip.reasonCode)")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+            Text("Evidence is advisory. Fixed Cycle order and dose do not change automatically.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func latestExposure(for muscle: MuscleGroup) -> FixedRecoveryExposure? {
+        let ids = Set(exercises.filter { $0.primaryMuscle == muscle }.map(\.id))
+        var candidates: [FixedRecoveryExposure] = sessions.compactMap { session in
+            guard session.status == .completed else { return nil }
+            let count = setEntries.filter {
+                $0.sessionId == session.id
+                    && ids.contains($0.exerciseId)
+                    && $0.isLocked
+                    && $0.reps > 0
+            }.count
+            guard count > 0 else { return nil }
+            return FixedRecoveryExposure(
+                date: session.finishedAt ?? session.createdAt,
+                setCount: count,
+                kind: session.dayLabelSnapshot == "Off-Schedule" ? "Ad hoc" : "Fixed Cycle"
+            )
+        }
+        candidates += adaptiveSessions.compactMap { session in
+            guard session.status == .completed else { return nil }
+            let count = adaptiveSetEntries.filter {
+                $0.adaptiveSessionId == session.id
+                    && ids.contains($0.exerciseId)
+                    && $0.isLocked
+                    && $0.reps > 0
+            }.count
+            guard count > 0 else { return nil }
+            return FixedRecoveryExposure(
+                date: session.finishedAt ?? session.createdAt,
+                setCount: count,
+                kind: "Adaptive"
+            )
+        }
+        return candidates.max {
+            if $0.date != $1.date { return $0.date < $1.date }
+            return $0.kind < $1.kind
+        }
+    }
+
+    private func latestReadinessResponse(
+        for muscle: MuscleGroup
+    ) -> SharedReadinessEvidence? {
+        var candidates = fixedReadiness.compactMap { observation in
+            observation.responses.first(where: { $0.muscle == muscle }).map {
+                SharedReadinessEvidence(
+                    soreness: $0.soreness,
+                    connectiveTissuePain: $0.connectiveTissuePain,
+                    eagerness: $0.eagerness,
+                    dateKey: observation.localDateKey,
+                    createdAt: observation.createdAt,
+                    revision: observation.revision
+                )
+            }
+        }
+        candidates += adaptiveReadinessChecks.compactMap { check in
+            check.responses.first(where: { $0.muscle == muscle }).map {
+                SharedReadinessEvidence(
+                    soreness: $0.soreness,
+                    connectiveTissuePain: $0.connectiveTissuePain,
+                    eagerness: $0.eagerness,
+                    dateKey: check.localDateKey,
+                    createdAt: check.createdAt,
+                    revision: check.revision
+                )
+            }
+        }
+        return candidates.max {
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.revision < $1.revision
+        }
+    }
+
+    private func latestCompletedSkip(
+        for muscle: MuscleGroup
+    ) -> FixedCycleOccurrenceOverride? {
+        let completedIds = Set(sessions.filter { $0.status == .completed }.map(\.id))
+        return fixedOverrides.filter {
+            completedIds.contains($0.sessionId) && $0.muscle == muscle
+        }.max {
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
+    private func daysSince(_ date: Date) -> Int {
+        max(
+            0,
+            Calendar.current.dateComponents(
+                [.day],
+                from: Calendar.current.startOfDay(for: date),
+                to: Calendar.current.startOfDay(for: .now)
+            ).day ?? 0
+        )
+    }
+
+    private func sorenessBinding(_ muscle: MuscleGroup) -> Binding<SorenessLevel> {
+        Binding(
+            get: { readinessInputs[muscle]?.soreness ?? .none },
+            set: { readinessInputs[muscle, default: FixedCycleWorkoutService.allClear].soreness = $0 }
+        )
+    }
+
+    private func painBinding(_ muscle: MuscleGroup) -> Binding<ConnectiveTissuePainLevel> {
+        Binding(
+            get: { readinessInputs[muscle]?.connectiveTissuePain ?? .none },
+            set: { readinessInputs[muscle, default: FixedCycleWorkoutService.allClear].connectiveTissuePain = $0 }
+        )
+    }
+
+    private func eagernessBinding(_ muscle: MuscleGroup) -> Binding<EagernessLevel> {
+        Binding(
+            get: { readinessInputs[muscle]?.eagerness ?? .eager },
+            set: { readinessInputs[muscle, default: FixedCycleWorkoutService.allClear].eagerness = $0 }
+        )
+    }
+
+    private func submitReadiness(session: Session, day: CycleDay) {
+        do {
+            let observation = try FixedCycleWorkoutService.makeReadinessObservation(
+                sessionId: session.id,
+                day: day,
+                inputs: readinessInputs,
+                existing: fixedReadiness
+            )
+            modelContext.insert(observation)
+            try modelContext.save()
+            scheduleDraftExport()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func refreshLocalDate(_ now: Date) {
+        let current = FixedCycleWorkoutService.localDateKey(for: now)
+        guard current != observedLocalDateKey else { return }
+        observedLocalDateKey = current
+        readinessInputs = Dictionary(
+            uniqueKeysWithValues: MuscleGroup.allCases.map {
+                ($0, FixedCycleWorkoutService.allClear)
+            }
+        )
+    }
+
+    private func prefillEffort(
+        exerciseId: UUID,
+        session: Session
+    ) -> ExerciseEffortLookupResult? {
+        return FixedCycleWorkoutService.prefillEffort(
+            exerciseId: exerciseId,
+            session: session,
+            adaptiveSessions: adaptiveSessions,
+            adaptiveSetEntries: adaptiveSetEntries,
+            rotationSessions: sessions,
+            rotationSetEntries: setEntries
+        )
+    }
+
+    private func prefillSourceText(_ result: ExerciseEffortLookupResult) -> String {
+        let match = result.matchKind == .sameCycleDay ? "Prior same-day effort" : "Global latest effort"
+        let kind: String
+        switch result.sourceKind {
+        case .fixedCycle: kind = "Fixed Cycle"
+        case .adaptive: kind = "Adaptive"
+        case .adHoc: kind = "Ad hoc"
+        }
+        return "\(match) · \(kind) · \(result.completedAt.formatted(date: .abbreviated, time: .omitted))"
+    }
+
+    private func skipExerciseToday(
+        _ slot: CycleSlot,
+        sessionId: UUID,
+        reasonCode: String
+    ) {
+        do {
+            guard isFixedExecutionEnabled else { throw FixedCycleWorkoutError.readinessRequired }
+            FixedCycleWorkoutService.skipExercise(
+                slot: slot,
+                sessionId: sessionId,
+                reasonCode: reasonCode,
+                entries: setEntries,
+                existingOverrides: fixedOverrides,
+                modelContext: modelContext
+            )
+            try modelContext.save()
+            scheduleDraftExport()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func skipMuscleToday(
+        _ muscle: MuscleGroup,
+        day: CycleDay,
+        sessionId: UUID,
+        reasonCode: String
+    ) {
+        do {
+            guard isFixedExecutionEnabled else { throw FixedCycleWorkoutError.readinessRequired }
+            FixedCycleWorkoutService.skipMuscle(
+                muscle: muscle,
+                day: day,
+                sessionId: sessionId,
+                reasonCode: reasonCode,
+                entries: setEntries,
+                existingOverrides: fixedOverrides,
+                modelContext: modelContext
+            )
+            try modelContext.save()
+            scheduleDraftExport()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func restoreSkip(
+        _ item: FixedCycleOccurrenceOverride,
+        day: CycleDay,
+        sessionId: UUID
+    ) {
+        do {
+            guard isFixedExecutionEnabled else {
+                throw FixedCycleWorkoutError.readinessRequired
+            }
+            let slots: [CycleSlot]
+            switch item.kind {
+            case .skipExercise:
+                slots = day.slots.filter { $0.position == item.slotPosition }
+            case .skipMuscle:
+                slots = day.slots.filter { $0.muscle == item.muscle }
+            }
+            guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
+            modelContext.delete(item)
+            for slot in slots where entries(for: slot.exerciseId, sessionId: sessionId).isEmpty {
+                let effort = FixedCycleWorkoutService.prefillEffort(
+                    exerciseId: slot.exerciseId,
+                    session: session,
+                    adaptiveSessions: adaptiveSessions,
+                    adaptiveSetEntries: adaptiveSetEntries,
+                    rotationSessions: sessions,
+                    rotationSetEntries: setEntries
+                )
+                for index in 1...max(1, effort?.rows.count ?? slot.defaultSetCount) {
+                    let value = prefillValues(
+                        exerciseId: slot.exerciseId,
+                        setIndex: index,
+                        effort: effort
+                    )
+                    modelContext.insert(
+                        SetEntry(
+                            sessionId: sessionId,
+                            exerciseId: slot.exerciseId,
+                            setIndex: index,
+                            weight: value.weight,
+                            reps: value.reps
+                        )
+                    )
+                }
+            }
+            try modelContext.save()
+            scheduleDraftExport()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func skippedLabel(_ item: FixedCycleOccurrenceOverride) -> String {
+        if item.kind == .skipMuscle {
+            return "\(item.muscle?.displayName ?? "Muscle") · \(item.reasonCode)"
+        }
+        let name = item.exerciseId.flatMap { id in
+            exercises.first(where: { $0.id == id })?.name
+        } ?? "Exercise"
+        return "\(name) · \(item.reasonCode)"
+    }
+
+    private func addPersistentMovement(_ exercise: Exercise, day: CycleDay, sessionId: UUID) {
+        do {
+            guard isFixedExecutionEnabled else { throw FixedCycleWorkoutError.readinessRequired }
+            guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
+            let effort = FixedCycleWorkoutService.prefillEffort(
+                exerciseId: exercise.id,
+                session: session,
+                adaptiveSessions: adaptiveSessions,
+                adaptiveSetEntries: adaptiveSetEntries,
+                rotationSessions: sessions,
+                rotationSetEntries: setEntries
+            )
+            let slot = try FixedCycleWorkoutService.addMovement(
+                exercise: exercise,
+                to: day,
+                sessionId: sessionId,
+                defaultSetCount: effort?.rows.count ?? 3,
+                modelContext: modelContext
+            )
+            for index in 1...max(1, effort?.rows.count ?? slot.defaultSetCount) {
+                let value = prefillValues(exerciseId: exercise.id, setIndex: index, effort: effort)
+                modelContext.insert(
+                    SetEntry(
+                        sessionId: sessionId,
+                        exerciseId: exercise.id,
+                        setIndex: index,
+                        weight: value.weight,
+                        reps: value.reps
+                    )
+                )
+            }
+            try modelContext.save()
+            scheduleDraftExport()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func createExerciseAndAdd(
+        name: String,
+        muscle: MuscleGroup,
+        type: ExerciseType,
+        equipment: EquipmentType,
+        day: CycleDay,
+        sessionId: UUID
+    ) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let existing = exercises.first(where: {
+            $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            addPersistentMovement(existing, day: day, sessionId: sessionId)
+            return
+        }
+        let exercise = Exercise(
+            name: trimmed,
+            primaryMuscle: muscle,
+            type: type,
+            equipment: equipment
+        )
+        modelContext.insert(exercise)
+        addPersistentMovement(exercise, day: day, sessionId: sessionId)
+    }
+
+    private func applyPendingFixedMutation(_ mutation: PendingFixedMutation) {
+        pendingFixedMutation = nil
+        do {
+            guard isFixedExecutionEnabled else { throw FixedCycleWorkoutError.readinessRequired }
+            switch mutation {
+            case .removeExercise(let day, let slot, let sessionId, _):
+                if FixedCycleWorkoutService.hasQualifyingSet(
+                    sessionId: sessionId,
+                    exerciseIds: Set([slot.exerciseId]),
+                    entries: setEntries
+                ) {
+                    FixedCycleWorkoutService.stageOccurrenceSnapshotsIfNeeded(
+                        sessionId: sessionId,
+                        day: day,
+                        exercises: exercises,
+                        existingSnapshots: fixedSnapshots,
+                        modelContext: modelContext
+                    )
+                }
+                FixedCycleWorkoutService.removeExercisePersistently(
+                    slot: slot,
+                    from: day,
+                    sessionId: sessionId,
+                    entries: setEntries,
+                    modelContext: modelContext
+                )
+            case .removeMuscle(let day, let muscle, let sessionId):
+                let exerciseIds = Set(day.slots.filter { $0.muscle == muscle }.map(\.exerciseId))
+                if FixedCycleWorkoutService.hasQualifyingSet(
+                    sessionId: sessionId,
+                    exerciseIds: exerciseIds,
+                    entries: setEntries
+                ) {
+                    FixedCycleWorkoutService.stageOccurrenceSnapshotsIfNeeded(
+                        sessionId: sessionId,
+                        day: day,
+                        exercises: exercises,
+                        existingSnapshots: fixedSnapshots,
+                        modelContext: modelContext
+                    )
+                }
+                FixedCycleWorkoutService.removeMusclePersistently(
+                    muscle: muscle,
+                    from: day,
+                    sessionId: sessionId,
+                    entries: setEntries,
+                    modelContext: modelContext
+                )
+            }
+            try modelContext.save()
+            scheduleDraftExport()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func scheduleDraftExport() {
         guard let session = draftSession, let template = activeTemplate else { return }
 
@@ -700,7 +1777,19 @@ struct WorkoutView: View {
             cycleDayIndex: session.cycleDayIndex,
             date: .now,
             exercises: exerciseSnapshots,
-            entries: entrySnapshots
+            entries: entrySnapshots,
+            fixedCycleMetadata: activeDay.map {
+                SessionExportService.fixedCycleMetadata(
+                    session: session,
+                    template: template,
+                    day: $0,
+                    exercises: exercises,
+                    setEntries: setEntries,
+                    readiness: fixedReadiness,
+                    overrides: fixedOverrides,
+                    snapshots: fixedSnapshots
+                )
+            }
         )
 
         draftExportTask?.cancel()
@@ -864,9 +1953,64 @@ private struct SwapContext: Identifiable {
     let sessionId: UUID
     let slot: CycleSlot
     let currentExerciseId: UUID
+    let dayLabel: String
 
     var id: String {
         "\(sessionId.uuidString)-\(slot.position)"
+    }
+}
+
+private struct AddMovementContext: Identifiable {
+    let id = UUID()
+    let day: CycleDay
+    let sessionId: UUID
+    let defaultMuscle: MuscleGroup
+}
+
+private struct FixedRecoveryExposure {
+    let date: Date
+    let setCount: Int
+    let kind: String
+}
+
+private struct SharedReadinessEvidence {
+    let soreness: SorenessLevel
+    let connectiveTissuePain: ConnectiveTissuePainLevel
+    let eagerness: EagernessLevel
+    let dateKey: String
+    let createdAt: Date
+    let revision: Int
+}
+
+private enum PendingFixedMutation {
+    case removeExercise(day: CycleDay, slot: CycleSlot, sessionId: UUID, exerciseName: String)
+    case removeMuscle(day: CycleDay, muscle: MuscleGroup, sessionId: UUID)
+
+    var title: String {
+        switch self {
+        case .removeExercise(let day, _, _, let exerciseName):
+            return "Remove \(exerciseName) from future \(day.label) workouts?"
+        case .removeMuscle(let day, let muscle, _):
+            return "Remove \(muscle.displayName) from future \(day.label) workouts?"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .removeExercise(let day, _, _, let exerciseName):
+            return "\(exerciseName) will be removed only from \(day.label). Completed history and the exercise catalog remain unchanged."
+        case .removeMuscle(let day, let muscle, _):
+            return "The \(muscle.displayName) block will be removed only from \(day.label). Completed history remains unchanged."
+        }
+    }
+
+    var confirmationLabel: String {
+        switch self {
+        case .removeExercise(let day, _, _, _):
+            return "Remove from Future \(day.label)"
+        case .removeMuscle(let day, _, _):
+            return "Remove Muscle from Future \(day.label)"
+        }
     }
 }
 
@@ -899,10 +2043,16 @@ private struct ExerciseSection: View {
     let slot: CycleSlot
     let exercise: Exercise?
     let entries: [SetEntry]
+    let isExecutionEnabled: Bool
+    let prefillSource: String?
     let onAddSet: () -> Void
     let onRemoveSet: () -> Void
     let onSwap: () -> Void
     let onHistory: () -> Void
+    let onSkipToday: () -> Void
+    let onSkipMuscleToday: () -> Void
+    let onRemoveFuture: () -> Void
+    let onRemoveMuscleFuture: () -> Void
     let onEntryUpdated: () -> Void
     private let actionButtonSize: CGFloat = 30
     private var usesAssistanceLoad: Bool {
@@ -916,6 +2066,11 @@ private struct ExerciseSection: View {
 
     var body: some View {
         Section {
+            if let prefillSource {
+                Label(prefillSource, systemImage: "arrow.uturn.backward.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             ForEach(entries) { entry in
                 HStack {
                     Text("S\(entry.setIndex)")
@@ -953,7 +2108,11 @@ private struct ExerciseSection: View {
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.decimalPad)
                     .frame(width: 82)
+                    .accessibilityIdentifier(
+                        "fixed.weight.\(exercise?.name ?? "unknown").\(entry.setIndex)"
+                    )
                     .disabled(entry.isLocked)
+                    .disabled(!isExecutionEnabled || entry.isLocked)
                     .opacity(entry.isLocked ? 1 : 0.55)
                     .focused($focusedField, equals: .weight(entry.id))
 
@@ -988,7 +2147,10 @@ private struct ExerciseSection: View {
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.numberPad)
                     .frame(width: 56)
-                    .disabled(entry.isLocked)
+                    .accessibilityIdentifier(
+                        "fixed.reps.\(exercise?.name ?? "unknown").\(entry.setIndex)"
+                    )
+                    .disabled(!isExecutionEnabled || entry.isLocked)
                     .opacity(entry.isLocked ? 1 : 0.55)
                     .focused($focusedField, equals: .reps(entry.id))
 
@@ -1005,7 +2167,13 @@ private struct ExerciseSection: View {
                             .foregroundStyle(entry.isLocked ? .green : .secondary)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!entry.isLocked && entry.weight == 0 && entry.reps == 0)
+                    .accessibilityIdentifier(
+                        "fixed.lock.\(exercise?.name ?? "unknown").\(entry.setIndex)"
+                    )
+                    .disabled(
+                        !isExecutionEnabled
+                            || (!entry.isLocked && entry.weight == 0 && entry.reps == 0)
+                    )
                 }
             }
         } header: {
@@ -1025,6 +2193,7 @@ private struct ExerciseSection: View {
                     .frame(width: actionButtonSize, height: actionButtonSize)
                     .accessibilityIdentifier("workout.swap.\(slot.position)")
                     .accessibilityLabel("Swap \(exercise?.name ?? "exercise")")
+                    .disabled(!isExecutionEnabled)
                     Button(action: onHistory) {
                         Image(systemName: "calendar")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1040,6 +2209,7 @@ private struct ExerciseSection: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .frame(width: actionButtonSize, height: actionButtonSize)
+                    .disabled(!isExecutionEnabled)
 
                     Button(action: onAddSet) {
                         Image(systemName: "plus")
@@ -1048,6 +2218,18 @@ private struct ExerciseSection: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .frame(width: actionButtonSize, height: actionButtonSize)
+                    .disabled(!isExecutionEnabled)
+
+                    Menu {
+                        Button("Skip Exercise for Today", action: onSkipToday)
+                        Button("Skip \(slot.muscle.displayName) for Today", action: onSkipMuscleToday)
+                        Divider()
+                        Button("Remove Exercise from Future Workouts", role: .destructive, action: onRemoveFuture)
+                        Button("Remove \(slot.muscle.displayName) from Future Workouts", role: .destructive, action: onRemoveMuscleFuture)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .disabled(!isExecutionEnabled)
                 }
             }
         }
@@ -1102,6 +2284,7 @@ struct ExerciseSwapSheet: View {
     let currentExercise: Exercise?
     let exercises: [Exercise]
     let slotMuscle: MuscleGroup
+    let navigationTitle: String?
     let onSelect: (Exercise) -> Void
     let onCreate: (_ name: String, _ muscle: MuscleGroup, _ type: ExerciseType, _ equipment: EquipmentType) -> Void
 
@@ -1118,12 +2301,14 @@ struct ExerciseSwapSheet: View {
         currentExercise: Exercise?,
         exercises: [Exercise],
         slotMuscle: MuscleGroup,
+        navigationTitle: String? = nil,
         onSelect: @escaping (Exercise) -> Void,
         onCreate: @escaping (_ name: String, _ muscle: MuscleGroup, _ type: ExerciseType, _ equipment: EquipmentType) -> Void
     ) {
         self.currentExercise = currentExercise
         self.exercises = exercises
         self.slotMuscle = slotMuscle
+        self.navigationTitle = navigationTitle
         self.onSelect = onSelect
         self.onCreate = onCreate
         _selectedMuscle = State(
@@ -1218,7 +2403,9 @@ struct ExerciseSwapSheet: View {
                     .disabled(newExerciseName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-            .navigationTitle(currentExercise == nil ? "Add Movement" : "Swap Exercise")
+            .navigationTitle(
+                navigationTitle ?? (currentExercise == nil ? "Add Movement" : "Swap Exercise")
+            )
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }

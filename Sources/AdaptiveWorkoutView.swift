@@ -182,78 +182,33 @@ struct AdaptiveWorkoutView: View {
 
     @ViewBuilder
     private func readinessContent(program: AdaptiveProgram, editingPlan: GeneratedWorkoutPlan?) -> some View {
-        Section(editingPlan == nil ? "1 · Readiness" : "Edit Readiness") {
-            Text("Adjust anything that is not at its recovered default, then submit once.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text("None and Light are trained normally. Moderate and Heavy stay out of automatic proposals; you can still add work manually.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-
-        ForEach(enabledMuscles(in: program), id: \.self) { muscle in
-            Section(muscle.displayName) {
-                if let status = exposureStatuses(
+        ReadinessEntrySections(
+            title: editingPlan == nil ? "1 · Readiness" : "Edit Readiness",
+            guidance: [
+                "Adjust anything that is not at its recovered default, then submit once.",
+                "None and Light are trained normally. Moderate and Heavy stay out of automatic proposals; you can still add work manually."
+            ],
+            muscles: enabledMuscles(in: program),
+            statusText: { muscle in
+                exposureStatuses(
                     program: program,
                     readinessInputs: currentReadinessInputs(),
                     asOf: .now
-                )[muscle] {
-                    Text(exposureStatusText(status))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Muscle soreness")
-                        .font(.subheadline.weight(.semibold))
-                    Text("How sore this muscle feels today")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Picker("Muscle soreness", selection: sorenessBinding(for: muscle)) {
-                        ForEach(SorenessLevel.allCases, id: \.self) { value in
-                            Text(value.displayName).tag(value)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .accessibilityLabel("\(muscle.displayName) muscle soreness")
-                    .accessibilityIdentifier("adaptive.readiness.\(muscle.rawValue).soreness")
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Connective-tissue pain")
-                        .font(.subheadline.weight(.semibold))
-                    Text("Joint or tendon warning signs")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Picker("Connective-tissue pain", selection: painBinding(for: muscle)) {
-                        ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
-                            Text(value.displayName).tag(value)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .accessibilityLabel("\(muscle.displayName) connective-tissue pain")
-                    .accessibilityIdentifier("adaptive.readiness.\(muscle.rawValue).pain")
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Eagerness to train")
-                        .font(.subheadline.weight(.semibold))
-                    Text("How willing this muscle feels to work today")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Picker("Eagerness to train", selection: eagernessBinding(for: muscle)) {
-                        ForEach(EagernessLevel.allCases, id: \.self) { value in
-                            Text(value.displayName).tag(value)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .accessibilityLabel("\(muscle.displayName) eagerness to train")
-                    .accessibilityIdentifier("adaptive.readiness.\(muscle.rawValue).eagerness")
-                }
+                )[muscle].map(exposureStatusText)
+            },
+            sorenessSelection: sorenessBinding(for:),
+            painSelection: painBinding(for:),
+            eagernessSelection: eagernessBinding(for:),
+            submitLabel: editingPlan == nil ? "Submit Readiness" : "Update Readiness",
+            submitAccessibilityIdentifier: "adaptive.generatePlan",
+            accessibilityPrefix: "adaptive",
+            onSubmit: {
+                submitReadiness(program: program, editingPlan: editingPlan)
+            },
+            onCancel: editingPlan == nil ? nil : {
+                isEditingReadiness = false
             }
-        }
+        )
 
 #if DEBUG
         if AppRuntime.isAdaptiveWorkflowUITesting {
@@ -274,17 +229,6 @@ struct AdaptiveWorkoutView: View {
             }
         }
 #endif
-
-        Section {
-            Button(editingPlan == nil ? "Submit Readiness" : "Update Readiness") {
-                submitReadiness(program: program, editingPlan: editingPlan)
-            }
-            .buttonStyle(.borderedProminent)
-            .accessibilityIdentifier("adaptive.generatePlan")
-            if editingPlan != nil {
-                Button("Cancel") { isEditingReadiness = false }
-            }
-        }
     }
 
     @ViewBuilder
@@ -901,13 +845,21 @@ struct AdaptiveWorkoutView: View {
             exerciseSelections: exerciseSelections,
             now: .now
         )
-        return try AdaptiveWorkoutService.makeProposedPlan(
+        let plan = try AdaptiveWorkoutService.makeProposedPlan(
             result: result,
             program: program,
             readinessCheck: readinessCheck,
             localDateKey: todayKey,
             timeZoneIdentifier: TimeZone.current.identifier
         )
+        AdaptivePrefillService.applyRepeatLastSetCounts(
+            to: plan,
+            adaptiveSessions: adaptiveSessions,
+            adaptiveSetEntries: adaptiveSetEntries,
+            rotationSessions: rotationSessions,
+            rotationSetEntries: rotationSetEntries
+        )
+        return plan
     }
 
     private func tomorrowPrediction(program: AdaptiveProgram) -> AdaptivePlanProposal? {
@@ -1567,6 +1519,16 @@ struct AdaptiveWorkoutView: View {
     }
 
     private func proposedSetCount(for exercise: Exercise) -> Int {
+        let previous = AdaptivePrefillService.latestRows(
+            exerciseId: exercise.id,
+            adaptiveSessions: adaptiveSessions,
+            adaptiveSetEntries: adaptiveSetEntries,
+            rotationSessions: rotationSessions,
+            rotationSetEntries: rotationSetEntries
+        )
+        if !previous.isEmpty {
+            return previous.count
+        }
         if exercise.primaryMuscle == .forearms || exercise.primaryMuscle == .calves {
             return 3
         }
@@ -1752,6 +1714,106 @@ private struct ReadinessSelection {
     var soreness: SorenessLevel = .none
     var pain: ConnectiveTissuePainLevel = .none
     var eagerness: EagernessLevel = .eager
+}
+
+struct ReadinessEntrySections: View {
+    let title: String
+    let guidance: [String]
+    let muscles: [MuscleGroup]
+    let statusText: (MuscleGroup) -> String?
+    let sorenessSelection: (MuscleGroup) -> Binding<SorenessLevel>
+    let painSelection: (MuscleGroup) -> Binding<ConnectiveTissuePainLevel>
+    let eagernessSelection: (MuscleGroup) -> Binding<EagernessLevel>
+    let submitLabel: String
+    let submitAccessibilityIdentifier: String
+    let accessibilityPrefix: String
+    let onSubmit: () -> Void
+    let onCancel: (() -> Void)?
+
+    var body: some View {
+        Section(title) {
+            ForEach(guidance, id: \.self) { line in
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+
+        ForEach(muscles, id: \.self) { muscle in
+            Section(muscle.displayName) {
+                if let status = statusText(muscle) {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Muscle soreness")
+                        .font(.subheadline.weight(.semibold))
+                    Text("How sore this muscle feels today")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Muscle soreness", selection: sorenessSelection(muscle)) {
+                        ForEach(SorenessLevel.allCases, id: \.self) { value in
+                            Text(value.displayName).tag(value)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel("\(muscle.displayName) muscle soreness")
+                    .accessibilityIdentifier(
+                        "\(accessibilityPrefix).readiness.\(muscle.rawValue).soreness"
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Connective-tissue pain")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Joint or tendon warning signs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Connective-tissue pain", selection: painSelection(muscle)) {
+                        ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
+                            Text(value.displayName).tag(value)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel("\(muscle.displayName) connective-tissue pain")
+                    .accessibilityIdentifier(
+                        "\(accessibilityPrefix).readiness.\(muscle.rawValue).pain"
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Eagerness to train")
+                        .font(.subheadline.weight(.semibold))
+                    Text("How willing this muscle feels to work today")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Eagerness to train", selection: eagernessSelection(muscle)) {
+                        ForEach(EagernessLevel.allCases, id: \.self) { value in
+                            Text(value.displayName).tag(value)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel("\(muscle.displayName) eagerness to train")
+                    .accessibilityIdentifier(
+                        "\(accessibilityPrefix).readiness.\(muscle.rawValue).eagerness"
+                    )
+                }
+            }
+        }
+
+        Section {
+            Button(submitLabel, action: onSubmit)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier(submitAccessibilityIdentifier)
+            if let onCancel {
+                Button("Cancel", action: onCancel)
+            }
+        }
+    }
 }
 
 private struct AdaptiveSwapContext: Identifiable {

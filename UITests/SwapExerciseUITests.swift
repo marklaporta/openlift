@@ -11,6 +11,8 @@ final class SwapExerciseUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.navigationBars["Workout"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["1 · Readiness"].waitForExistence(timeout: 5))
+        submitFixedReadiness(in: app)
         XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["Log Workout"].exists)
     }
@@ -22,14 +24,16 @@ final class SwapExerciseUITests: XCTestCase {
 
         XCTAssertTrue(app.tabBars.buttons["Workout"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Workout"].tap()
+        submitFixedReadiness(in: app)
 
+        scrollToElement(app.staticTexts["Flat Dumbbell Press"], in: app)
         XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
 
         let swapButton = app.buttons["workout.swap.0"]
         XCTAssertTrue(swapButton.waitForExistence(timeout: 5))
         swapButton.tap()
 
-        XCTAssertTrue(app.navigationBars["Swap Exercise"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Replace Exercise in Upper A"].waitForExistence(timeout: 5))
 
         let musclePicker = app.buttons["swap.musclePicker"].firstMatch
         XCTAssertTrue(musclePicker.waitForExistence(timeout: 5))
@@ -76,7 +80,17 @@ final class SwapExerciseUITests: XCTestCase {
 
         XCTAssertTrue(app.tabBars.buttons["Workout"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Workout"].tap()
+        submitFixedReadiness(in: app)
         XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
+
+        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        scrollToElement(weight, in: app)
+        weight.tap()
+        weight.typeText("45")
+        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        reps.tap()
+        reps.typeText("10")
+        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
 
         let finishButton = app.buttons["Finish Workout"]
         for _ in 0..<8 where !finishButton.isHittable {
@@ -85,10 +99,32 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(finishButton.waitForExistence(timeout: 5))
         finishButton.tap()
 
+        // Readiness is recorded per draft session, so the next draft re-arms the gate
+        // and has to be cleared before its exercises render.
+        submitFixedReadiness(in: app)
+
         // The list intentionally preserves its scroll position after the next
         // draft replaces the completed workout, so assert on a visible Lower A
         // exercise instead of an off-screen section header.
+        scrollToElement(app.staticTexts["Leg Press"], in: app)
         XCTAssertTrue(app.staticTexts["Leg Press"].waitForExistence(timeout: 10))
+    }
+
+    // Fixed Cycle gates the workout list behind a dated readiness observation. The
+    // form opens pre-filled with the all-clear defaults, so submitting once is enough
+    // to reach the exercise sections.
+    private func submitFixedReadiness(in app: XCUIApplication) {
+        let submit = app.buttons["fixed.submitReadiness"]
+        scrollToElement(submit, in: app)
+        XCTAssertTrue(submit.waitForExistence(timeout: 5))
+        submit.tap()
+
+        // The submit button sits below the per-muscle sections, so the list is left
+        // scrolled down when the workout content replaces the readiness form.
+        XCTAssertFalse(submit.waitForExistence(timeout: 5))
+        for _ in 0..<8 {
+            app.swipeDown()
+        }
     }
 
     func testTrainingModeSwitchPreservesRotationDraft() throws {
@@ -97,6 +133,9 @@ final class SwapExerciseUITests: XCTestCase {
         app.launch()
 
         app.tabBars.buttons["Workout"].tap()
+        // Submitting readiness once clears the gate for this draft and date, so the
+        // draft header stays visible across the mode switches asserted below.
+        submitFixedReadiness(in: app)
         XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
 
         app.tabBars.buttons["Cycle"].tap()

@@ -792,6 +792,7 @@ private struct TemplateEditorView: View {
 
     @State private var draft = TemplateDraft.newTemplate
     @State private var errorMessage: String?
+    @State private var pendingRemoval: TemplateRemovalRequest?
 
     var body: some View {
         NavigationStack {
@@ -811,7 +812,26 @@ private struct TemplateEditorView: View {
                             onAddSlot: { addSlot(dayIndex) },
                             onMoveSlotUp: { moveSlot(dayIndex: dayIndex, slotIndex: $0, delta: -1) },
                             onMoveSlotDown: { moveSlot(dayIndex: dayIndex, slotIndex: $0, delta: 1) },
-                            onDeleteSlot: { deleteSlot(dayIndex: dayIndex, slotIndex: $0) },
+                            onDeleteSlot: {
+                                pendingRemoval = .exercise(
+                                    TemplateSlotRemovalRequest(
+                                        dayIndex: dayIndex,
+                                        slotIndex: $0,
+                                        dayLabel: day.label,
+                                        exerciseName: exerciseName(
+                                            dayIndex: dayIndex,
+                                            slotIndex: $0
+                                        )
+                                    )
+                                )
+                            },
+                            onDeleteMuscle: {
+                                pendingRemoval = .muscle(
+                                    dayIndex: dayIndex,
+                                    dayLabel: day.label,
+                                    muscle: $0
+                                )
+                            },
                             onMuscleChanged: { slotIndex, muscle in
                                 draft.days[dayIndex].slots[slotIndex].muscle = muscle
                                 if let firstMatch = exercises.first(where: { $0.primaryMuscle == muscle })?.id {
@@ -858,6 +878,37 @@ private struct TemplateEditorView: View {
             }, message: {
                 Text(errorMessage ?? "Unknown error")
             })
+            .confirmationDialog(
+                pendingRemoval?.title ?? "Remove from Future Workouts?",
+                isPresented: Binding(
+                    get: { pendingRemoval != nil },
+                    set: { if !$0 { pendingRemoval = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let request = pendingRemoval {
+                    Button(
+                        request.confirmationLabel,
+                        role: .destructive
+                    ) {
+                        switch request {
+                        case .exercise(let slot):
+                            deleteSlot(
+                                dayIndex: slot.dayIndex,
+                                slotIndex: slot.slotIndex
+                            )
+                        case .muscle(let dayIndex, _, let muscle):
+                            deleteMuscle(dayIndex: dayIndex, muscle: muscle)
+                        }
+                        pendingRemoval = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingRemoval = nil
+                }
+            } message: {
+                Text("This edits only the named template day. Completed history and the exercise catalog are preserved.")
+            }
         }
     }
 
@@ -929,6 +980,20 @@ private struct TemplateEditorView: View {
         guard draft.days.indices.contains(dayIndex) else { return }
         guard draft.days[dayIndex].slots.indices.contains(slotIndex) else { return }
         draft.days[dayIndex].slots.remove(at: slotIndex)
+    }
+
+    private func exerciseName(dayIndex: Int, slotIndex: Int) -> String {
+        guard draft.days.indices.contains(dayIndex),
+              draft.days[dayIndex].slots.indices.contains(slotIndex),
+              let exerciseId = draft.days[dayIndex].slots[slotIndex].exerciseId else {
+            return "Exercise"
+        }
+        return exercises.first(where: { $0.id == exerciseId })?.name ?? "Exercise"
+    }
+
+    private func deleteMuscle(dayIndex: Int, muscle: MuscleGroup) {
+        guard draft.days.indices.contains(dayIndex) else { return }
+        draft.days[dayIndex].slots.removeAll { $0.muscle == muscle }
     }
 
     private func moveSlot(dayIndex: Int, slotIndex: Int, delta: Int) {
@@ -1018,6 +1083,7 @@ private struct DayEditorSection: View {
     let onMoveSlotUp: (Int) -> Void
     let onMoveSlotDown: (Int) -> Void
     let onDeleteSlot: (Int) -> Void
+    let onDeleteMuscle: (MuscleGroup) -> Void
     let onMuscleChanged: (Int, MuscleGroup) -> Void
     let onExerciseChanged: (Int, UUID?) -> Void
     let onSetCountChanged: (Int, Int) -> Void
@@ -1049,7 +1115,7 @@ private struct DayEditorSection: View {
                         .buttonStyle(.borderless)
 
                         Button(role: .destructive, action: { onDeleteSlot(slotIndex) }) {
-                            Image(systemName: "trash")
+                            Label("Remove from Future \(day.label)", systemImage: "trash")
                         }
                         .buttonStyle(.borderless)
                     }
@@ -1072,6 +1138,22 @@ private struct DayEditorSection: View {
             }
 
             Button("Add Muscle Slot", action: onAddSlot)
+            let configuredMuscles = Set(day.slots.map(\.muscle))
+            if !configuredMuscles.isEmpty {
+                Menu("Remove Muscle Group from Future \(day.label) Workouts") {
+                    ForEach(
+                        MuscleGroup.allCases.filter { configuredMuscles.contains($0) },
+                        id: \.self
+                    ) { muscle in
+                        Button(
+                            "Remove \(muscle.displayName) from Future \(day.label)",
+                            role: .destructive
+                        ) {
+                            onDeleteMuscle(muscle)
+                        }
+                    }
+                }
+            }
         } header: {
             HStack {
                 Text(day.label)
@@ -1108,6 +1190,36 @@ private struct TemplateDraft {
                     TemplateDraftSlot(muscle: slot.muscle, exerciseId: slot.exerciseId, defaultSetCount: slot.defaultSetCount)
                 }
             )
+        }
+    }
+}
+
+private struct TemplateSlotRemovalRequest {
+    let dayIndex: Int
+    let slotIndex: Int
+    let dayLabel: String
+    let exerciseName: String
+}
+
+private enum TemplateRemovalRequest {
+    case exercise(TemplateSlotRemovalRequest)
+    case muscle(dayIndex: Int, dayLabel: String, muscle: MuscleGroup)
+
+    var title: String {
+        switch self {
+        case .exercise(let request):
+            return "Remove \(request.exerciseName) from future \(request.dayLabel) workouts?"
+        case .muscle(_, let dayLabel, let muscle):
+            return "Remove \(muscle.displayName) from future \(dayLabel) workouts?"
+        }
+    }
+
+    var confirmationLabel: String {
+        switch self {
+        case .exercise(let request):
+            return "Remove from Future \(request.dayLabel)"
+        case .muscle(_, let dayLabel, _):
+            return "Remove Muscle from Future \(dayLabel)"
         }
     }
 }

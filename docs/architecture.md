@@ -40,6 +40,8 @@ The main SwiftData models are defined in [`Models.swift`](../Sources/Models.swif
 - `Session`
 - `SetEntry`
 - `SessionSlotOverride`
+- `FixedCycleReadinessObservation`, `FixedCycleReadinessResponse`
+- `FixedCycleOccurrenceOverride`
 
 Design intent:
 
@@ -108,8 +110,23 @@ Relevant code:
 Key Fixed Cycle behavior:
 
 - a draft session is created for the active cycle and current day
-- draft entries are prefilled from the most recent matching completed day
-- finishing a workout converts the draft to a completed session, exports it, advances the cycle, and creates the next draft
+- the template and pointer determine the next workout; calendar time does not
+- the user may inspect the workout before readiness, but all working-set mutation
+  and completion remain gated until a readiness record for the current local
+  date has been saved
+- readiness revisions are append-only observations associated with the draft;
+  they can warn but never reschedule, reorder, or change set count
+- draft entries use the most recent qualifying nonzero effort for the canonical
+  exercise on that same stable cycle-instance day, then the globally newest completed effort
+  across Fixed Cycle, Adaptive, and ad hoc work
+- zero-set skips and abandoned drafts do not become dose evidence or mutate the
+  template; explicit replacement/add/remove actions are day-scoped template edits
+- when a persistent removal follows completed draft work, a V9 occurrence
+  snapshot retains the pre-edit membership so those sets remain visible and
+  exportable while the future template immediately omits the removed item
+- finishing requires at least one locked working set with reps, converts the
+  draft to a completed session, exports it, advances exactly once, and creates
+  the next draft
 
 `WorkoutView` remains the single user-facing Workout page. Its content mutates
 with the selected mode. While Adaptive is selected, Fixed Cycle's instance,
@@ -122,8 +139,11 @@ iCloud mirror begins. Design stores a per-plan muscle-group exposure target in
 parallel migration-safe metadata; the profile default remains independent.
 The exposure controller derives each muscle's next eligible date from immutable
 completed direct-set evidence and its editable cadence. Missing work creates no
-debt or carry-forward; the next actual exposure uses the normal configured dose
-and resets the clock. Secondary-muscle attribution does not reset clocks.
+debt or carry-forward. Secondary-muscle attribution does not reset clocks.
+Scheduling eligibility remains Adaptive-owned, while the dose starting point is
+the literal latest qualifying effort for that canonical exercise. Feedback,
+readiness, recovery timing, difficulty, and overdue status do not raise or lower
+the copied set count.
 Automatic planning applies the profile's muscle-group, exercise, per-muscle
 exercise, total-set, and per-exercise caps.
 Difficulty is recovery context rather than a global point budget. The canonical
