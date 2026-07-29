@@ -184,18 +184,7 @@ struct AdaptiveWorkoutView: View {
     private func readinessContent(program: AdaptiveProgram, editingPlan: GeneratedWorkoutPlan?) -> some View {
         ReadinessEntrySections(
             title: editingPlan == nil ? "1 · Readiness" : "Edit Readiness",
-            guidance: [
-                "Adjust anything that is not at its recovered default, then submit once.",
-                "None and Light are trained normally. Moderate and Heavy stay out of automatic proposals; you can still add work manually."
-            ],
             muscles: enabledMuscles(in: program),
-            statusText: { muscle in
-                exposureStatuses(
-                    program: program,
-                    readinessInputs: currentReadinessInputs(),
-                    asOf: .now
-                )[muscle].map(exposureStatusText)
-            },
             sorenessSelection: sorenessBinding(for:),
             painSelection: painBinding(for:),
             eagernessSelection: eagernessBinding(for:),
@@ -577,37 +566,6 @@ struct AdaptiveWorkoutView: View {
             overrides: overrides,
             exercises: exercises
         )
-    }
-
-    private func exposureStatusText(_ status: AdaptiveMuscleExposureStatus) -> String {
-        let timing: String
-        if status.nextEligibleAt == nil {
-            timing = "Due now"
-        } else if let next = status.nextEligibleAt,
-                  Calendar.current.startOfDay(for: next)
-                    <= Calendar.current.startOfDay(for: .now) {
-            timing = status.daysOverdue > 0
-                ? "Due · \(status.daysOverdue) day(s) overdue"
-                : "Due today"
-        } else if let next = status.nextEligibleAt {
-            timing = "Next eligible \(next.formatted(date: .abbreviated, time: .omitted))"
-        } else {
-            timing = "Not eligible"
-        }
-        return "\(status.rule.normalSetCount) normal sets · \(timing)"
-    }
-
-    private func currentReadinessInputs() -> [MuscleGroup: MuscleReadinessInput] {
-        Dictionary(uniqueKeysWithValues: readiness.map { muscle, value in
-            (
-                muscle,
-                MuscleReadinessInput(
-                    soreness: value.soreness,
-                    connectiveTissuePain: value.pain,
-                    eagerness: value.eagerness
-                )
-            )
-        })
     }
 
     private func loadReadiness(from plan: GeneratedWorkoutPlan) {
@@ -1713,11 +1671,12 @@ private struct ReadinessSelection {
     var eagerness: EagernessLevel = .eager
 }
 
+/// Deliberately spare: no standing instructions, no prior-work summary, and no helper
+/// text under the three metrics. This is a form for reporting today's readiness, and the
+/// labels carry their own meaning.
 struct ReadinessEntrySections: View {
     let title: String
-    let guidance: [String]
     let muscles: [MuscleGroup]
-    let statusText: (MuscleGroup) -> String?
     let sorenessSelection: (MuscleGroup) -> Binding<SorenessLevel>
     let painSelection: (MuscleGroup) -> Binding<ConnectiveTissuePainLevel>
     let eagernessSelection: (MuscleGroup) -> Binding<EagernessLevel>
@@ -1728,27 +1687,13 @@ struct ReadinessEntrySections: View {
     let onCancel: (() -> Void)?
 
     var body: some View {
-        Section(title) {
-            ForEach(guidance, id: \.self) { line in
-                Text(line)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-
-        ForEach(muscles, id: \.self) { muscle in
-            Section(muscle.displayName) {
-                if let status = statusText(muscle) {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        // The phase title is a header on the first muscle section rather than a section
+        // of its own: an empty Section renders unreliably inside a List.
+        ForEach(Array(muscles.enumerated()), id: \.element) { index, muscle in
+            Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Muscle soreness")
                         .font(.subheadline.weight(.semibold))
-                    Text("How sore this muscle feels today")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     Picker("Muscle soreness", selection: sorenessSelection(muscle)) {
                         ForEach(SorenessLevel.allCases, id: \.self) { value in
                             Text(value.displayName).tag(value)
@@ -1765,9 +1710,6 @@ struct ReadinessEntrySections: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Connective-tissue pain")
                         .font(.subheadline.weight(.semibold))
-                    Text("Joint or tendon warning signs")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     Picker("Connective-tissue pain", selection: painSelection(muscle)) {
                         ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
                             Text(value.displayName).tag(value)
@@ -1784,9 +1726,6 @@ struct ReadinessEntrySections: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Eagerness to train")
                         .font(.subheadline.weight(.semibold))
-                    Text("How willing this muscle feels to work today")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     Picker("Eagerness to train", selection: eagernessSelection(muscle)) {
                         ForEach(EagernessLevel.allCases, id: \.self) { value in
                             Text(value.displayName).tag(value)
@@ -1798,6 +1737,15 @@ struct ReadinessEntrySections: View {
                     .accessibilityIdentifier(
                         "\(accessibilityPrefix).readiness.\(muscle.rawValue).eagerness"
                     )
+                }
+            } header: {
+                if index == 0 {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                        Text(muscle.displayName)
+                    }
+                } else {
+                    Text(muscle.displayName)
                 }
             }
         }
