@@ -1,27 +1,104 @@
 import XCTest
 
-final class SwapExerciseUITests: XCTestCase {
+// XCUITest parallelizes by class, not by file. These cases used to live in a single
+// class, so enabling parallel testing bought nothing. They are split by domain here —
+// still one file, so the Xcode project needs no new file references — with the shared
+// launch/scroll/readiness helpers hoisted onto a common base.
+//
+// The split is balanced by measured runtime so no worker is left waiting on a long tail:
+// the adaptive end-to-end walk (~215s) gets a class to itself and sets the floor, and
+// the remaining classes land near 100-120s each.
+//
+// Run with `-maximum-parallel-testing-workers 3`. Measured on the M4 (10 cores, 4 of
+// them performance): 3 workers is 297s and green, 5 workers is 352s and flaky — the
+// extra clones oversubscribe the performance cores, and the resulting scroll lag pushes
+// scrollToElement's hittability check past its timeout. Three workers is also the
+// optimal split, since the ~215s adaptive class sets the floor either way. Xcode's GUI
+// picks the worker count itself; capping it there needs a test plan.
+class OpenLiftUITestCase: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
 
-    func testAppOpensOnWorkoutTab() throws {
+    fileprivate func launchApp(_ extraArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += ["OPENLIFT_UI_TESTING"]
+        app.launchArguments += ["OPENLIFT_UI_TESTING"] + extraArguments
         app.launch()
-
-        // Unique coverage here is the default landing tab and the armed readiness gate.
-        // Submitting readiness and asserting the draft header is exercised by five other
-        // tests, so this one stops before that expensive sequence.
-        XCTAssertTrue(app.navigationBars["Workout"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["1 · Readiness"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.navigationBars["Log Workout"].exists)
+        return app
     }
 
+    // Fixed Cycle gates the workout list behind a dated readiness observation. The
+    // form opens pre-filled with the all-clear defaults, so submitting once is enough
+    // to reach the exercise sections.
+    fileprivate func submitFixedReadiness(in app: XCUIApplication) {
+        let submit = app.buttons["fixed.submitReadiness"]
+        scrollToElement(submit, in: app)
+        XCTAssertTrue(submit.waitForExistence(timeout: 5))
+        submit.tap()
+
+        // Asserting absence with `waitForExistence` can never return early, so it burned
+        // the full timeout on every call. Wait on the predicate instead: it completes as
+        // soon as the form is gone.
+        let dismissed = XCTWaiter().wait(
+            for: [
+                expectation(
+                    for: NSPredicate(format: "exists == false"),
+                    evaluatedWith: submit
+                )
+            ],
+            timeout: 5
+        )
+        XCTAssertEqual(dismissed, .completed)
+
+        // The submit button sits below the per-muscle sections, so the list is left
+        // scrolled down when the workout content replaces the readiness form.
+        for _ in 0..<8 {
+            app.swipeDown()
+        }
+    }
+
+    fileprivate func dismissExpectedICloudCycleAlertIfPresent(in app: XCUIApplication) {
+        let alert = app.alerts["Cycle Error"]
+        guard alert.waitForExistence(timeout: 2) else { return }
+        XCTAssertTrue(alert.staticTexts["Could not access the OpenLift cycles folder in iCloud Drive."].exists)
+        alert.buttons["OK"].tap()
+    }
+
+    fileprivate func confirmTrainingMode(_ name: String, in app: XCUIApplication) {
+        let mode = app.buttons[name]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        mode.tap()
+        let confirmation = app.buttons["Use \(name)"].firstMatch
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.tap()
+    }
+
+    // `for ... where` is a filter, not a break: the original form kept iterating and
+    // re-evaluated `isHittable` all 32 times even once the element was on screen, and
+    // each of those checks forces a full accessibility snapshot of the list.
+    //
+    // Those redundant checks were also acting as an accidental ~30s settle while a
+    // screen transition finished. Breaking early removes that, so wait for existence
+    // explicitly first. It returns immediately when the element is already present, and
+    // genuinely off-screen rows in a lazy List still fall through to the scroll loops.
+    fileprivate func scrollToElement(_ element: XCUIElement, in app: XCUIApplication) {
+        if element.waitForExistence(timeout: 5), element.isHittable { return }
+        for _ in 0..<16 {
+            if element.isHittable { break }
+            app.swipeUp()
+        }
+        for _ in 0..<16 {
+            if element.isHittable { break }
+            app.swipeDown()
+        }
+        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        XCTAssertTrue(element.isHittable)
+    }
+}
+
+final class SwapExerciseUITests: OpenLiftUITestCase {
     func testSwapExerciseCanSwitchToDifferentMuscleGroup() throws {
-        let app = XCUIApplication()
-        app.launchArguments += ["OPENLIFT_UI_TESTING"]
-        app.launch()
+        let app = launchApp()
 
         XCTAssertTrue(app.tabBars.buttons["Workout"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Workout"].tap()
@@ -52,9 +129,7 @@ final class SwapExerciseUITests: XCTestCase {
     }
 
     func testLogWorkoutCanCreateAndSelectNewExercise() throws {
-        let app = XCUIApplication()
-        app.launchArguments += ["OPENLIFT_UI_TESTING"]
-        app.launch()
+        let app = launchApp()
 
         app.tabBars.buttons["Log"].tap()
         XCTAssertTrue(app.navigationBars["Log Workout"].waitForExistence(timeout: 5))
@@ -74,10 +149,53 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["UI Test Belt Squat"].waitForExistence(timeout: 5))
     }
 
+    func testLogWorkoutExportsToICloudMirror() throws {
+        guard ProcessInfo.processInfo.environment["OPENLIFT_RUN_ICLOUD_E2E"] == "1" else {
+            throw XCTSkip("Real-device iCloud export smoke test is opt-in.")
+        }
+
+        let app = launchApp()
+
+        app.tabBars.buttons["Log"].tap()
+        XCTAssertTrue(app.navigationBars["Log Workout"].waitForExistence(timeout: 10))
+
+        let weightField = app.textFields["Weight"].firstMatch
+        XCTAssertTrue(weightField.waitForExistence(timeout: 10))
+        weightField.tap()
+        weightField.typeText("1")
+
+        let repsField = app.textFields["Reps"].firstMatch
+        XCTAssertTrue(repsField.waitForExistence(timeout: 10))
+        repsField.tap()
+        repsField.typeText("1")
+
+        let doneButton = app.buttons["Done"].firstMatch
+        if doneButton.waitForExistence(timeout: 2) {
+            doneButton.tap()
+        }
+
+        let saveButton = app.buttons["Save to History"].firstMatch
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 10))
+        saveButton.tap()
+
+        XCTAssertTrue(app.staticTexts["Saved to History."].waitForExistence(timeout: 20))
+    }
+}
+
+final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
+    func testAppOpensOnWorkoutTab() throws {
+        let app = launchApp()
+
+        // Unique coverage here is the default landing tab and the armed readiness gate.
+        // Submitting readiness and asserting the draft header is exercised by five other
+        // tests, so this one stops before that expensive sequence.
+        XCTAssertTrue(app.navigationBars["Workout"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["1 · Readiness"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Log Workout"].exists)
+    }
+
     func testRotationWorkoutFinishAdvancesToNextDraft() throws {
-        let app = XCUIApplication()
-        app.launchArguments += ["OPENLIFT_UI_TESTING"]
-        app.launch()
+        let app = launchApp()
 
         XCTAssertTrue(app.tabBars.buttons["Workout"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Workout"].tap()
@@ -111,41 +229,11 @@ final class SwapExerciseUITests: XCTestCase {
         scrollToElement(app.staticTexts["Leg Press"], in: app)
         XCTAssertTrue(app.staticTexts["Leg Press"].waitForExistence(timeout: 10))
     }
+}
 
-    // Fixed Cycle gates the workout list behind a dated readiness observation. The
-    // form opens pre-filled with the all-clear defaults, so submitting once is enough
-    // to reach the exercise sections.
-    private func submitFixedReadiness(in app: XCUIApplication) {
-        let submit = app.buttons["fixed.submitReadiness"]
-        scrollToElement(submit, in: app)
-        XCTAssertTrue(submit.waitForExistence(timeout: 5))
-        submit.tap()
-
-        // Asserting absence with `waitForExistence` can never return early, so it burned
-        // the full timeout on every call. Wait on the predicate instead: it completes as
-        // soon as the form is gone.
-        let dismissed = XCTWaiter().wait(
-            for: [
-                expectation(
-                    for: NSPredicate(format: "exists == false"),
-                    evaluatedWith: submit
-                )
-            ],
-            timeout: 5
-        )
-        XCTAssertEqual(dismissed, .completed)
-
-        // The submit button sits below the per-muscle sections, so the list is left
-        // scrolled down when the workout content replaces the readiness form.
-        for _ in 0..<8 {
-            app.swipeDown()
-        }
-    }
-
+final class TrainingModeUITests: OpenLiftUITestCase {
     func testTrainingModeSwitchPreservesRotationDraft() throws {
-        let app = XCUIApplication()
-        app.launchArguments += ["OPENLIFT_UI_TESTING"]
-        app.launch()
+        let app = launchApp()
 
         app.tabBars.buttons["Workout"].tap()
         // Submitting readiness once clears the gate for this draft and date, so the
@@ -183,9 +271,7 @@ final class SwapExerciseUITests: XCTestCase {
     }
 
     func testCycleTemplateMutationsRequireConfirmation() throws {
-        let app = XCUIApplication()
-        app.launchArguments += ["OPENLIFT_UI_TESTING"]
-        app.launch()
+        let app = launchApp()
 
         app.tabBars.buttons["Cycle"].tap()
         dismissExpectedICloudCycleAlertIfPresent(in: app)
@@ -209,11 +295,11 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Activate '")).firstMatch.exists)
         app.buttons["Cancel"].tap()
     }
+}
 
+final class AdaptiveProposalUITests: OpenLiftUITestCase {
     func testAdaptiveCycleSurfaceOpensProfileEditorAndLoadsExplicitStarter() throws {
-        let app = XCUIApplication()
-        app.launchArguments += ["OPENLIFT_UI_TESTING"]
-        app.launch()
+        let app = launchApp()
 
         XCTAssertTrue(app.tabBars.buttons["Log"].waitForExistence(timeout: 5))
         app.tabBars.buttons["History"].tap()
@@ -253,10 +339,57 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertEqual(profileName.value as? String, "Adaptive Starter — Review Required")
     }
 
+    func testAdaptiveProposalUsesHistoryForSelectionAndPrefill() throws {
+        let app = launchApp([
+            "OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW",
+            "OPENLIFT_UI_TESTING_ADAPTIVE_HISTORY"
+        ])
+
+        app.tabBars.buttons["Cycle"].tap()
+        dismissExpectedICloudCycleAlertIfPresent(in: app)
+        confirmTrainingMode("Adaptive Floating", in: app)
+
+        app.tabBars.buttons["Workout"].tap()
+        let generatePlan = app.buttons["adaptive.generatePlan"]
+        scrollToElement(generatePlan, in: app)
+        generatePlan.tap()
+
+        let proposedPlan = app.staticTexts["2 · Design"]
+        for _ in 0..<4 {
+            if proposedPlan.isHittable { break }
+            app.swipeDown()
+        }
+        XCTAssertTrue(proposedPlan.waitForExistence(timeout: 5))
+        for exercise in ["Flat Dumbbell Press", "Cable Row"] {
+            let plannedExercise = app.staticTexts[exercise]
+            scrollToElement(plannedExercise, in: app)
+            XCTAssertTrue(plannedExercise.exists)
+        }
+
+        let splitDose = app.staticTexts["2 sets"].firstMatch
+        scrollToElement(splitDose, in: app)
+        XCTAssertTrue(splitDose.exists)
+        let priorPerformance = app.staticTexts["adaptive.previous.Flat Dumbbell Press"]
+        scrollToElement(priorPerformance, in: app)
+        XCTAssertEqual(priorPerformance.label, "Previous: 60.0 x 9")
+
+        let useWorkout = app.buttons["adaptive.useWorkout"]
+        scrollToElement(useWorkout, in: app)
+        useWorkout.tap()
+
+        let firstWeight = app.textFields["adaptive.weight.Flat Dumbbell Press.1"]
+        scrollToElement(firstWeight, in: app)
+        XCTAssertEqual(firstWeight.value as? String, "60")
+        let firstReps = app.textFields["adaptive.reps.Flat Dumbbell Press.1"]
+        XCTAssertEqual(firstReps.value as? String, "9")
+    }
+}
+
+// The longest walk in the suite (~215s): readiness -> design -> execute -> complete ->
+// history. It sets the parallel floor, so it gets a class to itself.
+final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
     func testAdaptiveWorkoutReadinessPreviewFreezeLockAndComplete() throws {
-        let app = XCUIApplication()
-        app.launchArguments += ["OPENLIFT_UI_TESTING", "OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW"]
-        app.launch()
+        let app = launchApp(["OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW"])
 
         XCTAssertTrue(app.tabBars.buttons["Cycle"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Cycle"].tap()
@@ -431,125 +564,5 @@ final class SwapExerciseUITests: XCTestCase {
         historySearch.typeText("Incline Curl")
         XCTAssertTrue(app.staticTexts["Incline Curl"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["60 × 10"].waitForExistence(timeout: 5))
-    }
-
-    func testAdaptiveProposalUsesHistoryForSelectionAndPrefill() throws {
-        let app = XCUIApplication()
-        app.launchArguments += [
-            "OPENLIFT_UI_TESTING",
-            "OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW",
-            "OPENLIFT_UI_TESTING_ADAPTIVE_HISTORY"
-        ]
-        app.launch()
-
-        app.tabBars.buttons["Cycle"].tap()
-        dismissExpectedICloudCycleAlertIfPresent(in: app)
-        confirmTrainingMode("Adaptive Floating", in: app)
-
-        app.tabBars.buttons["Workout"].tap()
-        let generatePlan = app.buttons["adaptive.generatePlan"]
-        scrollToElement(generatePlan, in: app)
-        generatePlan.tap()
-
-        let proposedPlan = app.staticTexts["2 · Design"]
-        for _ in 0..<4 {
-            if proposedPlan.isHittable { break }
-            app.swipeDown()
-        }
-        XCTAssertTrue(proposedPlan.waitForExistence(timeout: 5))
-        for exercise in ["Flat Dumbbell Press", "Cable Row"] {
-            let plannedExercise = app.staticTexts[exercise]
-            scrollToElement(plannedExercise, in: app)
-            XCTAssertTrue(plannedExercise.exists)
-        }
-
-        let splitDose = app.staticTexts["2 sets"].firstMatch
-        scrollToElement(splitDose, in: app)
-        XCTAssertTrue(splitDose.exists)
-        let priorPerformance = app.staticTexts["adaptive.previous.Flat Dumbbell Press"]
-        scrollToElement(priorPerformance, in: app)
-        XCTAssertEqual(priorPerformance.label, "Previous: 60.0 x 9")
-
-        let useWorkout = app.buttons["adaptive.useWorkout"]
-        scrollToElement(useWorkout, in: app)
-        useWorkout.tap()
-
-        let firstWeight = app.textFields["adaptive.weight.Flat Dumbbell Press.1"]
-        scrollToElement(firstWeight, in: app)
-        XCTAssertEqual(firstWeight.value as? String, "60")
-        let firstReps = app.textFields["adaptive.reps.Flat Dumbbell Press.1"]
-        XCTAssertEqual(firstReps.value as? String, "9")
-    }
-
-    func testLogWorkoutExportsToICloudMirror() throws {
-        guard ProcessInfo.processInfo.environment["OPENLIFT_RUN_ICLOUD_E2E"] == "1" else {
-            throw XCTSkip("Real-device iCloud export smoke test is opt-in.")
-        }
-
-        let app = XCUIApplication()
-        app.launchArguments += ["OPENLIFT_UI_TESTING"]
-        app.launch()
-
-        app.tabBars.buttons["Log"].tap()
-        XCTAssertTrue(app.navigationBars["Log Workout"].waitForExistence(timeout: 10))
-
-        let weightField = app.textFields["Weight"].firstMatch
-        XCTAssertTrue(weightField.waitForExistence(timeout: 10))
-        weightField.tap()
-        weightField.typeText("1")
-
-        let repsField = app.textFields["Reps"].firstMatch
-        XCTAssertTrue(repsField.waitForExistence(timeout: 10))
-        repsField.tap()
-        repsField.typeText("1")
-
-        let doneButton = app.buttons["Done"].firstMatch
-        if doneButton.waitForExistence(timeout: 2) {
-            doneButton.tap()
-        }
-
-        let saveButton = app.buttons["Save to History"].firstMatch
-        XCTAssertTrue(saveButton.waitForExistence(timeout: 10))
-        saveButton.tap()
-
-        XCTAssertTrue(app.staticTexts["Saved to History."].waitForExistence(timeout: 20))
-    }
-
-    private func dismissExpectedICloudCycleAlertIfPresent(in app: XCUIApplication) {
-        let alert = app.alerts["Cycle Error"]
-        guard alert.waitForExistence(timeout: 2) else { return }
-        XCTAssertTrue(alert.staticTexts["Could not access the OpenLift cycles folder in iCloud Drive."].exists)
-        alert.buttons["OK"].tap()
-    }
-
-    private func confirmTrainingMode(_ name: String, in app: XCUIApplication) {
-        let mode = app.buttons[name]
-        XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        mode.tap()
-        let confirmation = app.buttons["Use \(name)"].firstMatch
-        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
-        confirmation.tap()
-    }
-
-    // `for ... where` is a filter, not a break: the original form kept iterating and
-    // re-evaluated `isHittable` all 32 times even once the element was on screen, and
-    // each of those checks forces a full accessibility snapshot of the list.
-    //
-    // Those redundant checks were also acting as an accidental ~30s settle while a
-    // screen transition finished. Breaking early removes that, so wait for existence
-    // explicitly first. It returns immediately when the element is already present, and
-    // genuinely off-screen rows in a lazy List still fall through to the scroll loops.
-    private func scrollToElement(_ element: XCUIElement, in app: XCUIApplication) {
-        if element.waitForExistence(timeout: 5), element.isHittable { return }
-        for _ in 0..<16 {
-            if element.isHittable { break }
-            app.swipeUp()
-        }
-        for _ in 0..<16 {
-            if element.isHittable { break }
-            app.swipeDown()
-        }
-        XCTAssertTrue(element.waitForExistence(timeout: 5))
-        XCTAssertTrue(element.isHittable)
     }
 }
