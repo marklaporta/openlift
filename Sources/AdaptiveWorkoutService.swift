@@ -710,6 +710,7 @@ enum AdaptiveWorkoutService {
     static func makeReadinessCheck(
         program: AdaptiveProgram,
         inputs: [MuscleGroup: MuscleReadinessInput],
+        systemicEagerness: EagernessLevel? = nil,
         localDateKey: String,
         timeZoneIdentifier: String,
         revision: Int,
@@ -728,7 +729,7 @@ enum AdaptiveWorkoutService {
                 muscle: muscle,
                 soreness: input.soreness,
                 connectiveTissuePain: input.connectiveTissuePain,
-                eagerness: input.eagerness
+                eagerness: systemicEagerness ?? input.eagerness
             )
         }
         return DailyReadinessCheck(

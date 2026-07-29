@@ -82,6 +82,7 @@ enum FixedCycleWorkoutService {
         template: CycleTemplate,
         day: CycleDay,
         inputs: [MuscleGroup: MuscleReadinessInput],
+        systemicEagerness: EagernessLevel? = nil,
         existing: [FixedCycleReadinessObservation],
         now: Date = .now,
         calendar: Calendar = .current,
@@ -96,7 +97,7 @@ enum FixedCycleWorkoutService {
                 muscle: muscle,
                 soreness: value.soreness,
                 connectiveTissuePain: value.connectiveTissuePain,
-                eagerness: value.eagerness
+                eagerness: systemicEagerness ?? value.eagerness
             )
         }
         let revision = existing
@@ -370,6 +371,7 @@ struct WorkoutView: View {
     @State private var addMovementContext: AddMovementContext?
     @State private var historyContext: ExerciseHistoryContext?
     @State private var readinessInputs: [MuscleGroup: MuscleReadinessInput] = [:]
+    @State private var systemicEagerness: EagernessLevel = .eager
     @State private var observedLocalDateKey = FixedCycleWorkoutService.localDateKey(for: .now)
     @State private var pendingFixedMutation: PendingFixedMutation?
     @State private var skippedReason = "user_choice"
@@ -1312,7 +1314,7 @@ struct WorkoutView: View {
             ),
             sorenessSelection: sorenessBinding,
             painSelection: painBinding,
-            eagernessSelection: eagernessBinding,
+            eagernessSelection: $systemicEagerness,
             submitLabel: "Submit Readiness",
             submitAccessibilityIdentifier: "fixed.submitReadiness",
             accessibilityPrefix: "fixed",
@@ -1340,13 +1342,6 @@ struct WorkoutView: View {
         )
     }
 
-    private func eagernessBinding(_ muscle: MuscleGroup) -> Binding<EagernessLevel> {
-        Binding(
-            get: { readinessInputs[muscle]?.eagerness ?? .eager },
-            set: { readinessInputs[muscle, default: FixedCycleWorkoutService.allClear].eagerness = $0 }
-        )
-    }
-
     private func submitReadiness(
         session: Session,
         template: CycleTemplate,
@@ -1358,6 +1353,7 @@ struct WorkoutView: View {
                 template: template,
                 day: day,
                 inputs: readinessInputs,
+                systemicEagerness: systemicEagerness,
                 existing: fixedReadiness
             )
             modelContext.insert(observation)
@@ -1393,6 +1389,11 @@ struct WorkoutView: View {
                 .readinessMuscles(for: template, targeting: day)
                 .map { ($0, readinessInputs[$0] ?? FixedCycleWorkoutService.allClear) }
         )
+        if let latest = fixedReadiness.max(by: {
+            ($0.createdAt, $0.revision) < ($1.createdAt, $1.revision)
+        }) {
+            systemicEagerness = .leastEager(in: latest.responses.map(\.eagerness))
+        }
     }
 
     private func prefillEffort(

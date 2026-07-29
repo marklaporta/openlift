@@ -23,11 +23,10 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
 
         app.tabBars.buttons["Workout"].tap()
         XCTAssertTrue(app.navigationBars["Workout"].waitForExistence(timeout: 5))
-        // Metric labels sit beside their pickers now and read short; the descriptive
-        // wording survives as the pickers' accessibility labels.
+        // Eagerness is systemic, while soreness and tissue pain remain per-muscle.
+        XCTAssertTrue(app.staticTexts["Eagerness to train today"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Soreness"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Tissue pain"].firstMatch.exists)
-        XCTAssertTrue(app.staticTexts["Eagerness"].firstMatch.exists)
 
         let generatePlan = app.buttons["adaptive.generatePlan"]
         scrollToElement(generatePlan, in: app)

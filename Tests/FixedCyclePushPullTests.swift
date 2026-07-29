@@ -911,6 +911,7 @@ final class FixedCyclePushPullTests: XCTestCase {
                 template: template,
                 day: day,
                 inputs: partial,
+                systemicEagerness: .reluctant,
                 existing: [],
                 now: Date(timeIntervalSince1970: 1_769_299_200),
                 calendar: utcCalendar,
@@ -922,6 +923,43 @@ final class FixedCyclePushPullTests: XCTestCase {
                 .incompleteReadiness(.back)
             )
         }
+    }
+
+    func testFixedSystemicEagernessFansOutToEveryTrackedMuscleResponse() throws {
+        let exercise = Exercise(
+            name: "Test Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .barbell
+        )
+        let day = CycleDay(
+            label: "Push A",
+            slots: [CycleSlot(position: 0, muscle: .chest, exerciseId: exercise.id)]
+        )
+        let pullDay = CycleDay(
+            label: "Pull A",
+            slots: [CycleSlot(position: 0, muscle: .back, exerciseId: exercise.id)]
+        )
+        let template = CycleTemplate(name: "Push/Pull", days: [day, pullDay])
+        let inputs: [MuscleGroup: MuscleReadinessInput] = [
+            .chest: .init(soreness: .mild, connectiveTissuePain: .none, eagerness: .eager),
+            .back: .init(soreness: .none, connectiveTissuePain: .caution, eagerness: .neutral)
+        ]
+
+        let observation = try FixedCycleWorkoutService.makeReadinessObservation(
+            sessionId: UUID(),
+            template: template,
+            day: day,
+            inputs: inputs,
+            systemicEagerness: .reluctant,
+            existing: [],
+            now: Date(timeIntervalSince1970: 1_769_299_200),
+            calendar: utcCalendar,
+            timeZone: TimeZone(identifier: "UTC")!
+        )
+
+        XCTAssertEqual(Set(observation.responses.map(\.muscle)), Set([.chest, .back]))
+        XCTAssertTrue(observation.responses.allSatisfy { $0.eagerness == .reluctant })
     }
 
     func testFixedCycleLookupKeepsSeparateDayBaselinesAndSkipsZeroOccurrences() {
