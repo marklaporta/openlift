@@ -1867,15 +1867,6 @@ enum AdaptivePlanService {
         return result
     }
 
-    private static func eagernessRank(_ eagerness: EagernessLevel?) -> Int {
-        switch eagerness {
-        case .eager: return 0
-        case .neutral: return 1
-        case .reluctant: return 2
-        case nil: return 3
-        }
-    }
-
     private static func sorenessRank(_ soreness: SorenessLevel?) -> Int {
         switch soreness {
         case .some(.none): return 0

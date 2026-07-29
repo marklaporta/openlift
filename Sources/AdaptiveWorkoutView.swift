@@ -25,6 +25,7 @@ struct AdaptiveWorkoutView: View {
     @State private var readiness: [MuscleGroup: ReadinessSelection] = Dictionary(
         uniqueKeysWithValues: MuscleGroup.allCases.map { ($0, ReadinessSelection()) }
     )
+    @State private var systemicEagerness: EagernessLevel = .eager
     @State private var errorMessage: String?
     @State private var swapContext: AdaptiveSwapContext?
     @State private var addMovementContext: AdaptiveAddMovementContext?
@@ -187,7 +188,7 @@ struct AdaptiveWorkoutView: View {
             muscles: enabledMuscles(in: program),
             sorenessSelection: sorenessBinding(for:),
             painSelection: painBinding(for:),
-            eagernessSelection: eagernessBinding(for:),
+            eagernessSelection: $systemicEagerness,
             submitLabel: editingPlan == nil ? "Submit Readiness" : "Update Readiness",
             submitAccessibilityIdentifier: "adaptive.generatePlan",
             accessibilityPrefix: "adaptive",
@@ -198,6 +199,9 @@ struct AdaptiveWorkoutView: View {
                 isEditingReadiness = false
             }
         )
+        .onAppear {
+            prefillAdaptiveSystemicEagerness()
+        }
 
 #if DEBUG
         if AppRuntime.isAdaptiveWorkflowUITesting {
@@ -208,11 +212,11 @@ struct AdaptiveWorkoutView: View {
                             $0,
                             ReadinessSelection(
                                 soreness: SorenessLevel.none,
-                                pain: ConnectiveTissuePainLevel.none,
-                                eagerness: .eager
+                                pain: ConnectiveTissuePainLevel.none
                             )
                         )
                     })
+                    systemicEagerness = .eager
                 }
                 .accessibilityIdentifier("adaptive.fillTestReadiness")
             }
@@ -575,11 +579,18 @@ struct AdaptiveWorkoutView: View {
                 $0.muscle,
                 ReadinessSelection(
                     soreness: $0.soreness,
-                    pain: $0.connectiveTissuePain,
-                    eagerness: $0.eagerness
+                    pain: $0.connectiveTissuePain
                 )
             )
         })
+        systemicEagerness = .leastEager(in: check.responses.map(\.eagerness))
+    }
+
+    private func prefillAdaptiveSystemicEagerness() {
+        guard let latest = readinessChecks.max(by: {
+            ($0.createdAt, $0.revision) < ($1.createdAt, $1.revision)
+        }) else { return }
+        systemicEagerness = .leastEager(in: latest.responses.map(\.eagerness))
     }
 
     @ViewBuilder
@@ -644,7 +655,7 @@ struct AdaptiveWorkoutView: View {
                 MuscleReadinessInput(
                     soreness: value.soreness,
                     connectiveTissuePain: value.pain,
-                    eagerness: value.eagerness
+                    eagerness: systemicEagerness
                 )
             )
         })
@@ -664,13 +675,6 @@ struct AdaptiveWorkoutView: View {
         )
     }
 
-    private func eagernessBinding(for muscle: MuscleGroup) -> Binding<EagernessLevel> {
-        Binding(
-            get: { readiness[muscle]?.eagerness ?? .eager },
-            set: { readiness[muscle, default: ReadinessSelection()].eagerness = $0 }
-        )
-    }
-
     private func submitReadiness(program: AdaptiveProgram, editingPlan: GeneratedWorkoutPlan?) {
         do {
             guard program.isReviewedForUse else { throw AdaptiveWorkoutServiceError.profileNotReviewed }
@@ -681,6 +685,7 @@ struct AdaptiveWorkoutView: View {
             let check = try AdaptiveWorkoutService.makeReadinessCheck(
                 program: program,
                 inputs: readinessInputs(),
+                systemicEagerness: systemicEagerness,
                 localDateKey: todayKey,
                 timeZoneIdentifier: TimeZone.current.identifier,
                 revision: revision
@@ -1583,11 +1588,11 @@ struct AdaptiveWorkoutView: View {
                     $0,
                     ReadinessSelection(
                         soreness: SorenessLevel.none,
-                        pain: ConnectiveTissuePainLevel.none,
-                        eagerness: .eager
+                        pain: ConnectiveTissuePainLevel.none
                     )
                 )
             })
+            systemicEagerness = .eager
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1668,18 +1673,17 @@ struct AdaptiveWorkoutView: View {
 private struct ReadinessSelection {
     var soreness: SorenessLevel = .none
     var pain: ConnectiveTissuePainLevel = .none
-    var eagerness: EagernessLevel = .eager
 }
 
 /// Deliberately spare: no standing instructions, no prior-work summary, and no helper
-/// text under the three metrics. This is a form for reporting today's readiness, and the
+/// text under the metrics. This is a form for reporting today's readiness, and the
 /// labels carry their own meaning.
 struct ReadinessEntrySections: View {
     let title: String
     let muscles: [MuscleGroup]
     let sorenessSelection: (MuscleGroup) -> Binding<SorenessLevel>
     let painSelection: (MuscleGroup) -> Binding<ConnectiveTissuePainLevel>
-    let eagernessSelection: (MuscleGroup) -> Binding<EagernessLevel>
+    let eagernessSelection: Binding<EagernessLevel>
     let submitLabel: String
     let submitAccessibilityIdentifier: String
     let accessibilityPrefix: String
@@ -1687,10 +1691,26 @@ struct ReadinessEntrySections: View {
     let onCancel: (() -> Void)?
 
     var body: some View {
-        // The phase title is a header on the first muscle section rather than a section
-        // of its own: an empty Section renders unreliably inside a List.
-        ForEach(Array(muscles.enumerated()), id: \.element) { index, muscle in
-            // All three metrics share one row, and the muscle name is rotated into the
+        Section(title) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Eagerness to train today")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("Eagerness to train today", selection: eagernessSelection) {
+                    ForEach(EagernessLevel.allCases, id: \.self) { value in
+                        Text(value.displayName).tag(value)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityLabel("Eagerness to train today")
+                .accessibilityIdentifier("\(accessibilityPrefix).readiness.eagerness")
+            }
+        }
+        .listSectionSpacing(.compact)
+
+        ForEach(muscles, id: \.self) { muscle in
+            // Both per-muscle metrics share one row, and the muscle name is rotated into the
             // card's left gutter instead of sitting in a section header above it. That
             // removes a header block and its spacing per muscle. Metric labels stay
             // above their pickers: inline labels squeeze the four-segment soreness
@@ -1706,61 +1726,40 @@ struct ReadinessEntrySections: View {
                         .accessibilityLabel(muscle.displayName)
 
                     VStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Soreness")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Picker("Muscle soreness", selection: sorenessSelection(muscle)) {
-                            ForEach(SorenessLevel.allCases, id: \.self) { value in
-                                Text(value.displayName).tag(value)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Soreness")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Picker("Muscle soreness", selection: sorenessSelection(muscle)) {
+                                ForEach(SorenessLevel.allCases, id: \.self) { value in
+                                    Text(value.displayName).tag(value)
+                                }
                             }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .accessibilityLabel("\(muscle.displayName) muscle soreness")
+                            .accessibilityIdentifier(
+                                "\(accessibilityPrefix).readiness.\(muscle.rawValue).soreness"
+                            )
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .accessibilityLabel("\(muscle.displayName) muscle soreness")
-                        .accessibilityIdentifier(
-                            "\(accessibilityPrefix).readiness.\(muscle.rawValue).soreness"
-                        )
-                    }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Tissue pain")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Picker("Connective-tissue pain", selection: painSelection(muscle)) {
-                            ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
-                                Text(value.displayName).tag(value)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Tissue pain")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Picker("Connective-tissue pain", selection: painSelection(muscle)) {
+                                ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
+                                    Text(value.displayName).tag(value)
+                                }
                             }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .accessibilityLabel("\(muscle.displayName) connective-tissue pain")
+                            .accessibilityIdentifier(
+                                "\(accessibilityPrefix).readiness.\(muscle.rawValue).pain"
+                            )
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .accessibilityLabel("\(muscle.displayName) connective-tissue pain")
-                        .accessibilityIdentifier(
-                            "\(accessibilityPrefix).readiness.\(muscle.rawValue).pain"
-                        )
                     }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Eagerness")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Picker("Eagerness to train", selection: eagernessSelection(muscle)) {
-                            ForEach(EagernessLevel.allCases, id: \.self) { value in
-                                Text(value.displayName).tag(value)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .accessibilityLabel("\(muscle.displayName) eagerness to train")
-                        .accessibilityIdentifier(
-                            "\(accessibilityPrefix).readiness.\(muscle.rawValue).eagerness"
-                        )
-                    }
-                    }
-                }
-            } header: {
-                if index == 0 {
-                    Text(title)
                 }
             }
             // The gap between muscle cards dominates the scroll once the rows

@@ -616,10 +616,15 @@ private struct SessionDetailView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(observation.localDateKey) · revision \(observation.revision)")
                                 .font(.headline)
+                            Text(
+                                "Eagerness to train: \(EagernessLevel.leastEager(in: observation.responses.map(\.eagerness)).displayName)"
+                            )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             Text(observation.responses.sorted {
                                 $0.muscle.rawValue < $1.muscle.rawValue
                             }.map {
-                                "\($0.muscle.displayName): \($0.soreness.displayName), \($0.connectiveTissuePain.displayName), \($0.eagerness.displayName)"
+                                "\($0.muscle.displayName): \($0.soreness.displayName), \($0.connectiveTissuePain.displayName)"
                             }.joined(separator: "\n"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

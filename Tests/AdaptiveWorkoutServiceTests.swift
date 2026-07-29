@@ -30,6 +30,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             try AdaptiveWorkoutService.makeReadinessCheck(
                 program: program,
                 inputs: [:],
+                systemicEagerness: .reluctant,
                 localDateKey: "2026-07-20",
                 timeZoneIdentifier: "America/Los_Angeles",
                 revision: 1
@@ -40,6 +41,28 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
                 .incompleteReadiness(.chest)
             )
         }
+    }
+
+    func testSystemicEagernessFansOutToEveryEnabledMuscleResponse() throws {
+        let (program, _) = makeProgram()
+        program.muscleRules.first { $0.muscle == .back }?.isEnabled = true
+        let inputs: [MuscleGroup: MuscleReadinessInput] = [
+            .chest: .init(soreness: .mild, connectiveTissuePain: .none, eagerness: .eager),
+            .back: .init(soreness: .none, connectiveTissuePain: .caution, eagerness: .neutral)
+        ]
+
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program,
+            inputs: inputs,
+            systemicEagerness: .reluctant,
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1
+        )
+
+        XCTAssertEqual(Set(check.responses.map(\.muscle)), Set([.chest, .back]))
+        XCTAssertTrue(check.responses.allSatisfy { $0.eagerness == .reluctant })
+        XCTAssertEqual(EagernessLevel.leastEager(in: [.eager, .reluctant, .neutral]), .reluctant)
     }
 
     func testOpeningWorkflowCreatesNoSessionBeforeProposalIsAccepted() throws {

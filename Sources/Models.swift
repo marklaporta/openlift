@@ -210,6 +210,12 @@ enum EagernessLevel: String, Codable, CaseIterable, Hashable {
     case reluctant
 
     var displayName: String { rawValue.capitalized }
+
+    static func leastEager<S: Sequence>(in values: S) -> EagernessLevel
+    where S.Element == EagernessLevel {
+        let values = Set(values)
+        return allCases.reversed().first(where: values.contains) ?? .eager
+    }
 }
 
 enum AdaptivePlanStatus: String, Codable, CaseIterable, Hashable {
