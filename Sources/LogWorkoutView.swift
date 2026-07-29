@@ -28,9 +28,6 @@ struct LogWorkoutView: View {
                 Section("Workout") {
                     TextField("Name", text: $name)
                     DatePicker("Date", selection: $date)
-                    Text("Saves directly to History as a completed off-schedule workout. Does not advance the active cycle.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
                 ForEach($exerciseDrafts) { $exerciseDraft in
@@ -133,9 +130,6 @@ struct LogWorkoutView: View {
                                 Text(rating.displayName).tag(Optional(rating))
                             }
                         }
-                        Text("Used to adjust future set recommendations for this exercise.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     } header: {
                         HStack(spacing: 8) {
                             Text(exerciseName(for: exerciseDraft.exerciseId))
