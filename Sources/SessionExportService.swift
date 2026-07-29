@@ -26,7 +26,7 @@ enum SessionExportService {
             return ExportEnvironment(
                 containerIdentifier: identifier,
                 iCloudContainerURL: identifier.flatMap {
-                    FileManager.default.url(forUbiquityContainerIdentifier: $0)
+                    SessionExportService.cachedUbiquityURL(for: $0)
                 },
                 localDocumentsURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
                 coordinatedWrite: SessionExportService.coordinatedWrite,
@@ -1002,17 +1002,22 @@ enum SessionExportService {
     /// Cycle tab called this on a repeating timer from the main actor, so a cold
     /// container read as "unavailable" and raised an alert.
     ///
-    /// Only a successful lookup is cached, so a nil keeps retrying until iCloud is
-    /// ready and is then never paid for again.
-    static func iCloudContainerURL() -> URL? {
+    /// This sits inside `ExportEnvironment.live()` rather than wrapping one accessor, so
+    /// the export write path gets it too. Only a successful lookup is cached, so a nil
+    /// keeps retrying until iCloud is ready and is then never paid for again.
+    static func cachedUbiquityURL(for identifier: String) -> URL? {
         containerURLLock.lock()
         defer { containerURLLock.unlock() }
         if let cachedContainerURL {
             return cachedContainerURL
         }
-        let resolved = ExportEnvironment.live().iCloudContainerURL
+        let resolved = FileManager.default.url(forUbiquityContainerIdentifier: identifier)
         cachedContainerURL = resolved
         return resolved
+    }
+
+    static func iCloudContainerURL() -> URL? {
+        ExportEnvironment.live().iCloudContainerURL
     }
 
     private static func fileContentsMatch(_ data: Data, at url: URL) -> Bool {
