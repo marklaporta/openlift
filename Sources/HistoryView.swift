@@ -1,6 +1,43 @@
 import SwiftUI
 import SwiftData
 
+/// A completed workout of either kind, so History can present one chronological list
+/// instead of grouping by workout type.
+enum HistoryTimelineEntry: Identifiable {
+    case rotation(Session)
+    case adaptive(AdaptiveWorkoutSession)
+
+    var id: String {
+        switch self {
+        case .rotation(let session): return "rotation-\(session.id.uuidString)"
+        case .adaptive(let session): return "adaptive-\(session.id.uuidString)"
+        }
+    }
+
+    var date: Date {
+        switch self {
+        case .rotation(let session): return session.finishedAt ?? session.createdAt
+        case .adaptive(let session): return session.finishedAt ?? session.createdAt
+        }
+    }
+}
+
+enum HistoryTimelineService {
+    /// Newest first. Ties break on `id` so same-timestamp sessions keep a stable order
+    /// rather than shuffling between redraws.
+    static func entries(
+        sessions: [Session],
+        adaptiveSessions: [AdaptiveWorkoutSession]
+    ) -> [HistoryTimelineEntry] {
+        let combined = sessions.map(HistoryTimelineEntry.rotation)
+            + adaptiveSessions.map(HistoryTimelineEntry.adaptive)
+        return combined.sorted { lhs, rhs in
+            if lhs.date != rhs.date { return lhs.date > rhs.date }
+            return lhs.id < rhs.id
+        }
+    }
+}
+
 struct HistoryView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
@@ -39,6 +76,13 @@ struct HistoryView: View {
         adaptiveSessions
             .filter { $0.status == .completed && $0.finishedAt != nil }
             .sorted { ($0.finishedAt ?? $0.createdAt) > ($1.finishedAt ?? $1.createdAt) }
+    }
+
+    private var timelineEntries: [HistoryTimelineEntry] {
+        HistoryTimelineService.entries(
+            sessions: completedSessions,
+            adaptiveSessions: completedAdaptiveSessions
+        )
     }
 
     private var exportedBySessionId: [String: ExportedSessionSummary] {
@@ -115,33 +159,27 @@ struct HistoryView: View {
                         }
                     }
                 } else {
-                    if !completedAdaptiveSessions.isEmpty {
-                        Section("Adaptive Workouts") {
-                            ForEach(completedAdaptiveSessions) { session in
-                                NavigationLink {
-                                    AdaptiveSessionDetailView(session: session)
-                                } label: {
-                                    AdaptiveSessionRowView(
-                                        session: session,
-                                        plan: generatedPlans.first(where: { $0.id == session.generatedPlanId })
-                                    )
-                                }
+                    ForEach(timelineEntries) { entry in
+                        switch entry {
+                        case .adaptive(let session):
+                            NavigationLink {
+                                AdaptiveSessionDetailView(session: session)
+                            } label: {
+                                AdaptiveSessionRowView(
+                                    session: session,
+                                    plan: generatedPlans.first(where: { $0.id == session.generatedPlanId })
+                                )
                             }
-                        }
-                    }
-                    if !completedSessions.isEmpty {
-                        Section("Rotation & Ad Hoc") {
-                            ForEach(completedSessions) { session in
-                                NavigationLink {
-                                    SessionDetailView(session: session)
-                                } label: {
-                                    SessionRowView(
-                                        session: session,
-                                        cycleName: cycleName(for: session),
-                                        dayLabel: dayLabel(for: session),
-                                        exerciseCount: exerciseCount(for: session)
-                                    )
-                                }
+                        case .rotation(let session):
+                            NavigationLink {
+                                SessionDetailView(session: session)
+                            } label: {
+                                SessionRowView(
+                                    session: session,
+                                    cycleName: cycleName(for: session),
+                                    dayLabel: dayLabel(for: session),
+                                    exerciseCount: exerciseCount(for: session)
+                                )
                             }
                         }
                     }
@@ -365,20 +403,26 @@ private struct AdaptiveSessionRowView: View {
     let plan: GeneratedWorkoutPlan?
 
     var body: some View {
+        // History is one chronological list, so the row has to say which kind of workout
+        // this was. The section header used to carry that.
+        let exerciseCount = plan?.complexes.reduce(0, { $0 + $1.exercises.count }) ?? 0
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.finishedAt ?? session.createdAt, style: .date)
                     .font(.headline)
-                let exerciseCount = plan?.complexes.reduce(0, { $0 + $1.exercises.count }) ?? 0
-                Text("\(exerciseCount) exercise\(exerciseCount == 1 ? "" : "s")")
-                    .font(.caption)
+                Text("Adaptive")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if session.exportStatus != .success {
-                Text(session.exportStatus.displayName)
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("\(exerciseCount) exercise\(exerciseCount == 1 ? "" : "s")")
+                    .font(.caption)
+                if session.exportStatus != .success {
+                    Text(session.exportStatus.displayName)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
         }
     }

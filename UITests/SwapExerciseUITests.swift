@@ -582,7 +582,9 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
         )
 
         app.tabBars.buttons["History"].tap()
-        XCTAssertTrue(app.staticTexts["Adaptive Workouts"].waitForExistence(timeout: 10))
+        // History is a single chronological list now, so there is no "Adaptive Workouts"
+        // section header to wait on. The row labels itself instead.
+        XCTAssertTrue(app.staticTexts["Adaptive"].firstMatch.waitForExistence(timeout: 10))
         let historySearch = app.searchFields["Search exercises"]
         XCTAssertTrue(historySearch.waitForExistence(timeout: 5))
         historySearch.tap()
