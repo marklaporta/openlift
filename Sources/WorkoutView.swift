@@ -52,6 +52,17 @@ enum FixedCycleWorkoutService {
         }
     }
 
+    static func readinessMuscles(
+        for template: CycleTemplate,
+        targeting day: CycleDay
+    ) -> [MuscleGroup] {
+        let targeted = requiredMuscles(for: day)
+        let cycleMuscles = Set(template.days.flatMap(\.slots).map(\.muscle))
+        return targeted + MuscleGroup.allCases.filter {
+            cycleMuscles.contains($0) && !targeted.contains($0)
+        }
+    }
+
     static func latestObservation(
         sessionId: UUID,
         localDateKey: String,
@@ -68,6 +79,7 @@ enum FixedCycleWorkoutService {
 
     static func makeReadinessObservation(
         sessionId: UUID,
+        template: CycleTemplate,
         day: CycleDay,
         inputs: [MuscleGroup: MuscleReadinessInput],
         existing: [FixedCycleReadinessObservation],
@@ -76,8 +88,7 @@ enum FixedCycleWorkoutService {
         timeZone: TimeZone = .current
     ) throws -> FixedCycleReadinessObservation {
         let dateKey = localDateKey(for: now, calendar: calendar)
-        let muscles = requiredMuscles(for: day)
-        let responses = try muscles.map { muscle -> FixedCycleReadinessResponse in
+        let responses = try readinessMuscles(for: template, targeting: day).map { muscle -> FixedCycleReadinessResponse in
             guard let value = inputs[muscle] else {
                 throw FixedCycleWorkoutError.incompleteReadiness(muscle)
             }
@@ -359,11 +370,7 @@ struct WorkoutView: View {
     @State private var swapContext: SwapContext?
     @State private var addMovementContext: AddMovementContext?
     @State private var historyContext: ExerciseHistoryContext?
-    @State private var readinessInputs = Dictionary(
-        uniqueKeysWithValues: MuscleGroup.allCases.map {
-            ($0, FixedCycleWorkoutService.allClear)
-        }
-    )
+    @State private var readinessInputs: [MuscleGroup: MuscleReadinessInput] = [:]
     @State private var observedLocalDateKey = FixedCycleWorkoutService.localDateKey(for: .now)
     @State private var pendingFixedMutation: PendingFixedMutation?
     @State private var skippedReason = "user_choice"
@@ -530,10 +537,11 @@ struct WorkoutView: View {
     private var rotationWorkoutContent: some View {
         NavigationStack {
             List {
-                if let draftSession, let activeDay {
+                if let draftSession, let activeTemplate, let activeDay {
                     if latestFixedReadiness == nil {
                         fixedReadinessEntry(
                             session: draftSession,
+                            template: activeTemplate,
                             day: activeDay
                         )
                     } else {
@@ -543,7 +551,7 @@ struct WorkoutView: View {
                                 .lineLimit(1)
                         }
 
-                        fixedRecoverySection(day: activeDay)
+                        fixedRecoverySection(template: activeTemplate, day: activeDay)
 
                         ForEach(resolvedSlots(for: activeDay, sessionId: draftSession.id)) { resolved in
                             let resolvedExercise = exercises.first(where: { $0.id == resolved.exerciseId })
@@ -1279,14 +1287,21 @@ struct WorkoutView: View {
     }
 
     @ViewBuilder
-    private func fixedReadinessEntry(session: Session, day: CycleDay) -> some View {
+    private func fixedReadinessEntry(
+        session: Session,
+        template: CycleTemplate,
+        day: CycleDay
+    ) -> some View {
         ReadinessEntrySections(
             title: "1 · Readiness",
             guidance: [
                 "Adjust anything that is not at its recovered default, then submit once.",
                 "Readiness is recorded for context. Fixed Cycle order and dose do not change automatically."
             ],
-            muscles: FixedCycleWorkoutService.requiredMuscles(for: day),
+            muscles: FixedCycleWorkoutService.readinessMuscles(
+                for: template,
+                targeting: day
+            ),
             statusText: fixedReadinessStatusText(for:),
             sorenessSelection: sorenessBinding,
             painSelection: painBinding,
@@ -1295,10 +1310,13 @@ struct WorkoutView: View {
             submitAccessibilityIdentifier: "fixed.submitReadiness",
             accessibilityPrefix: "fixed",
             onSubmit: {
-                submitReadiness(session: session, day: day)
+                submitReadiness(session: session, template: template, day: day)
             },
             onCancel: nil
         )
+        .onAppear {
+            prefillFixedReadinessInputs(template: template, day: day)
+        }
     }
 
     private func fixedReadinessStatusText(for muscle: MuscleGroup) -> String? {
@@ -1309,9 +1327,13 @@ struct WorkoutView: View {
     }
 
     @ViewBuilder
-    private func fixedRecoverySection(day: CycleDay) -> some View {
+    private func fixedRecoverySection(template: CycleTemplate, day: CycleDay) -> some View {
         Section("Recent Recovery Evidence") {
-            ForEach(FixedCycleWorkoutService.requiredMuscles(for: day), id: \.self) { muscle in
+            let orderedMuscles = FixedCycleWorkoutService.readinessMuscles(
+                for: template,
+                targeting: day
+            )
+            ForEach(orderedMuscles, id: \.self) { muscle in
                 VStack(alignment: .leading, spacing: 3) {
                     Text(muscle.displayName)
                         .font(.headline)
@@ -1466,10 +1488,15 @@ struct WorkoutView: View {
         )
     }
 
-    private func submitReadiness(session: Session, day: CycleDay) {
+    private func submitReadiness(
+        session: Session,
+        template: CycleTemplate,
+        day: CycleDay
+    ) {
         do {
             let observation = try FixedCycleWorkoutService.makeReadinessObservation(
                 sessionId: session.id,
+                template: template,
                 day: day,
                 inputs: readinessInputs,
                 existing: fixedReadiness
@@ -1487,10 +1514,25 @@ struct WorkoutView: View {
         let current = FixedCycleWorkoutService.localDateKey(for: now)
         guard current != observedLocalDateKey else { return }
         observedLocalDateKey = current
+        if let activeTemplate, let activeDay {
+            readinessInputs = Dictionary(
+                uniqueKeysWithValues: FixedCycleWorkoutService
+                    .readinessMuscles(for: activeTemplate, targeting: activeDay)
+                    .map { ($0, FixedCycleWorkoutService.allClear) }
+            )
+        } else {
+            readinessInputs = [:]
+        }
+    }
+
+    private func prefillFixedReadinessInputs(
+        template: CycleTemplate,
+        day: CycleDay
+    ) {
         readinessInputs = Dictionary(
-            uniqueKeysWithValues: MuscleGroup.allCases.map {
-                ($0, FixedCycleWorkoutService.allClear)
-            }
+            uniqueKeysWithValues: FixedCycleWorkoutService
+                .readinessMuscles(for: template, targeting: day)
+                .map { ($0, readinessInputs[$0] ?? FixedCycleWorkoutService.allClear) }
         )
     }
 
