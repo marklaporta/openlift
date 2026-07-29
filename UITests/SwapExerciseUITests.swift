@@ -426,11 +426,6 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
         XCTAssertTrue(app.staticTexts["Muscle soreness"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Connective-tissue pain"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["Eagerness to train"].firstMatch.exists)
-        XCTAssertTrue(
-            app.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS %@", "normal sets")
-            ).firstMatch.waitForExistence(timeout: 5)
-        )
 
         let generatePlan = app.buttons["adaptive.generatePlan"]
         scrollToElement(generatePlan, in: app)

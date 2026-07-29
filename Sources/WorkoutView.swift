@@ -1294,15 +1294,10 @@ struct WorkoutView: View {
     ) -> some View {
         ReadinessEntrySections(
             title: "1 · Readiness",
-            guidance: [
-                "Adjust anything that is not at its recovered default, then submit once.",
-                "Readiness is recorded for context. Fixed Cycle order and dose do not change automatically."
-            ],
             muscles: FixedCycleWorkoutService.readinessMuscles(
                 for: template,
                 targeting: day
             ),
-            statusText: fixedReadinessStatusText(for:),
             sorenessSelection: sorenessBinding,
             painSelection: painBinding,
             eagernessSelection: eagernessBinding,
@@ -1317,13 +1312,6 @@ struct WorkoutView: View {
         .onAppear {
             prefillFixedReadinessInputs(template: template, day: day)
         }
-    }
-
-    private func fixedReadinessStatusText(for muscle: MuscleGroup) -> String? {
-        guard let exposure = latestExposure(for: muscle) else {
-            return "No completed direct exposure recorded."
-        }
-        return "\(exposure.setCount) direct working set\(exposure.setCount == 1 ? "" : "s") · \(exposure.kind) · \(daysSince(exposure.date)) day\(daysSince(exposure.date) == 1 ? "" : "s") ago"
     }
 
     @ViewBuilder
