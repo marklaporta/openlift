@@ -458,9 +458,6 @@ struct AdaptiveWorkoutView: View {
                                 }
                             }
                             .accessibilityIdentifier("adaptive.feedbackPicker")
-                            Text("Recorded for manual review. It does not change future doses automatically.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
                     }
                 }
