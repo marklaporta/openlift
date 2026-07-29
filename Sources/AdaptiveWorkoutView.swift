@@ -1690,53 +1690,62 @@ struct ReadinessEntrySections: View {
         // The phase title is a header on the first muscle section rather than a section
         // of its own: an empty Section renders unreliably inside a List.
         ForEach(Array(muscles.enumerated()), id: \.element) { index, muscle in
+            // All three metrics share one row. Previously each was its own Form row and
+            // paid separate vertical padding plus a separator. Labels stay above the
+            // pickers rather than beside them: inline labels squeeze the four-segment
+            // soreness control until "Moderate" truncates.
             Section {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Muscle soreness")
-                        .font(.subheadline.weight(.semibold))
-                    Picker("Muscle soreness", selection: sorenessSelection(muscle)) {
-                        ForEach(SorenessLevel.allCases, id: \.self) { value in
-                            Text(value.displayName).tag(value)
+                VStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Soreness")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("Muscle soreness", selection: sorenessSelection(muscle)) {
+                            ForEach(SorenessLevel.allCases, id: \.self) { value in
+                                Text(value.displayName).tag(value)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityLabel("\(muscle.displayName) muscle soreness")
+                        .accessibilityIdentifier(
+                            "\(accessibilityPrefix).readiness.\(muscle.rawValue).soreness"
+                        )
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .accessibilityLabel("\(muscle.displayName) muscle soreness")
-                    .accessibilityIdentifier(
-                        "\(accessibilityPrefix).readiness.\(muscle.rawValue).soreness"
-                    )
-                }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Connective-tissue pain")
-                        .font(.subheadline.weight(.semibold))
-                    Picker("Connective-tissue pain", selection: painSelection(muscle)) {
-                        ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
-                            Text(value.displayName).tag(value)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Tissue pain")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("Connective-tissue pain", selection: painSelection(muscle)) {
+                            ForEach(ConnectiveTissuePainLevel.allCases, id: \.self) { value in
+                                Text(value.displayName).tag(value)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityLabel("\(muscle.displayName) connective-tissue pain")
+                        .accessibilityIdentifier(
+                            "\(accessibilityPrefix).readiness.\(muscle.rawValue).pain"
+                        )
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .accessibilityLabel("\(muscle.displayName) connective-tissue pain")
-                    .accessibilityIdentifier(
-                        "\(accessibilityPrefix).readiness.\(muscle.rawValue).pain"
-                    )
-                }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Eagerness to train")
-                        .font(.subheadline.weight(.semibold))
-                    Picker("Eagerness to train", selection: eagernessSelection(muscle)) {
-                        ForEach(EagernessLevel.allCases, id: \.self) { value in
-                            Text(value.displayName).tag(value)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Eagerness")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("Eagerness to train", selection: eagernessSelection(muscle)) {
+                            ForEach(EagernessLevel.allCases, id: \.self) { value in
+                                Text(value.displayName).tag(value)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityLabel("\(muscle.displayName) eagerness to train")
+                        .accessibilityIdentifier(
+                            "\(accessibilityPrefix).readiness.\(muscle.rawValue).eagerness"
+                        )
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .accessibilityLabel("\(muscle.displayName) eagerness to train")
-                    .accessibilityIdentifier(
-                        "\(accessibilityPrefix).readiness.\(muscle.rawValue).eagerness"
-                    )
                 }
             } header: {
                 if index == 0 {
@@ -1748,6 +1757,9 @@ struct ReadinessEntrySections: View {
                     Text(muscle.displayName)
                 }
             }
+            // The gap between muscle cards dominates the scroll once the rows
+            // themselves are tight.
+            .listSectionSpacing(.compact)
         }
 
         Section {
