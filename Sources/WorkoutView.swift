@@ -360,7 +360,6 @@ struct WorkoutView: View {
     @Query private var trainingPreferences: [TrainingPreference]
     @Query private var adaptiveSessions: [AdaptiveWorkoutSession]
     @Query private var adaptiveSetEntries: [AdaptiveSetEntry]
-    @Query private var adaptiveReadinessChecks: [DailyReadinessCheck]
     @Query private var fixedReadiness: [FixedCycleReadinessObservation]
     @Query private var fixedOverrides: [FixedCycleOccurrenceOverride]
     @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
@@ -544,14 +543,30 @@ struct WorkoutView: View {
                             template: activeTemplate,
                             day: activeDay
                         )
-                    } else {
+                    } else if let latestFixedReadiness {
                         Section {
                             Text("\(activeDay.label) · Draft session")
                                 .font(.headline)
                                 .lineLimit(1)
                         }
 
-                        fixedRecoverySection(template: activeTemplate, day: activeDay)
+                        let cautionMuscles = FixedCycleWorkoutService.requiredMuscles(for: activeDay)
+                            .filter { muscle in
+                                guard let response = latestFixedReadiness.responses.first(
+                                    where: { $0.muscle == muscle }
+                                ) else {
+                                    return false
+                                }
+                                return response.connectiveTissuePain != .none
+                                    || !response.soreness.allowsAutomaticTraining
+                            }
+                        if !cautionMuscles.isEmpty {
+                            Text(
+                                "Caution: \(cautionMuscles.map(\.displayName).joined(separator: ", "))"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        }
 
                         ForEach(resolvedSlots(for: activeDay, sessionId: draftSession.id)) { resolved in
                             let resolvedExercise = exercises.first(where: { $0.id == resolved.exerciseId })
@@ -1311,144 +1326,6 @@ struct WorkoutView: View {
         }
     }
 
-    @ViewBuilder
-    private func fixedRecoverySection(template: CycleTemplate, day: CycleDay) -> some View {
-        Section("Recent Recovery Evidence") {
-            let orderedMuscles = FixedCycleWorkoutService.readinessMuscles(
-                for: template,
-                targeting: day
-            )
-            ForEach(orderedMuscles, id: \.self) { muscle in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(muscle.displayName)
-                        .font(.headline)
-                    if let exposure = latestExposure(for: muscle) {
-                        Text(
-                            "\(exposure.setCount) direct working set\(exposure.setCount == 1 ? "" : "s") · \(exposure.kind) · \(exposure.date.formatted(date: .abbreviated, time: .omitted)) · \(daysSince(exposure.date)) day\(daysSince(exposure.date) == 1 ? "" : "s") ago"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    } else {
-                        Text("No completed direct exposure recorded.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if let observation = latestReadinessResponse(for: muscle) {
-                        Text(
-                            "Latest readiness: \(observation.soreness.displayName) soreness · \(observation.connectiveTissuePain.displayName) pain · \(observation.dateKey)"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(
-                            observation.connectiveTissuePain == .none
-                                && observation.soreness.allowsAutomaticTraining
-                                ? Color.secondary
-                                : Color.orange
-                        )
-                    }
-                    if let skip = latestCompletedSkip(for: muscle) {
-                        Text("Most recent omission: \(skip.reasonCode)")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                }
-            }
-        }
-    }
-
-    private func latestExposure(for muscle: MuscleGroup) -> FixedRecoveryExposure? {
-        let ids = Set(exercises.filter { $0.primaryMuscle == muscle }.map(\.id))
-        var candidates: [FixedRecoveryExposure] = sessions.compactMap { session in
-            guard session.status == .completed else { return nil }
-            let count = setEntries.filter {
-                $0.sessionId == session.id
-                    && ids.contains($0.exerciseId)
-                    && $0.isLocked
-                    && $0.reps > 0
-            }.count
-            guard count > 0 else { return nil }
-            return FixedRecoveryExposure(
-                date: session.finishedAt ?? session.createdAt,
-                setCount: count,
-                kind: session.dayLabelSnapshot == "Off-Schedule" ? "Ad hoc" : "Fixed Cycle"
-            )
-        }
-        candidates += adaptiveSessions.compactMap { session in
-            guard session.status == .completed else { return nil }
-            let count = adaptiveSetEntries.filter {
-                $0.adaptiveSessionId == session.id
-                    && ids.contains($0.exerciseId)
-                    && $0.isLocked
-                    && $0.reps > 0
-            }.count
-            guard count > 0 else { return nil }
-            return FixedRecoveryExposure(
-                date: session.finishedAt ?? session.createdAt,
-                setCount: count,
-                kind: "Adaptive"
-            )
-        }
-        return candidates.max {
-            if $0.date != $1.date { return $0.date < $1.date }
-            return $0.kind < $1.kind
-        }
-    }
-
-    private func latestReadinessResponse(
-        for muscle: MuscleGroup
-    ) -> SharedReadinessEvidence? {
-        var candidates = fixedReadiness.compactMap { observation in
-            observation.responses.first(where: { $0.muscle == muscle }).map {
-                SharedReadinessEvidence(
-                    soreness: $0.soreness,
-                    connectiveTissuePain: $0.connectiveTissuePain,
-                    eagerness: $0.eagerness,
-                    dateKey: observation.localDateKey,
-                    createdAt: observation.createdAt,
-                    revision: observation.revision
-                )
-            }
-        }
-        candidates += adaptiveReadinessChecks.compactMap { check in
-            check.responses.first(where: { $0.muscle == muscle }).map {
-                SharedReadinessEvidence(
-                    soreness: $0.soreness,
-                    connectiveTissuePain: $0.connectiveTissuePain,
-                    eagerness: $0.eagerness,
-                    dateKey: check.localDateKey,
-                    createdAt: check.createdAt,
-                    revision: check.revision
-                )
-            }
-        }
-        return candidates.max {
-            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-            return $0.revision < $1.revision
-        }
-    }
-
-    private func latestCompletedSkip(
-        for muscle: MuscleGroup
-    ) -> FixedCycleOccurrenceOverride? {
-        let completedIds = Set(sessions.filter { $0.status == .completed }.map(\.id))
-        return fixedOverrides.filter {
-            completedIds.contains($0.sessionId) && $0.muscle == muscle
-        }.max {
-            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-            return $0.id.uuidString < $1.id.uuidString
-        }
-    }
-
-    private func daysSince(_ date: Date) -> Int {
-        max(
-            0,
-            Calendar.current.dateComponents(
-                [.day],
-                from: Calendar.current.startOfDay(for: date),
-                to: Calendar.current.startOfDay(for: .now)
-            ).day ?? 0
-        )
-    }
-
     private func sorenessBinding(_ muscle: MuscleGroup) -> Binding<SorenessLevel> {
         Binding(
             get: { readinessInputs[muscle]?.soreness ?? .none },
@@ -1989,21 +1866,6 @@ private struct AddMovementContext: Identifiable {
     let day: CycleDay
     let sessionId: UUID
     let defaultMuscle: MuscleGroup
-}
-
-private struct FixedRecoveryExposure {
-    let date: Date
-    let setCount: Int
-    let kind: String
-}
-
-private struct SharedReadinessEvidence {
-    let soreness: SorenessLevel
-    let connectiveTissuePain: ConnectiveTissuePainLevel
-    let eagerness: EagernessLevel
-    let dateKey: String
-    let createdAt: Date
-    let revision: Int
 }
 
 private enum PendingFixedMutation {
