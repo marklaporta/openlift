@@ -775,7 +775,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         }
     }
 
-    func testReadinessIsDatedRevisionedAndDoesNotCountAsTraining() throws {
+    func testPushAReadinessCapturesWholeCycleMusclesWithUntouchedRecoveredDefaults() throws {
         let (_, context) = makeContext()
         let exercise = Exercise(
             name: "Test Press",
@@ -790,17 +790,29 @@ final class FixedCyclePushPullTests: XCTestCase {
                 CycleSlot(position: 1, muscle: .triceps, exerciseId: exercise.id)
             ]
         )
+        let pullDay = CycleDay(
+            label: "Pull A",
+            slots: [
+                CycleSlot(position: 0, muscle: .back, exerciseId: exercise.id),
+                CycleSlot(position: 1, muscle: .biceps, exerciseId: exercise.id),
+                CycleSlot(position: 2, muscle: .hamstrings, exerciseId: exercise.id)
+            ]
+        )
+        let template = CycleTemplate(name: "Push/Pull", days: [day, pullDay])
         let session = Session(cycleInstanceId: UUID(), cycleDayIndex: 0)
         let calendar = utcCalendar
         let firstDate = Date(timeIntervalSince1970: 1_769_299_200) // 2026-01-25 UTC
         let nextDate = calendar.date(byAdding: .day, value: 1, to: firstDate)!
+        // Mirrors the view layer, which pre-fills every tracked muscle at its
+        // recovered default so an untouched submit stays a single tap.
         let ready = Dictionary(
-            uniqueKeysWithValues: FixedCycleWorkoutService.requiredMuscles(for: day).map {
-                ($0, FixedCycleWorkoutService.allClear)
-            }
+            uniqueKeysWithValues: FixedCycleWorkoutService
+                .readinessMuscles(for: template, targeting: day)
+                .map { ($0, FixedCycleWorkoutService.allClear) }
         )
         let first = try FixedCycleWorkoutService.makeReadinessObservation(
             sessionId: session.id,
+            template: template,
             day: day,
             inputs: ready,
             existing: [],
@@ -812,6 +824,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         try context.save()
         let revision = try FixedCycleWorkoutService.makeReadinessObservation(
             sessionId: session.id,
+            template: template,
             day: day,
             inputs: ready,
             existing: [first],
@@ -821,6 +834,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         )
         let tomorrow = try FixedCycleWorkoutService.makeReadinessObservation(
             sessionId: session.id,
+            template: template,
             day: day,
             inputs: ready,
             existing: [first, revision],
@@ -832,6 +846,23 @@ final class FixedCyclePushPullTests: XCTestCase {
         XCTAssertEqual(first.revision, 1)
         XCTAssertEqual(revision.revision, 2)
         XCTAssertEqual(tomorrow.revision, 1)
+        XCTAssertEqual(
+            FixedCycleWorkoutService.readinessMuscles(for: template, targeting: day),
+            [.chest, .triceps, .back, .hamstrings, .biceps]
+        )
+        XCTAssertEqual(
+            Set(first.responses.map(\.muscle)),
+            Set([.chest, .triceps, .back, .hamstrings, .biceps])
+        )
+        XCTAssertTrue(first.responses.contains { $0.muscle == .back })
+        XCTAssertTrue(first.responses.contains { $0.muscle == .biceps })
+        XCTAssertTrue(first.responses.contains { $0.muscle == .hamstrings })
+        XCTAssertFalse(first.responses.contains { $0.muscle == .traps })
+        XCTAssertTrue(first.responses.allSatisfy {
+            $0.soreness == .none
+                && $0.connectiveTissuePain == .none
+                && $0.eagerness == .eager
+        })
         XCTAssertTrue(
             FixedCycleWorkoutService.canExecute(
                 sessionId: session.id,
@@ -849,6 +880,48 @@ final class FixedCyclePushPullTests: XCTestCase {
             )
         )
         XCTAssertFalse(FixedCycleWorkoutService.hasQualifyingSet(sessionId: session.id, entries: []))
+    }
+
+    func testFixedReadinessThrowsWhenATrackedMuscleInputIsMissing() throws {
+        let exercise = Exercise(
+            name: "Test Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .barbell
+        )
+        let day = CycleDay(
+            label: "Push A",
+            slots: [CycleSlot(position: 0, muscle: .chest, exerciseId: exercise.id)]
+        )
+        let pullDay = CycleDay(
+            label: "Pull A",
+            slots: [CycleSlot(position: 0, muscle: .back, exerciseId: exercise.id)]
+        )
+        let template = CycleTemplate(name: "Push/Pull", days: [day, pullDay])
+        let session = Session(cycleInstanceId: UUID(), cycleDayIndex: 0)
+        // Back is trained on another day of the cycle, so it is required today.
+        // The view pre-fills this row, while the service still validates callers.
+        let partial: [MuscleGroup: MuscleReadinessInput] = [
+            .chest: FixedCycleWorkoutService.allClear
+        ]
+
+        XCTAssertThrowsError(
+            try FixedCycleWorkoutService.makeReadinessObservation(
+                sessionId: session.id,
+                template: template,
+                day: day,
+                inputs: partial,
+                existing: [],
+                now: Date(timeIntervalSince1970: 1_769_299_200),
+                calendar: utcCalendar,
+                timeZone: TimeZone(identifier: "UTC")!
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? FixedCycleWorkoutError,
+                .incompleteReadiness(.back)
+            )
+        }
     }
 
     func testFixedCycleLookupKeepsSeparateDayBaselinesAndSkipsZeroOccurrences() {
@@ -1036,7 +1109,14 @@ final class FixedCyclePushPullTests: XCTestCase {
                 CycleSlot(position: 1, muscle: .back, exerciseId: second.id)
             ]
         )
-        let template = CycleTemplate(name: "Push/Pull A/B", days: [day])
+        let otherDay = CycleDay(
+            label: "Pull B",
+            slots: [
+                CycleSlot(position: 0, muscle: .biceps, exerciseId: first.id),
+                CycleSlot(position: 1, muscle: .hamstrings, exerciseId: second.id)
+            ]
+        )
+        let template = CycleTemplate(name: "Push/Pull A/B", days: [day, otherDay])
         context.insert(template)
         let cycle = ActiveCycleInstance(templateId: template.id, currentDayIndex: 0)
         context.insert(cycle)
@@ -1057,19 +1137,23 @@ final class FixedCyclePushPullTests: XCTestCase {
             reps: 10,
             isLocked: true
         )
+        let trackedReadinessMuscles = FixedCycleWorkoutService.readinessMuscles(
+            for: template,
+            targeting: day
+        )
         let readiness = FixedCycleReadinessObservation(
             sessionId: source.id,
             localDateKey: "2026-07-27",
             timeZoneIdentifier: "America/Los_Angeles",
             revision: 1,
-            responses: [
+            responses: trackedReadinessMuscles.map { muscle in
                 FixedCycleReadinessResponse(
-                    muscle: .back,
-                    soreness: .mild,
+                    muscle: muscle,
+                    soreness: muscle == .back ? .mild : .none,
                     connectiveTissuePain: .none,
-                    eagerness: .neutral
+                    eagerness: muscle == .back ? .neutral : .eager
                 )
-            ]
+            }
         )
         let skip = FixedCycleOccurrenceOverride(
             sessionId: source.id,
@@ -1092,6 +1176,10 @@ final class FixedCyclePushPullTests: XCTestCase {
             first.id.uuidString, second.id.uuidString
         ])
         XCTAssertEqual(metadata.ordered_exercises.map(\.status), ["completed", "skipped"])
+        XCTAssertEqual(
+            Set(metadata.readiness.first?.responses.map(\.muscle) ?? []),
+            Set(trackedReadinessMuscles.map(\.rawValue))
+        )
 
         let payload = SessionExportService.ExportPayload(
             session_id: source.id.uuidString,
@@ -1124,11 +1212,18 @@ final class FixedCyclePushPullTests: XCTestCase {
                 .map(\.exerciseId),
             [first.id, second.id]
         )
-        XCTAssertEqual(
+        let hydratedReadiness = try XCTUnwrap(
             try context.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
-                .first { $0.sessionId == source.id }?
-                .localDateKey,
-            "2026-07-27"
+                .first { $0.sessionId == source.id }
+        )
+        XCTAssertEqual(hydratedReadiness.localDateKey, "2026-07-27")
+        XCTAssertEqual(
+            Set(hydratedReadiness.responses.map(\.muscle)),
+            Set(trackedReadinessMuscles)
+        )
+        XCTAssertEqual(
+            hydratedReadiness.responses.first(where: { $0.muscle == .back })?.soreness,
+            .mild
         )
         XCTAssertEqual(
             try context.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>())
@@ -1136,6 +1231,77 @@ final class FixedCyclePushPullTests: XCTestCase {
                 .reasonCode,
             "time"
         )
+    }
+
+    func testLegacyPartialFixedReadinessHydrationDoesNotFabricateMissingMuscles() throws {
+        let (_, context) = makeContext()
+        let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let exercise = try XCTUnwrap(catalog.first { $0.primaryMuscle == .back })
+        let day = CycleDay(
+            label: "Pull A",
+            slots: [CycleSlot(position: 0, muscle: .back, exerciseId: exercise.id)]
+        )
+        let template = CycleTemplate(name: "Legacy Partial Fixture", days: [day])
+        context.insert(template)
+        let cycle = ActiveCycleInstance(templateId: template.id, currentDayIndex: 0)
+        context.insert(cycle)
+        try context.save()
+
+        let session = Session(
+            cycleInstanceId: cycle.id,
+            cycleDayIndex: 0,
+            cycleNameSnapshot: template.name,
+            dayLabelSnapshot: day.label,
+            finishedAt: Date(timeIntervalSince1970: 200),
+            status: .completed
+        )
+        let partial = FixedCycleReadinessObservation(
+            sessionId: session.id,
+            localDateKey: "2026-07-26",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1,
+            responses: [
+                FixedCycleReadinessResponse(
+                    muscle: .back,
+                    soreness: .moderate,
+                    connectiveTissuePain: .caution,
+                    eagerness: .reluctant
+                )
+            ]
+        )
+        let metadata = SessionExportService.fixedCycleMetadata(
+            session: session,
+            template: template,
+            day: day,
+            exercises: catalog,
+            setEntries: [],
+            readiness: [partial],
+            overrides: []
+        )
+        let payload = SessionExportService.ExportPayload(
+            session_id: session.id.uuidString,
+            cycle_name: template.name,
+            cycle_day_index: 0,
+            date: ISO8601DateFormatter().string(from: session.finishedAt!),
+            exercises: [],
+            workout_kind: "rotation",
+            fixed_cycle: metadata
+        )
+
+        XCTAssertEqual(
+            try BootstrapDataService.reconcileWorkoutExports(
+                [payload],
+                cycle: cycle,
+                modelContext: context
+            ).imported,
+            1
+        )
+        let hydrated = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
+                .first { $0.sessionId == session.id }
+        )
+        XCTAssertEqual(hydrated.responses.map(\.muscle), [.back])
+        XCTAssertNil(hydrated.responses.first { $0.muscle == .chest })
     }
 
     func testAdaptiveRepeatLastUsesExactCompletedSetCount() throws {

@@ -23,6 +23,25 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertFalse(check.responses.contains { $0.muscle == .abs || $0.muscle == .traps })
     }
 
+    func testReadinessThrowsWhenEnabledMuscleInputIsMissing() {
+        let (program, _) = makeProgram()
+
+        XCTAssertThrowsError(
+            try AdaptiveWorkoutService.makeReadinessCheck(
+                program: program,
+                inputs: [:],
+                localDateKey: "2026-07-20",
+                timeZoneIdentifier: "America/Los_Angeles",
+                revision: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AdaptiveWorkoutServiceError,
+                .incompleteReadiness(.chest)
+            )
+        }
+    }
+
     func testOpeningWorkflowCreatesNoSessionBeforeProposalIsAccepted() throws {
         let (context, _) = makeContext()
         let (program, exercise) = makeProgram()

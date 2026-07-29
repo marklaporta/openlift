@@ -10,10 +10,11 @@ final class SwapExerciseUITests: XCTestCase {
         app.launchArguments += ["OPENLIFT_UI_TESTING"]
         app.launch()
 
+        // Unique coverage here is the default landing tab and the armed readiness gate.
+        // Submitting readiness and asserting the draft header is exercised by five other
+        // tests, so this one stops before that expensive sequence.
         XCTAssertTrue(app.navigationBars["Workout"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["1 · Readiness"].waitForExistence(timeout: 5))
-        submitFixedReadiness(in: app)
-        XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["Log Workout"].exists)
     }
 
@@ -93,7 +94,8 @@ final class SwapExerciseUITests: XCTestCase {
         app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
 
         let finishButton = app.buttons["Finish Workout"]
-        for _ in 0..<8 where !finishButton.isHittable {
+        for _ in 0..<8 {
+            if finishButton.isHittable { break }
             app.swipeUp()
         }
         XCTAssertTrue(finishButton.waitForExistence(timeout: 5))
@@ -119,9 +121,22 @@ final class SwapExerciseUITests: XCTestCase {
         XCTAssertTrue(submit.waitForExistence(timeout: 5))
         submit.tap()
 
+        // Asserting absence with `waitForExistence` can never return early, so it burned
+        // the full timeout on every call. Wait on the predicate instead: it completes as
+        // soon as the form is gone.
+        let dismissed = XCTWaiter().wait(
+            for: [
+                expectation(
+                    for: NSPredicate(format: "exists == false"),
+                    evaluatedWith: submit
+                )
+            ],
+            timeout: 5
+        )
+        XCTAssertEqual(dismissed, .completed)
+
         // The submit button sits below the per-muscle sections, so the list is left
         // scrolled down when the workout content replaces the readiness form.
-        XCTAssertFalse(submit.waitForExistence(timeout: 5))
         for _ in 0..<8 {
             app.swipeDown()
         }
@@ -437,7 +452,8 @@ final class SwapExerciseUITests: XCTestCase {
         generatePlan.tap()
 
         let proposedPlan = app.staticTexts["2 · Design"]
-        for _ in 0..<4 where !proposedPlan.isHittable {
+        for _ in 0..<4 {
+            if proposedPlan.isHittable { break }
             app.swipeDown()
         }
         XCTAssertTrue(proposedPlan.waitForExistence(timeout: 5))
@@ -515,11 +531,22 @@ final class SwapExerciseUITests: XCTestCase {
         confirmation.tap()
     }
 
+    // `for ... where` is a filter, not a break: the original form kept iterating and
+    // re-evaluated `isHittable` all 32 times even once the element was on screen, and
+    // each of those checks forces a full accessibility snapshot of the list.
+    //
+    // Those redundant checks were also acting as an accidental ~30s settle while a
+    // screen transition finished. Breaking early removes that, so wait for existence
+    // explicitly first. It returns immediately when the element is already present, and
+    // genuinely off-screen rows in a lazy List still fall through to the scroll loops.
     private func scrollToElement(_ element: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<16 where !element.isHittable {
+        if element.waitForExistence(timeout: 5), element.isHittable { return }
+        for _ in 0..<16 {
+            if element.isHittable { break }
             app.swipeUp()
         }
-        for _ in 0..<16 where !element.isHittable {
+        for _ in 0..<16 {
+            if element.isHittable { break }
             app.swipeDown()
         }
         XCTAssertTrue(element.waitForExistence(timeout: 5))
