@@ -994,8 +994,25 @@ enum SessionExportService {
             .appendingPathComponent(relativeSubdirectory, isDirectory: true)
     }
 
+    private static let containerURLLock = NSLock()
+    private static var cachedContainerURL: URL?
+
+    /// `url(forUbiquityContainerIdentifier:)` is documented as expensive and explicitly
+    /// not for the main thread, and it returns nil until iCloud finishes coming up. The
+    /// Cycle tab called this on a repeating timer from the main actor, so a cold
+    /// container read as "unavailable" and raised an alert.
+    ///
+    /// Only a successful lookup is cached, so a nil keeps retrying until iCloud is
+    /// ready and is then never paid for again.
     static func iCloudContainerURL() -> URL? {
-        ExportEnvironment.live().iCloudContainerURL
+        containerURLLock.lock()
+        defer { containerURLLock.unlock() }
+        if let cachedContainerURL {
+            return cachedContainerURL
+        }
+        let resolved = ExportEnvironment.live().iCloudContainerURL
+        cachedContainerURL = resolved
+        return resolved
     }
 
     private static func fileContentsMatch(_ data: Data, at url: URL) -> Bool {
