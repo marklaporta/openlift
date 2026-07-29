@@ -10,11 +10,20 @@ import XCTest
 // the remaining classes land near 100-120s each.
 //
 // Run with `-maximum-parallel-testing-workers 3`. Measured on the M4 (10 cores, 4 of
-// them performance): 3 workers is 297s and green, 5 workers is 352s and flaky — the
-// extra clones oversubscribe the performance cores, and the resulting scroll lag pushes
-// scrollToElement's hittability check past its timeout. Three workers is also the
-// optimal split, since the ~215s adaptive class sets the floor either way. Xcode's GUI
-// picks the worker count itself; capping it there needs a test plan.
+// them performance):
+//
+//   serial      ~640s
+//   3 workers    296-301s, green across three runs
+//   5 workers    317s, one flaky failure (was 352s / two before the settle wait below)
+//
+// Five clones oversubscribe the performance cores; the resulting scroll lag leaves
+// scrollToElement unable to land on its target. Three workers is also the optimal
+// split regardless, since the ~215s adaptive class sets the floor.
+//
+// Note that test plans cannot pin the worker count — IDEFoundation's test-plan schema
+// has parallelizable, parallelizationMode, testExecutionOrdering and the timeout keys,
+// but no worker-count option. The xcodebuild flag is the only lever, so runs started
+// from Xcode's GUI use a worker count Xcode chooses and can still hit the flake.
 class OpenLiftUITestCase: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -92,6 +101,22 @@ class OpenLiftUITestCase: XCTestCase {
             app.swipeDown()
         }
         XCTAssertTrue(element.waitForExistence(timeout: 5))
+
+        // Parallel simulator clones contend for CPU, so a scroll can still be settling
+        // once the swipe budget is spent — the loops above poll isHittable faster than
+        // the animation lands. Give the layout a bounded chance to catch up instead of
+        // failing on a transient state. Returns immediately when already hittable.
+        if !element.isHittable {
+            _ = XCTWaiter().wait(
+                for: [
+                    expectation(
+                        for: NSPredicate(format: "isHittable == true"),
+                        evaluatedWith: element
+                    )
+                ],
+                timeout: 10
+            )
+        }
         XCTAssertTrue(element.isHittable)
     }
 }
