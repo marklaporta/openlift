@@ -1,8 +1,11 @@
 import CryptoKit
+import CoreData
 import Foundation
 import SwiftData
 import XCTest
 @testable import OpenLift
+
+private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV10
 
 @Model
 private final class UnsupportedMigrationMarker {
@@ -40,6 +43,15 @@ private enum UnsupportedMigrationPlan: SchemaMigrationPlan {
 }
 
 final class MigrationSafetyTests: XCTestCase {
+    func testRealDeviceStoreMigrationTargetTracksHeadOfPlan() throws {
+        let headSchema = try XCTUnwrap(OpenLiftSchemaMigrationPlan.schemas.last)
+        XCTAssertEqual(
+            RealDeviceStoreMigrationTargetSchema.versionIdentifier,
+            headSchema.versionIdentifier,
+            "Update the real-device-store migration target whenever the migration plan gains a schema."
+        )
+    }
+
     func testV9StoreMigratesToV10WithExistingSetCompletionTimestampsNil() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -784,18 +796,28 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try v5Context.fetchCount(FetchDescriptor<ExportDiagnostic>()), 0)
     }
 
-    func testBackedUpDeviceStoreMigratesOnWorkingCopyWhenOptedIn() throws {
+    func testCopiedRealDeviceStoreMigratesToCurrentSchemaWhenOptedIn() throws {
         let documentsDirectory = try XCTUnwrap(
             FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
         )
-        let suppliedBackup = documentsDirectory.appendingPathComponent(
-            "OpenLiftCopiedV1Store",
+        let environment = ProcessInfo.processInfo.environment
+        let suppliedBackup = environment["OPENLIFT_REAL_DEVICE_STORE_DIRECTORY"].map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+        } ?? documentsDirectory.appendingPathComponent(
+            "OpenLiftCopiedRealDeviceStore",
             isDirectory: true
         )
         guard FileManager.default.fileExists(
             atPath: suppliedBackup.appendingPathComponent("default.store").path
         ) else {
-            throw XCTSkip("Copied device-store migration readback is opt-in; no simulator-local fixture is present.")
+            throw XCTSkip(
+                """
+                Copied real-device-store migration readback is opt-in. Set \
+                OPENLIFT_REAL_DEVICE_STORE_DIRECTORY to a directory containing \
+                default.store and its sidecars, or stage OpenLiftCopiedRealDeviceStore \
+                in the test host's Documents directory.
+                """
+            )
         }
 
         let fixture = try makeFixtureDirectories()
@@ -805,45 +827,69 @@ final class MigrationSafetyTests: XCTestCase {
         try copyDirectoryContents(from: suppliedBackup, to: fixture.source)
         try copyDirectoryContents(from: suppliedBackup, to: legacyWorking)
         try copyDirectoryContents(from: suppliedBackup, to: fixture.working)
-        let suppliedManifestBefore = try persistentStoreManifest(in: suppliedBackup)
+        let suppliedManifestBefore = try completeStoreManifest(in: suppliedBackup)
 
-        let legacySchema = Schema(OpenLiftSchemaV1.models)
+        let legacyStoreURL = legacyWorking.appendingPathComponent("default.store")
+        let sourceVersion = try persistentStoreSchemaVersion(at: legacyStoreURL)
+        XCTAssertEqual(sourceVersion, OpenLiftSchemaV9.versionIdentifier)
+        let legacySchema = Schema(versionedSchema: OpenLiftSchemaV9.self)
         let legacyContainer = try ModelContainer(
             for: legacySchema,
             configurations: [
                 ModelConfiguration(
-                    "CopiedDeviceLegacyReadback",
+                    "CopiedRealDeviceV9Readback",
                     schema: legacySchema,
-                    url: legacyWorking.appendingPathComponent("default.store"),
+                    url: legacyStoreURL,
                     cloudKitDatabase: .none
                 )
             ]
         )
-        let legacyCounts = try legacyEntityCounts(in: legacyContainer)
+        let legacyCounts = try v9EntityCounts(in: legacyContainer)
 
-        let v5Schema = Schema(versionedSchema: OpenLiftSchemaV8.self)
+        let currentSchema = Schema(
+            versionedSchema: RealDeviceStoreMigrationTargetSchema.self
+        )
         let startup = OpenLiftModelContainerFactory.makePersistent(
-            schema: v5Schema,
+            schema: currentSchema,
             migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configuration: ModelConfiguration(
-                "CopiedDeviceV7Readback",
-                schema: v5Schema,
+                "CopiedRealDeviceCurrentReadback",
+                schema: currentSchema,
                 url: fixture.working.appendingPathComponent("default.store"),
                 cloudKitDatabase: .none
             )
         )
         XCTAssertNil(startup.issue)
-        XCTAssertEqual(try legacyEntityCounts(in: startup.container), legacyCounts)
+        let migratedCounts = try currentEntityCounts(in: startup.container)
+        XCTAssertEqual(migratedCounts, legacyCounts)
 
         let migratedContext = ModelContext(startup.container)
-        try assertAdaptiveEntitiesAreEmpty(in: migratedContext)
-        let preferences = try migratedContext.fetch(FetchDescriptor<TrainingPreference>())
-        XCTAssertTrue(preferences.isEmpty)
-        XCTAssertEqual(TrainingModeService.resolvedMode(preferences: preferences), .rotation)
-        XCTAssertEqual(try persistentStoreManifest(in: suppliedBackup), suppliedManifestBefore)
+        let fabricatedFixedTimestamps = try migratedContext
+            .fetch(FetchDescriptor<SetEntry>())
+            .compactMap(\.lockedAt)
+        let fabricatedAdaptiveTimestamps = try migratedContext
+            .fetch(FetchDescriptor<AdaptiveSetEntry>())
+            .compactMap(\.lockedAt)
+        XCTAssertEqual(fabricatedFixedTimestamps.count, 0)
+        XCTAssertEqual(fabricatedAdaptiveTimestamps.count, 0)
+        XCTAssertEqual(
+            try completeStoreManifest(in: suppliedBackup),
+            suppliedManifestBefore
+        )
+
+        print("OpenLift copied real store source schema: \(sourceVersion)")
+        print("OpenLift copied real store counts before migration: \(formatted(legacyCounts))")
+        print("OpenLift copied real store counts after migration: \(formatted(migratedCounts))")
+        print(
+            """
+            OpenLift copied real store fabricated lockedAt values: \
+            fixed=\(fabricatedFixedTimestamps.count), \
+            adaptive=\(fabricatedAdaptiveTimestamps.count)
+            """
+        )
     }
 
-    func testUnversionedV1FixtureMigratesToV7AndRollsBack() throws {
+    func testUnversionedV1FixtureMigratesToCurrentSchemaAndRollsBack() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
@@ -854,7 +900,9 @@ final class MigrationSafetyTests: XCTestCase {
         let sourceManifestBefore = try persistentStoreManifest(in: fixture.source)
         XCTAssertFalse(sourceManifestBefore.isEmpty)
 
-        let versionedSchema = Schema(versionedSchema: OpenLiftSchemaV8.self)
+        let versionedSchema = Schema(
+            versionedSchema: RealDeviceStoreMigrationTargetSchema.self
+        )
         let workingStoreURL = fixture.working.appendingPathComponent("default.store")
         let workingConfiguration = ModelConfiguration(
             "MigrationFixture",
@@ -1112,6 +1160,151 @@ final class MigrationSafetyTests: XCTestCase {
         ]
     }
 
+    private func v9EntityCounts(in container: ModelContainer) throws -> [String: Int] {
+        let context = ModelContext(container)
+        var counts = try sharedV9AndV10EntityCounts(in: context)
+        counts["SetEntry"] = try context.fetchCount(
+            FetchDescriptor<OpenLiftSchemaV9.SetEntry>()
+        )
+        counts["AdaptiveSetEntry"] = try context.fetchCount(
+            FetchDescriptor<OpenLiftSchemaV9.AdaptiveSetEntry>()
+        )
+        return counts
+    }
+
+    private func currentEntityCounts(in container: ModelContainer) throws -> [String: Int] {
+        let context = ModelContext(container)
+        var counts = try sharedV9AndV10EntityCounts(in: context)
+        counts["SetEntry"] = try context.fetchCount(FetchDescriptor<SetEntry>())
+        counts["AdaptiveSetEntry"] = try context.fetchCount(
+            FetchDescriptor<AdaptiveSetEntry>()
+        )
+        return counts
+    }
+
+    private func sharedV9AndV10EntityCounts(
+        in context: ModelContext
+    ) throws -> [String: Int] {
+        [
+            "Exercise": try context.fetchCount(FetchDescriptor<Exercise>()),
+            "CycleSlot": try context.fetchCount(FetchDescriptor<CycleSlot>()),
+            "CycleDay": try context.fetchCount(FetchDescriptor<CycleDay>()),
+            "RotationPoolEntry": try context.fetchCount(FetchDescriptor<RotationPoolEntry>()),
+            "RotationPool": try context.fetchCount(FetchDescriptor<RotationPool>()),
+            "CycleTemplate": try context.fetchCount(FetchDescriptor<CycleTemplate>()),
+            "RotationIndex": try context.fetchCount(FetchDescriptor<RotationIndex>()),
+            "ActiveCycleInstance": try context.fetchCount(
+                FetchDescriptor<ActiveCycleInstance>()
+            ),
+            "Session": try context.fetchCount(FetchDescriptor<Session>()),
+            "SessionSlotOverride": try context.fetchCount(
+                FetchDescriptor<SessionSlotOverride>()
+            ),
+            "TrainingPreference": try context.fetchCount(
+                FetchDescriptor<TrainingPreference>()
+            ),
+            "AdaptiveMuscleRule": try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleRule>()
+            ),
+            "AdaptiveComplexComponent": try context.fetchCount(
+                FetchDescriptor<AdaptiveComplexComponent>()
+            ),
+            "AdaptiveExerciseComplex": try context.fetchCount(
+                FetchDescriptor<AdaptiveExerciseComplex>()
+            ),
+            "AdaptiveProgram": try context.fetchCount(FetchDescriptor<AdaptiveProgram>()),
+            "AdaptiveReadinessResponse": try context.fetchCount(
+                FetchDescriptor<AdaptiveReadinessResponse>()
+            ),
+            "DailyReadinessCheck": try context.fetchCount(
+                FetchDescriptor<DailyReadinessCheck>()
+            ),
+            "PlannedExerciseSnapshot": try context.fetchCount(
+                FetchDescriptor<PlannedExerciseSnapshot>()
+            ),
+            "PlannedComplexSnapshot": try context.fetchCount(
+                FetchDescriptor<PlannedComplexSnapshot>()
+            ),
+            "GeneratedWorkoutPlan": try context.fetchCount(
+                FetchDescriptor<GeneratedWorkoutPlan>()
+            ),
+            "AdaptiveWorkoutSession": try context.fetchCount(
+                FetchDescriptor<AdaptiveWorkoutSession>()
+            ),
+            "AdaptiveSetOccurrenceLink": try context.fetchCount(
+                FetchDescriptor<AdaptiveSetOccurrenceLink>()
+            ),
+            "ComplexFeedback": try context.fetchCount(FetchDescriptor<ComplexFeedback>()),
+            "AdHocExerciseFeedback": try context.fetchCount(
+                FetchDescriptor<AdHocExerciseFeedback>()
+            ),
+            "AdaptiveOverrideEvent": try context.fetchCount(
+                FetchDescriptor<AdaptiveOverrideEvent>()
+            ),
+            "AdaptiveExerciseSelectionPreference": try context.fetchCount(
+                FetchDescriptor<AdaptiveExerciseSelectionPreference>()
+            ),
+            "ExportDiagnostic": try context.fetchCount(
+                FetchDescriptor<ExportDiagnostic>()
+            ),
+            "AdaptiveWorkoutSizePreference": try context.fetchCount(
+                FetchDescriptor<AdaptiveWorkoutSizePreference>()
+            ),
+            "AdaptivePlanDesignState": try context.fetchCount(
+                FetchDescriptor<AdaptivePlanDesignState>()
+            ),
+            "AdaptiveMuscleVolumeTarget": try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleVolumeTarget>()
+            ),
+            "AdaptiveWorkoutCapacityPreference": try context.fetchCount(
+                FetchDescriptor<AdaptiveWorkoutCapacityPreference>()
+            ),
+            "AdaptiveMuscleVolumeAnchor": try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleVolumeAnchor>()
+            ),
+            "AdaptiveMuscleExposureConfiguration": try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleExposureConfiguration>()
+            ),
+            "FixedCycleReadinessObservation": try context.fetchCount(
+                FetchDescriptor<FixedCycleReadinessObservation>()
+            ),
+            "FixedCycleReadinessResponse": try context.fetchCount(
+                FetchDescriptor<FixedCycleReadinessResponse>()
+            ),
+            "FixedCycleOccurrenceOverride": try context.fetchCount(
+                FetchDescriptor<FixedCycleOccurrenceOverride>()
+            ),
+            "FixedCycleExerciseSnapshot": try context.fetchCount(
+                FetchDescriptor<FixedCycleExerciseSnapshot>()
+            )
+        ]
+    }
+
+    private func persistentStoreSchemaVersion(at storeURL: URL) throws -> Schema.Version {
+        let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(
+            ofType: NSSQLiteStoreType,
+            at: storeURL,
+            options: nil
+        )
+        let identifiers = try XCTUnwrap(
+            metadata[NSStoreModelVersionIdentifiersKey] as? [String]
+        )
+        let identifier = try XCTUnwrap(identifiers.first)
+        let components = identifier.split(separator: ".").compactMap { Int($0) }
+        let major = try XCTUnwrap(components.first)
+        let minor = try XCTUnwrap(components.dropFirst().first)
+        let patch = try XCTUnwrap(components.dropFirst(2).first)
+        return Schema.Version(
+            major,
+            minor,
+            patch
+        )
+    }
+
+    private func formatted(_ counts: [String: Int]) -> String {
+        counts.keys.sorted().map { "\($0)=\(counts[$0] ?? 0)" }.joined(separator: ", ")
+    }
+
     private func makeFixtureDirectories() throws -> (root: URL, source: URL, working: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenLiftMigrationSafety-\(UUID().uuidString)", isDirectory: true)
@@ -1143,6 +1336,20 @@ final class MigrationSafetyTests: XCTestCase {
             guard fileURL.lastPathComponent != "default.store-shm" else { return nil }
             let data = try Data(contentsOf: fileURL)
             let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            return (fileURL.lastPathComponent, digest)
+        })
+    }
+
+    private func completeStoreManifest(in directory: URL) throws -> [String: String] {
+        let files = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        return try Dictionary(uniqueKeysWithValues: files.map { fileURL in
+            let data = try Data(contentsOf: fileURL)
+            let digest = SHA256.hash(data: data).map {
+                String(format: "%02x", $0)
+            }.joined()
             return (fileURL.lastPathComponent, digest)
         })
     }
