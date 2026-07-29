@@ -2183,7 +2183,10 @@ private struct ExerciseSection: View {
                         if !entry.isLocked && entry.weight == 0 && entry.reps == 0 {
                             return
                         }
-                        entry.isLocked.toggle()
+                        WorkoutEntryEditing.setLocked(
+                            !entry.isLocked,
+                            entry: entry
+                        )
                         try? modelContext.save()
                         onEntryUpdated()
                     } label: {
@@ -2498,6 +2501,18 @@ enum WorkoutEntryEditing {
 
     static func displayReps(_ reps: Int) -> Int? {
         reps == 0 ? nil : reps
+    }
+
+    static func setLocked(_ isLocked: Bool, entry: SetEntry, at date: Date = .now) {
+        guard entry.isLocked != isLocked else { return }
+        entry.isLocked = isLocked
+        entry.lockedAt = isLocked ? date : nil
+    }
+
+    static func setLocked(_ isLocked: Bool, entry: AdaptiveSetEntry, at date: Date = .now) {
+        guard entry.isLocked != isLocked else { return }
+        entry.isLocked = isLocked
+        entry.lockedAt = isLocked ? date : nil
     }
 
     static func applyWeightEdit(to entries: inout [EntryState], setIndex: Int, newWeight: Double?) {

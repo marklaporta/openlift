@@ -1913,7 +1913,10 @@ private struct AdaptiveExerciseSection: View {
                     Button {
                         focusedField = nil
                         guard entry.isLocked || entry.weight != 0 || entry.reps != 0 else { return }
-                        entry.isLocked.toggle()
+                        WorkoutEntryEditing.setLocked(
+                            !entry.isLocked,
+                            entry: entry
+                        )
                         try? modelContext.save()
                         onEntryUpdated(entry.isLocked)
                     } label: {

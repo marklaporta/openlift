@@ -112,17 +112,102 @@ enum OpenLiftSchemaV8: VersionedSchema {
     ]
 }
 
+private let currentSetEntryModel = SetEntry.self
+private let currentAdaptiveSetEntryModel = AdaptiveSetEntry.self
+
 /// Adds Fixed Cycle readiness audit records, occurrence-only skip provenance,
 /// and immutable ordered occurrence snapshots as parallel entities. No shipped
 /// V1-V8 entity is altered.
 enum OpenLiftSchemaV9: VersionedSchema {
     static let versionIdentifier = Schema.Version(9, 0, 0)
 
-    static let models: [any PersistentModel.Type] = OpenLiftSchemaV8.models + [
+    /// Frozen copies preserve the schema checksum shipped in V9 now that the
+    /// live V10 models carry `lockedAt`.
+    @Model
+    final class SetEntry {
+        @Attribute(.unique) var id: UUID
+        var sessionId: UUID
+        var exerciseId: UUID
+        var setIndex: Int
+        var weight: Double
+        var reps: Int
+        var isLocked: Bool = false
+
+        init(
+            id: UUID = UUID(),
+            sessionId: UUID,
+            exerciseId: UUID,
+            setIndex: Int,
+            weight: Double,
+            reps: Int,
+            isLocked: Bool = false
+        ) {
+            self.id = id
+            self.sessionId = sessionId
+            self.exerciseId = exerciseId
+            self.setIndex = setIndex
+            self.weight = weight
+            self.reps = reps
+            self.isLocked = isLocked
+        }
+    }
+
+    @Model
+    final class AdaptiveSetEntry {
+        @Attribute(.unique) var id: UUID
+        var adaptiveSessionId: UUID
+        var occurrenceId: UUID
+        var exerciseId: UUID
+        var setIndex: Int
+        var weight: Double
+        var reps: Int
+        var isLocked: Bool
+
+        init(
+            id: UUID = UUID(),
+            adaptiveSessionId: UUID,
+            occurrenceId: UUID,
+            exerciseId: UUID,
+            setIndex: Int,
+            weight: Double = 0,
+            reps: Int = 0,
+            isLocked: Bool = false
+        ) {
+            self.id = id
+            self.adaptiveSessionId = adaptiveSessionId
+            self.occurrenceId = occurrenceId
+            self.exerciseId = exerciseId
+            self.setIndex = setIndex
+            self.weight = weight
+            self.reps = reps
+            self.isLocked = isLocked
+        }
+    }
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV8.models.filter {
+        ObjectIdentifier($0) != ObjectIdentifier(currentSetEntryModel)
+            && ObjectIdentifier($0) != ObjectIdentifier(currentAdaptiveSetEntryModel)
+    } + [
+        SetEntry.self,
+        AdaptiveSetEntry.self,
         FixedCycleReadinessObservation.self,
         FixedCycleReadinessResponse.self,
         FixedCycleOccurrenceOverride.self,
         FixedCycleExerciseSnapshot.self
+    ]
+}
+
+/// Adds an optional completion timestamp to Fixed Cycle and Adaptive set rows.
+/// Existing rows intentionally migrate with no completion timestamp.
+enum OpenLiftSchemaV10: VersionedSchema {
+    static let versionIdentifier = Schema.Version(10, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV9.models.filter {
+        ObjectIdentifier($0) != ObjectIdentifier(OpenLiftSchemaV9.SetEntry.self)
+            && ObjectIdentifier($0) != ObjectIdentifier(OpenLiftSchemaV9.AdaptiveSetEntry.self)
+    } + [
+        SetEntry.self,
+        AdaptiveSetEntry.self
     ]
 }
 
@@ -136,7 +221,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV6.self,
         OpenLiftSchemaV7.self,
         OpenLiftSchemaV8.self,
-        OpenLiftSchemaV9.self
+        OpenLiftSchemaV9.self,
+        OpenLiftSchemaV10.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -171,6 +257,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV8.self,
             toVersion: OpenLiftSchemaV9.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV9.self,
+            toVersion: OpenLiftSchemaV10.self
         )
     ]
 }

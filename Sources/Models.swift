@@ -869,6 +869,7 @@ final class AdaptiveSetEntry {
     var weight: Double
     var reps: Int
     var isLocked: Bool
+    var lockedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -878,7 +879,8 @@ final class AdaptiveSetEntry {
         setIndex: Int,
         weight: Double = 0,
         reps: Int = 0,
-        isLocked: Bool = false
+        isLocked: Bool = false,
+        lockedAt: Date? = nil
     ) {
         self.id = id
         self.adaptiveSessionId = adaptiveSessionId
@@ -888,6 +890,7 @@ final class AdaptiveSetEntry {
         self.weight = weight
         self.reps = reps
         self.isLocked = isLocked
+        self.lockedAt = lockedAt
     }
 }
 
@@ -1176,6 +1179,7 @@ final class SetEntry {
     var weight: Double
     var reps: Int
     var isLocked: Bool = false
+    var lockedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -1184,7 +1188,8 @@ final class SetEntry {
         setIndex: Int,
         weight: Double,
         reps: Int,
-        isLocked: Bool = false
+        isLocked: Bool = false,
+        lockedAt: Date? = nil
     ) {
         self.id = id
         self.sessionId = sessionId
@@ -1193,6 +1198,7 @@ final class SetEntry {
         self.weight = weight
         self.reps = reps
         self.isLocked = isLocked
+        self.lockedAt = lockedAt
     }
 
     func validate() throws {

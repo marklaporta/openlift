@@ -40,6 +40,83 @@ private enum UnsupportedMigrationPlan: SchemaMigrationPlan {
 }
 
 final class MigrationSafetyTests: XCTestCase {
+    func testV9StoreMigratesToV10WithExistingSetCompletionTimestampsNil() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let storeURL = fixture.working.appendingPathComponent("default.store")
+        let fixedId = UUID()
+        let adaptiveId = UUID()
+
+        do {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV9.self)
+            XCTAssertNil(schema.entitiesByName["SetEntry"]?.attributesByName["lockedAt"])
+            XCTAssertNil(schema.entitiesByName["AdaptiveSetEntry"]?.attributesByName["lockedAt"])
+            let container = try ModelContainer(
+                for: schema,
+                configurations: [
+                    ModelConfiguration(
+                        "V9SetCompletionTimestampFixture",
+                        schema: schema,
+                        url: storeURL,
+                        cloudKitDatabase: .none
+                    )
+                ]
+            )
+            let context = ModelContext(container)
+            context.insert(
+                OpenLiftSchemaV9.SetEntry(
+                    id: fixedId,
+                    sessionId: UUID(),
+                    exerciseId: UUID(),
+                    setIndex: 1,
+                    weight: 185,
+                    reps: 9,
+                    isLocked: true
+                )
+            )
+            context.insert(
+                OpenLiftSchemaV9.AdaptiveSetEntry(
+                    id: adaptiveId,
+                    adaptiveSessionId: UUID(),
+                    occurrenceId: UUID(),
+                    exerciseId: UUID(),
+                    setIndex: 1,
+                    weight: 60,
+                    reps: 10,
+                    isLocked: true
+                )
+            )
+            try context.save()
+        }
+
+        let schema = Schema(versionedSchema: OpenLiftSchemaV10.self)
+        XCTAssertNotNil(schema.entitiesByName["SetEntry"]?.attributesByName["lockedAt"])
+        XCTAssertNotNil(schema.entitiesByName["AdaptiveSetEntry"]?.attributesByName["lockedAt"])
+        let startup = OpenLiftModelContainerFactory.makePersistent(
+            schema: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: ModelConfiguration(
+                "V10SetCompletionTimestampFixture",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+        )
+
+        XCTAssertNil(startup.issue)
+        let context = ModelContext(startup.container)
+        let fixed = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<SetEntry>()).first { $0.id == fixedId }
+        )
+        let adaptive = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).first { $0.id == adaptiveId }
+        )
+        XCTAssertTrue(fixed.isLocked)
+        XCTAssertNil(fixed.lockedAt)
+        XCTAssertTrue(adaptive.isLocked)
+        XCTAssertNil(adaptive.lockedAt)
+    }
+
     func testV8StoreMigratesToV9PreservesHistoryAndReopensNewParallelRecords() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -109,7 +186,10 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertNil(startup.issue)
         var context = ModelContext(startup.container)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 1)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 1)
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<OpenLiftSchemaV9.SetEntry>()),
+            1
+        )
         XCTAssertEqual(
             try context.fetchCount(FetchDescriptor<FixedCycleReadinessObservation>()),
             0
