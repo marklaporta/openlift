@@ -436,7 +436,10 @@ enum BootstrapDataService {
                             setIndex: exportedSet.set_index,
                             weight: exportedSet.weight,
                             reps: exportedSet.reps,
-                            isLocked: true
+                            isLocked: true,
+                            lockedAt: exportedSet.locked_at.flatMap(
+                                SessionExportService.parseExportDate
+                            )
                         )
                         try entry.validate()
                         modelContext.insert(entry)

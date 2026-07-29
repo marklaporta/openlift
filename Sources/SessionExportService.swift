@@ -195,6 +195,14 @@ enum SessionExportService {
         let set_index: Int
         let weight: Double
         let reps: Int
+        let locked_at: String?
+
+        init(set_index: Int, weight: Double, reps: Int, locked_at: String? = nil) {
+            self.set_index = set_index
+            self.weight = weight
+            self.reps = reps
+            self.locked_at = locked_at
+        }
     }
 
     struct ExportExercise: Codable, Sendable {
@@ -560,7 +568,14 @@ enum SessionExportService {
             guard let ex = exercises.first(where: { $0.id == exerciseId }) else { return nil }
             let sets = entries
                 .sorted { $0.setIndex < $1.setIndex }
-                .map { ExportSet(set_index: $0.setIndex, weight: $0.weight, reps: $0.reps) }
+                .map {
+                    ExportSet(
+                        set_index: $0.setIndex,
+                        weight: $0.weight,
+                        reps: $0.reps,
+                        locked_at: $0.lockedAt.map(iso8601Formatter.string)
+                    )
+                }
             return ExportExercise(
                 exercise_id: ex.id.uuidString,
                 exercise_name: ex.name,
@@ -1313,6 +1328,7 @@ enum AdaptiveExportService {
         let weight: Double
         let reps: Int
         let is_locked: Bool
+        let locked_at: String?
     }
 
     struct ExerciseV2: Codable, Equatable {
@@ -1424,7 +1440,8 @@ enum AdaptiveExportService {
                                 equipment: (actual?.equipment ?? .cable).rawValue,
                                 weight: row.weight,
                                 reps: row.reps,
-                                is_locked: row.isLocked
+                                is_locked: row.isLocked,
+                                locked_at: row.lockedAt.map(iso.string)
                             )
                         }
                     return ExerciseV2(
@@ -1881,7 +1898,8 @@ enum AdaptiveExportService {
                             setIndex: row.set_index,
                             weight: row.weight,
                             reps: row.reps,
-                            isLocked: row.is_locked
+                            isLocked: row.is_locked,
+                            lockedAt: row.locked_at.flatMap(SessionExportService.parseExportDate)
                         )
                     )
                 }

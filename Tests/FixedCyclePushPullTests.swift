@@ -114,7 +114,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let schema = Schema(versionedSchema: OpenLiftSchemaV9.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV10.self)
         let storeURL = root.appendingPathComponent("default.store")
         var rolloutTemplateId = UUID()
         var rolloutCycleId = UUID()
@@ -1839,7 +1839,7 @@ final class FixedCyclePushPullTests: XCTestCase {
     }
 
     private func makeContext() -> (ModelContainer, ModelContext) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV9.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV10.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (container, ModelContext(container))
     }

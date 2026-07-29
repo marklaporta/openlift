@@ -977,7 +977,8 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
                 setIndex: 1,
                 weight: 60,
                 reps: 9,
-                isLocked: true
+                isLocked: true,
+                lockedAt: Date(timeIntervalSince1970: 1_800_000_050)
             ),
             AdaptiveSetEntry(
                 adaptiveSessionId: session.id,
@@ -1024,6 +1025,13 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             2
         )
         XCTAssertEqual(decoded.workout_kind, "adaptive")
+        XCTAssertEqual(
+            decoded.plan.complexes[0].exercises[0].sets[0].locked_at.flatMap(
+                SessionExportService.parseExportDate
+            ),
+            entries[0].lockedAt
+        )
+        XCTAssertNil(decoded.plan.complexes[1].exercises[0].sets[0].locked_at)
         XCTAssertEqual(decoded.plan.complexes.map(\.name), ["Press First", "Press Again"])
         XCTAssertNotEqual(
             decoded.plan.complexes[0].exercises[0].occurrence_id,
@@ -1038,10 +1046,48 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let recoveredEntries = try targetContext.fetch(FetchDescriptor<AdaptiveSetEntry>())
         XCTAssertEqual(recoveredEntries.count, 2)
         XCTAssertEqual(Set(recoveredEntries.map(\.occurrenceId)).count, 2)
+        XCTAssertEqual(
+            recoveredEntries.first { $0.occurrenceId == firstExercise.occurrenceId }?.lockedAt,
+            entries[0].lockedAt
+        )
+        XCTAssertNil(
+            recoveredEntries.first { $0.occurrenceId == secondExercise.occurrenceId }?.lockedAt
+        )
         XCTAssertEqual(try targetContext.fetchCount(FetchDescriptor<ComplexFeedback>()), 1)
         XCTAssertEqual(try targetContext.fetchCount(FetchDescriptor<AdaptiveOverrideEvent>()), 1)
         XCTAssertEqual(try targetContext.fetchCount(FetchDescriptor<Session>()), 0)
         XCTAssertEqual(try targetContext.fetchCount(FetchDescriptor<ActiveCycleInstance>()), 0)
+
+        var legacyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedPayload) as? [String: Any]
+        )
+        var legacyPlan = try XCTUnwrap(legacyObject["plan"] as? [String: Any])
+        var legacyComplexes = try XCTUnwrap(legacyPlan["complexes"] as? [[String: Any]])
+        for complexIndex in legacyComplexes.indices {
+            var legacyExercises = try XCTUnwrap(
+                legacyComplexes[complexIndex]["exercises"] as? [[String: Any]]
+            )
+            for exerciseIndex in legacyExercises.indices {
+                var legacySets = try XCTUnwrap(
+                    legacyExercises[exerciseIndex]["sets"] as? [[String: Any]]
+                )
+                for setIndex in legacySets.indices {
+                    legacySets[setIndex].removeValue(forKey: "locked_at")
+                }
+                legacyExercises[exerciseIndex]["sets"] = legacySets
+            }
+            legacyComplexes[complexIndex]["exercises"] = legacyExercises
+        }
+        legacyPlan["complexes"] = legacyComplexes
+        legacyObject["plan"] = legacyPlan
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
+        let legacyPayload = try XCTUnwrap(AdaptiveExportService.decode(legacyData))
+        let (legacyContext, _) = makeContext()
+        XCTAssertTrue(try AdaptiveExportService.hydrate(legacyPayload, modelContext: legacyContext))
+        XCTAssertTrue(
+            try legacyContext.fetch(FetchDescriptor<AdaptiveSetEntry>())
+                .allSatisfy { $0.lockedAt == nil }
+        )
     }
 
     func testRecoveredReadinessDefaultsSubmitWithoutPerFieldConfirmation() throws {

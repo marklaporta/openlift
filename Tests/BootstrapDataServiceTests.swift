@@ -68,7 +68,15 @@ final class BootstrapDataServiceTests: XCTestCase {
             exportStatus: .pending
         )
         let entries = [
-            SetEntry(sessionId: session.id, exerciseId: exercise.id, setIndex: 1, weight: 100, reps: 10, isLocked: true),
+            SetEntry(
+                sessionId: session.id,
+                exerciseId: exercise.id,
+                setIndex: 1,
+                weight: 100,
+                reps: 10,
+                isLocked: true,
+                lockedAt: Date(timeIntervalSince1970: 1_767_228_600)
+            ),
             SetEntry(sessionId: session.id, exerciseId: exercise.id, setIndex: 2, weight: 110, reps: 8, isLocked: true)
         ]
 
@@ -92,6 +100,13 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(payload.cycle_day_index, 1)
         XCTAssertEqual(payload.exercises.first?.exercise_name, "Hack Squat")
         XCTAssertEqual(payload.exercises.first?.sets.count, 2)
+        XCTAssertEqual(
+            payload.exercises.first?.sets.first?.locked_at.flatMap(
+                SessionExportService.parseExportDate
+            ),
+            entries[0].lockedAt
+        )
+        XCTAssertNil(payload.exercises.first?.sets.last?.locked_at)
     }
 
     func testConfiguredICloudIdentifierRequiresExpandedValue() {
@@ -393,6 +408,46 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(payload.exercises.first?.exercise_name, "Incline Dumbbell Press")
         XCTAssertEqual(payload.exercises.first?.sets.map(\.set_index), [1, 2])
         XCTAssertNotNil(UUID(uuidString: payload.session_id))
+    }
+
+    func testHydratesLegacyFixedExportWithoutLockedAt() throws {
+        let sessionId = UUID()
+        let json = """
+        {
+          "session_id": "\(sessionId.uuidString)",
+          "cycle_name": "Legacy Rotation",
+          "cycle_day_index": 0,
+          "date": "2026-07-20T19:00:00Z",
+          "exercises": [
+            {
+              "exercise_name": "Belt Squat",
+              "muscle": "quads",
+              "sets": [
+                { "set_index": 1, "weight": 185, "reps": 9 }
+              ]
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+        let payload = try XCTUnwrap(SessionExportService.decodeExportPayload(data: json))
+        let schema = Schema(versionedSchema: OpenLiftSchemaV10.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let cycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 0)
+        context.insert(cycle)
+
+        let result = try BootstrapDataService.reconcileWorkoutExports(
+            [payload],
+            cycle: cycle,
+            modelContext: context
+        )
+
+        XCTAssertEqual(result.imported, 1)
+        let entry = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<SetEntry>()).first { $0.sessionId == sessionId }
+        )
+        XCTAssertTrue(entry.isLocked)
+        XCTAssertNil(entry.lockedAt)
     }
 
     func testPreferredPublishedCycleFallsBackToFirst() {
@@ -861,6 +916,55 @@ final class BootstrapDataServiceTests: XCTestCase {
 }
 
 final class WorkoutEntryEditingTests: XCTestCase {
+    func testFixedLockUnlockAndRelockUpdatesCompletionTimestamp() {
+        let entry = SetEntry(
+            sessionId: UUID(),
+            exerciseId: UUID(),
+            setIndex: 1,
+            weight: 185,
+            reps: 9
+        )
+        let firstLock = Date(timeIntervalSince1970: 100)
+        let secondLock = Date(timeIntervalSince1970: 200)
+
+        WorkoutEntryEditing.setLocked(true, entry: entry, at: firstLock)
+        XCTAssertTrue(entry.isLocked)
+        XCTAssertEqual(entry.lockedAt, firstLock)
+
+        WorkoutEntryEditing.setLocked(false, entry: entry, at: secondLock)
+        XCTAssertFalse(entry.isLocked)
+        XCTAssertNil(entry.lockedAt)
+
+        WorkoutEntryEditing.setLocked(true, entry: entry, at: secondLock)
+        XCTAssertTrue(entry.isLocked)
+        XCTAssertEqual(entry.lockedAt, secondLock)
+    }
+
+    func testAdaptiveLockUnlockAndRelockUpdatesCompletionTimestamp() {
+        let entry = AdaptiveSetEntry(
+            adaptiveSessionId: UUID(),
+            occurrenceId: UUID(),
+            exerciseId: UUID(),
+            setIndex: 1,
+            weight: 60,
+            reps: 10
+        )
+        let firstLock = Date(timeIntervalSince1970: 300)
+        let secondLock = Date(timeIntervalSince1970: 400)
+
+        WorkoutEntryEditing.setLocked(true, entry: entry, at: firstLock)
+        XCTAssertTrue(entry.isLocked)
+        XCTAssertEqual(entry.lockedAt, firstLock)
+
+        WorkoutEntryEditing.setLocked(false, entry: entry, at: secondLock)
+        XCTAssertFalse(entry.isLocked)
+        XCTAssertNil(entry.lockedAt)
+
+        WorkoutEntryEditing.setLocked(true, entry: entry, at: secondLock)
+        XCTAssertTrue(entry.isLocked)
+        XCTAssertEqual(entry.lockedAt, secondLock)
+    }
+
     func testEntryEditingSupportsDeleteAndReentryWithoutHistory() {
         var entries = [
             WorkoutEntryEditing.EntryState(setIndex: 1, weight: 0, reps: 0, isLocked: false),
