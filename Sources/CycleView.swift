@@ -197,7 +197,7 @@ struct CycleView: View {
                 if trainingMode == .rotation {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Refresh") {
-                            reloadPublishedCycles()
+                            reloadPublishedCycles(surfacingErrors: true)
                         }
                     }
                 }
@@ -328,11 +328,18 @@ struct CycleView: View {
         try BootstrapDataService.ensureExerciseCatalog(modelContext: modelContext)
     }
 
-    private func reloadPublishedCycles() {
+    /// Passive refreshes stay silent. iCloud Drive being unavailable is an ordinary
+    /// condition, and this runs on a repeating timer as well as on appear and on
+    /// foreground — surfacing it put a modal error in front of the tab over and over.
+    /// The last known list is kept rather than blanked. Only an explicit Refresh
+    /// reports the failure, because there the user asked.
+    private func reloadPublishedCycles(surfacingErrors: Bool = false) {
         do {
             publishedCycles = try PublishedCycleService.listPublishedCycles()
         } catch {
-            errorMessage = error.localizedDescription
+            if surfacingErrors {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

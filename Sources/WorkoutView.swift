@@ -636,9 +636,6 @@ struct WorkoutView: View {
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                         }
-                                        Text("The template removal applies to future workouts; these completed sets remain in this occurrence.")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
                                     }
                                 }
                             }
@@ -1355,9 +1352,6 @@ struct WorkoutView: View {
                     }
                 }
             }
-            Text("Evidence is advisory. Fixed Cycle order and dose do not change automatically.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 

@@ -136,13 +136,7 @@ struct AdaptiveProgramEditorView: View {
                 value: $draft.maxWorkingSetCount,
                 in: 1...15
             )
-            Text("Automatic workouts never exceed 15 working sets. Chest and back exercises are capped at 3 sets each.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             Toggle("Reviewed for real use", isOn: $draft.isReviewedForUse)
-            Text("Approve after checking the settings below. Saving creates a new version.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
 
             if existingProgram == nil {
                 Button("Load Starter Proposal") {
@@ -200,7 +194,7 @@ struct AdaptiveProgramEditorView: View {
                                 in: 1...14
                             )
                         } else {
-                            Text("Intervals: \(rule.cadencePattern.map(String.init).joined(separator: ", ")) calendar days. Skips do not advance the pattern.")
+                            Text("Intervals: \(rule.cadencePattern.map(String.init).joined(separator: ", ")) calendar days")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -228,10 +222,6 @@ struct AdaptiveProgramEditorView: View {
 
     private var complexesSection: some View {
         Section("Ordered Exercise Complexes") {
-            Text("Exercises in a complex are scheduled together in this order.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             ForEach(Array(draft.complexes.indices), id: \.self) { complexIndex in
                 complexEditor(at: complexIndex)
             }
@@ -264,9 +254,6 @@ struct AdaptiveProgramEditorView: View {
 
             Button("Add Component") { addComponent(to: complexIndex) }
                 .disabled(activeExercises.isEmpty)
-            Text("Back may pair one vertical pull with one horizontal pull. Other muscles use at most one compound.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
 
             HStack {
                 Button {
