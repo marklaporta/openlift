@@ -1690,12 +1690,22 @@ struct ReadinessEntrySections: View {
         // The phase title is a header on the first muscle section rather than a section
         // of its own: an empty Section renders unreliably inside a List.
         ForEach(Array(muscles.enumerated()), id: \.element) { index, muscle in
-            // All three metrics share one row. Previously each was its own Form row and
-            // paid separate vertical padding plus a separator. Labels stay above the
-            // pickers rather than beside them: inline labels squeeze the four-segment
-            // soreness control until "Moderate" truncates.
+            // All three metrics share one row, and the muscle name is rotated into the
+            // card's left gutter instead of sitting in a section header above it. That
+            // removes a header block and its spacing per muscle. Metric labels stay
+            // above their pickers: inline labels squeeze the four-segment soreness
+            // control until "Moderate" truncates.
             Section {
-                VStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    Text(muscle.displayName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 16)
+                        .accessibilityLabel(muscle.displayName)
+
+                    VStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Soreness")
                             .font(.caption)
@@ -1746,15 +1756,11 @@ struct ReadinessEntrySections: View {
                             "\(accessibilityPrefix).readiness.\(muscle.rawValue).eagerness"
                         )
                     }
+                    }
                 }
             } header: {
                 if index == 0 {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                        Text(muscle.displayName)
-                    }
-                } else {
-                    Text(muscle.displayName)
+                    Text(title)
                 }
             }
             // The gap between muscle cards dominates the scroll once the rows
