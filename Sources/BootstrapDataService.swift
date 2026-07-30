@@ -471,13 +471,20 @@ enum BootstrapDataService {
                 for payload in metadata.readiness {
                     guard let id = UUID(uuidString: payload.observation_id),
                           !readinessIds.contains(id) else { continue }
+                    let systemicEagerness = payload.systemic_eagerness.flatMap(
+                        EagernessLevel.init(rawValue:)
+                    )
+                    guard payload.systemic_eagerness == nil || systemicEagerness != nil else {
+                        continue
+                    }
                     let responses = payload.responses.compactMap { response -> FixedCycleReadinessResponse? in
                         guard let muscle = MuscleGroup(rawValue: response.muscle),
                               let soreness = SorenessLevel.decodeStoredOrExportedValue(response.soreness),
-                              let pain = ConnectiveTissuePainLevel(rawValue: response.connective_tissue_pain),
-                              let eagerness = EagernessLevel(rawValue: response.eagerness) else {
+                              let pain = ConnectiveTissuePainLevel(rawValue: response.connective_tissue_pain) else {
                             return nil
                         }
+                        let eagerness = response.eagerness.flatMap(EagernessLevel.init(rawValue:))
+                        guard response.eagerness == nil || eagerness != nil else { return nil }
                         return FixedCycleReadinessResponse(
                             muscle: muscle,
                             soreness: soreness,
@@ -494,6 +501,7 @@ enum BootstrapDataService {
                             timeZoneIdentifier: payload.time_zone_identifier,
                             revision: payload.revision,
                             createdAt: SessionExportService.parseExportDate(payload.created_at) ?? finishedAt,
+                            systemicEagerness: systemicEagerness,
                             responses: responses
                         )
                     )

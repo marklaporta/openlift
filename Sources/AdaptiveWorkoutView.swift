@@ -583,14 +583,14 @@ struct AdaptiveWorkoutView: View {
                 )
             )
         })
-        systemicEagerness = .leastEager(in: check.responses.map(\.eagerness))
+        systemicEagerness = ReadinessEagernessResolver.resolve(check)
     }
 
     private func prefillAdaptiveSystemicEagerness() {
         guard let latest = readinessChecks.max(by: {
             ($0.createdAt, $0.revision) < ($1.createdAt, $1.revision)
         }) else { return }
-        systemicEagerness = .leastEager(in: latest.responses.map(\.eagerness))
+        systemicEagerness = ReadinessEagernessResolver.resolve(latest)
     }
 
     @ViewBuilder
@@ -685,7 +685,7 @@ struct AdaptiveWorkoutView: View {
             let check = try AdaptiveWorkoutService.makeReadinessCheck(
                 program: program,
                 inputs: readinessInputs(),
-                systemicEagerness: systemicEagerness,
+                eagerness: systemicEagerness,
                 localDateKey: todayKey,
                 timeZoneIdentifier: TimeZone.current.identifier,
                 revision: revision

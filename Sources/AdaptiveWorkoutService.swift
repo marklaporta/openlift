@@ -710,7 +710,7 @@ enum AdaptiveWorkoutService {
     static func makeReadinessCheck(
         program: AdaptiveProgram,
         inputs: [MuscleGroup: MuscleReadinessInput],
-        systemicEagerness: EagernessLevel? = nil,
+        eagerness: EagernessLevel = .eager,
         localDateKey: String,
         timeZoneIdentifier: String,
         revision: Int,
@@ -729,7 +729,7 @@ enum AdaptiveWorkoutService {
                 muscle: muscle,
                 soreness: input.soreness,
                 connectiveTissuePain: input.connectiveTissuePain,
-                eagerness: systemicEagerness ?? input.eagerness
+                eagerness: nil
             )
         }
         return DailyReadinessCheck(
@@ -739,18 +739,20 @@ enum AdaptiveWorkoutService {
             createdAt: now,
             adaptiveProgramId: program.id,
             adaptiveProgramVersion: program.version,
+            systemicEagerness: eagerness,
             responses: responses
         )
     }
 
     static func readinessInputs(from check: DailyReadinessCheck) -> [MuscleGroup: MuscleReadinessInput] {
-        Dictionary(uniqueKeysWithValues: check.responses.map {
+        let eagerness = ReadinessEagernessResolver.resolve(check)
+        return Dictionary(uniqueKeysWithValues: check.responses.map {
             (
                 $0.muscle,
                 MuscleReadinessInput(
                     soreness: $0.soreness,
                     connectiveTissuePain: $0.connectiveTissuePain,
-                    eagerness: $0.eagerness
+                    eagerness: eagerness
                 )
             )
         })

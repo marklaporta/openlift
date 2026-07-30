@@ -30,7 +30,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             try AdaptiveWorkoutService.makeReadinessCheck(
                 program: program,
                 inputs: [:],
-                systemicEagerness: .reluctant,
+                eagerness: .reluctant,
                 localDateKey: "2026-07-20",
                 timeZoneIdentifier: "America/Los_Angeles",
                 revision: 1
@@ -43,7 +43,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         }
     }
 
-    func testSystemicEagernessFansOutToEveryEnabledMuscleResponse() throws {
+    func testSystemicEagernessPersistsOnlyOnReadinessCheck() throws {
         let (program, _) = makeProgram()
         program.muscleRules.first { $0.muscle == .back }?.isEnabled = true
         let inputs: [MuscleGroup: MuscleReadinessInput] = [
@@ -54,15 +54,69 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let check = try AdaptiveWorkoutService.makeReadinessCheck(
             program: program,
             inputs: inputs,
-            systemicEagerness: .reluctant,
+            eagerness: .reluctant,
             localDateKey: "2026-07-20",
             timeZoneIdentifier: "America/Los_Angeles",
             revision: 1
         )
 
         XCTAssertEqual(Set(check.responses.map(\.muscle)), Set([.chest, .back]))
-        XCTAssertTrue(check.responses.allSatisfy { $0.eagerness == .reluctant })
+        XCTAssertEqual(check.systemicEagerness, .reluctant)
+        XCTAssertTrue(check.responses.allSatisfy { $0.eagerness == nil })
         XCTAssertEqual(EagernessLevel.leastEager(in: [.eager, .reluctant, .neutral]), .reluctant)
+    }
+
+    func testReadinessEagernessResolverPrefersSystemicAndFallsBackForLegacyRows() {
+        let legacy = DailyReadinessCheck(
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1,
+            adaptiveProgramId: UUID(),
+            adaptiveProgramVersion: 1,
+            responses: [
+                AdaptiveReadinessResponse(
+                    muscle: .chest,
+                    soreness: .none,
+                    connectiveTissuePain: .none,
+                    eagerness: .neutral
+                ),
+                AdaptiveReadinessResponse(
+                    muscle: .back,
+                    soreness: .none,
+                    connectiveTissuePain: .none,
+                    eagerness: .reluctant
+                )
+            ]
+        )
+        XCTAssertEqual(ReadinessEagernessResolver.resolve(legacy), .reluctant)
+
+        legacy.systemicEagerness = .eager
+        XCTAssertEqual(ReadinessEagernessResolver.resolve(legacy), .eager)
+    }
+
+    func testSystemicReluctanceBlocksPositiveDoseProgressionForEveryMuscle() {
+        let response = AdaptiveReadinessResponse(
+            muscle: .chest,
+            soreness: .none,
+            connectiveTissuePain: .none,
+            eagerness: .eager
+        )
+        let check = DailyReadinessCheck(
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1,
+            adaptiveProgramId: UUID(),
+            adaptiveProgramVersion: 1,
+            systemicEagerness: .reluctant,
+            responses: [response]
+        )
+
+        XCTAssertFalse(
+            AdaptiveDoseEvidenceService.allowsPositiveProgression(
+                for: response,
+                in: check
+            )
+        )
     }
 
     func testOpeningWorkflowCreatesNoSessionBeforeProposalIsAccepted() throws {
@@ -1129,7 +1183,8 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let response = try XCTUnwrap(check.responses.first)
         XCTAssertEqual(response.soreness, .mild)
         XCTAssertEqual(response.connectiveTissuePain, .none)
-        XCTAssertEqual(response.eagerness, .eager)
+        XCTAssertNil(response.eagerness)
+        XCTAssertEqual(check.systemicEagerness, .eager)
     }
 
     func testSorenessDisplayAndCompatibilityAliasesPreserveLegacyRawValues() throws {
@@ -1158,7 +1213,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
 
     @MainActor
     func testReadinessRevisionPreservesEquivalentProposalAndReplacesMaterialChange() throws {
-        let (context, _) = makeV6Context()
+        let (context, _) = makeContext()
         let (program, exercise) = makeProgram()
         let firstCheck = try AdaptiveWorkoutService.makeReadinessCheck(
             program: program,
@@ -1232,7 +1287,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
     }
 
     func testTodayExposureTargetPersistsWithoutChangingProfileDefault() throws {
-        let (context, _) = makeV6Context()
+        let (context, _) = makeContext()
         let (program, exercise) = makeProgram()
         let preference = AdaptiveWorkoutSizePreference(
             adaptiveProgramId: program.id,
@@ -1589,13 +1644,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
     }
 
     private func makeContext() -> (ModelContext, ModelContainer) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
-        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
-        return (ModelContext(container), container)
-    }
-
-    private func makeV6Context() -> (ModelContext, ModelContainer) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV8.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV11.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (ModelContext(container), container)
     }

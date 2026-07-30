@@ -231,7 +231,7 @@ enum SessionExportService {
         let muscle: String
         let soreness: String
         let connective_tissue_pain: String
-        let eagerness: String
+        let eagerness: String?
     }
 
     struct FixedReadinessPayload: Codable, Equatable, Sendable {
@@ -240,6 +240,7 @@ enum SessionExportService {
         let time_zone_identifier: String
         let revision: Int
         let created_at: String
+        let systemic_eagerness: String?
         let responses: [FixedReadinessResponsePayload]
     }
 
@@ -515,6 +516,7 @@ enum SessionExportService {
                         time_zone_identifier: observation.timeZoneIdentifier,
                         revision: observation.revision,
                         created_at: iso.string(from: observation.createdAt),
+                        systemic_eagerness: observation.systemicEagerness?.rawValue,
                         responses: observation.responses
                             .sorted { $0.muscle.rawValue < $1.muscle.rawValue }
                             .map {
@@ -522,7 +524,7 @@ enum SessionExportService {
                                     muscle: $0.muscle.rawValue,
                                     soreness: $0.soreness.rawValue,
                                     connective_tissue_pain: $0.connectiveTissuePain.rawValue,
-                                    eagerness: $0.eagerness.rawValue
+                                    eagerness: $0.eagerness?.rawValue
                                 )
                             }
                     )
@@ -1107,7 +1109,7 @@ enum AdaptiveReadinessExportService {
         let muscle: String
         let soreness: String
         let connective_tissue_pain: String
-        let eagerness: String
+        let eagerness: String?
     }
 
     struct Payload: Codable, Equatable {
@@ -1120,6 +1122,7 @@ enum AdaptiveReadinessExportService {
         let created_at: String
         let adaptive_program_id: String
         let adaptive_program_version: Int
+        let systemic_eagerness: String?
         let responses: [ResponsePayload]
     }
 
@@ -1135,12 +1138,13 @@ enum AdaptiveReadinessExportService {
             created_at: iso.string(from: check.createdAt),
             adaptive_program_id: check.adaptiveProgramId.uuidString,
             adaptive_program_version: check.adaptiveProgramVersion,
+            systemic_eagerness: check.systemicEagerness?.rawValue,
             responses: check.responses.sorted { $0.muscle.rawValue < $1.muscle.rawValue }.map {
                 ResponsePayload(
                     muscle: $0.muscle.rawValue,
                     soreness: $0.soreness.rawValue,
                     connective_tissue_pain: $0.connectiveTissuePain.rawValue,
-                    eagerness: $0.eagerness.rawValue
+                    eagerness: $0.eagerness?.rawValue
                 )
             }
         )
@@ -1303,7 +1307,7 @@ enum AdaptiveExportService {
         let muscle: String
         let soreness: String
         let connective_tissue_pain: String
-        let eagerness: String
+        let eagerness: String?
     }
 
     struct ReadinessV2: Codable, Equatable {
@@ -1314,6 +1318,7 @@ enum AdaptiveExportService {
         let created_at: String
         let adaptive_program_id: String
         let adaptive_program_version: Int
+        let systemic_eagerness: String?
         let responses: [ReadinessResponseV2]
     }
 
@@ -1472,12 +1477,13 @@ enum AdaptiveExportService {
                 created_at: iso.string(from: readiness.createdAt),
                 adaptive_program_id: readiness.adaptiveProgramId.uuidString,
                 adaptive_program_version: readiness.adaptiveProgramVersion,
+                systemic_eagerness: readiness.systemicEagerness?.rawValue,
                 responses: readiness.responses.sorted { $0.muscle.rawValue < $1.muscle.rawValue }.map {
                     ReadinessResponseV2(
                         muscle: $0.muscle.rawValue,
                         soreness: $0.soreness.rawValue,
                         connective_tissue_pain: $0.connectiveTissuePain.rawValue,
-                        eagerness: $0.eagerness.rawValue
+                        eagerness: $0.eagerness?.rawValue
                     )
                 }
             ),
@@ -1848,11 +1854,16 @@ enum AdaptiveExportService {
             return created
         }
 
+        let systemicEagerness = payload.readiness.systemic_eagerness.flatMap(EagernessLevel.init(rawValue:))
+        guard payload.readiness.systemic_eagerness == nil || systemicEagerness != nil else { return false }
         let responses = payload.readiness.responses.compactMap { response -> AdaptiveReadinessResponse? in
             guard let muscle = MuscleGroup(rawValue: response.muscle),
                   let soreness = SorenessLevel.decodeStoredOrExportedValue(response.soreness),
-                  let pain = ConnectiveTissuePainLevel(rawValue: response.connective_tissue_pain),
-                  let eagerness = EagernessLevel(rawValue: response.eagerness) else { return nil }
+                  let pain = ConnectiveTissuePainLevel(rawValue: response.connective_tissue_pain) else {
+                return nil
+            }
+            let eagerness = response.eagerness.flatMap(EagernessLevel.init(rawValue:))
+            guard response.eagerness == nil || eagerness != nil else { return nil }
             return AdaptiveReadinessResponse(
                 muscle: muscle,
                 soreness: soreness,
@@ -1869,6 +1880,7 @@ enum AdaptiveExportService {
             createdAt: SessionExportService.parseExportDate(payload.readiness.created_at) ?? finishedAt,
             adaptiveProgramId: UUID(uuidString: payload.readiness.adaptive_program_id) ?? programId,
             adaptiveProgramVersion: payload.readiness.adaptive_program_version,
+            systemicEagerness: systemicEagerness,
             responses: responses
         )
         modelContext.insert(check)

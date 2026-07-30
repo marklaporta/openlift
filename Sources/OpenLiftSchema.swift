@@ -39,13 +39,70 @@ enum OpenLiftSchemaV2: VersionedSchema {
 enum OpenLiftSchemaV3: VersionedSchema {
     static let versionIdentifier = Schema.Version(3, 0, 0)
 
+    /// Frozen at the V3 shape because V11 makes eagerness systemic and leaves
+    /// the per-muscle value only for legacy rows.
+    @Model
+    final class AdaptiveReadinessResponse {
+        @Attribute(.unique) var id: UUID
+        var muscle: MuscleGroup
+        var soreness: SorenessLevel
+        var connectiveTissuePain: ConnectiveTissuePainLevel
+        var eagerness: EagernessLevel
+
+        init(
+            id: UUID = UUID(),
+            muscle: MuscleGroup,
+            soreness: SorenessLevel,
+            connectiveTissuePain: ConnectiveTissuePainLevel,
+            eagerness: EagernessLevel
+        ) {
+            self.id = id
+            self.muscle = muscle
+            self.soreness = soreness
+            self.connectiveTissuePain = connectiveTissuePain
+            self.eagerness = eagerness
+        }
+    }
+
+    @Model
+    final class DailyReadinessCheck {
+        @Attribute(.unique) var id: UUID
+        var localDateKey: String
+        var timeZoneIdentifier: String
+        var revision: Int
+        var createdAt: Date
+        var adaptiveProgramId: UUID
+        var adaptiveProgramVersion: Int
+        @Relationship(deleteRule: .cascade) var responses: [AdaptiveReadinessResponse]
+
+        init(
+            id: UUID = UUID(),
+            localDateKey: String,
+            timeZoneIdentifier: String,
+            revision: Int,
+            createdAt: Date = .now,
+            adaptiveProgramId: UUID,
+            adaptiveProgramVersion: Int,
+            responses: [AdaptiveReadinessResponse]
+        ) {
+            self.id = id
+            self.localDateKey = localDateKey
+            self.timeZoneIdentifier = timeZoneIdentifier
+            self.revision = revision
+            self.createdAt = createdAt
+            self.adaptiveProgramId = adaptiveProgramId
+            self.adaptiveProgramVersion = adaptiveProgramVersion
+            self.responses = responses
+        }
+    }
+
     static let models: [any PersistentModel.Type] = OpenLiftSchemaV2.models + [
         AdaptiveMuscleRule.self,
         AdaptiveComplexComponent.self,
         AdaptiveExerciseComplex.self,
         AdaptiveProgram.self,
-        AdaptiveReadinessResponse.self,
-        DailyReadinessCheck.self,
+        OpenLiftSchemaV3.AdaptiveReadinessResponse.self,
+        OpenLiftSchemaV3.DailyReadinessCheck.self,
         PlannedExerciseSnapshot.self,
         PlannedComplexSnapshot.self,
         GeneratedWorkoutPlan.self,
@@ -184,14 +241,68 @@ enum OpenLiftSchemaV9: VersionedSchema {
         }
     }
 
+    /// Frozen at the V9 shape because V11 adds systemic eagerness and makes the
+    /// per-muscle eagerness value optional for newly written observations.
+    @Model
+    final class FixedCycleReadinessObservation {
+        @Attribute(.unique) var id: UUID
+        var sessionId: UUID
+        var localDateKey: String
+        var timeZoneIdentifier: String
+        var revision: Int
+        var createdAt: Date
+        @Relationship(deleteRule: .cascade) var responses: [FixedCycleReadinessResponse]
+
+        init(
+            id: UUID = UUID(),
+            sessionId: UUID,
+            localDateKey: String,
+            timeZoneIdentifier: String,
+            revision: Int,
+            createdAt: Date = .now,
+            responses: [FixedCycleReadinessResponse]
+        ) {
+            self.id = id
+            self.sessionId = sessionId
+            self.localDateKey = localDateKey
+            self.timeZoneIdentifier = timeZoneIdentifier
+            self.revision = revision
+            self.createdAt = createdAt
+            self.responses = responses
+        }
+    }
+
+    @Model
+    final class FixedCycleReadinessResponse {
+        @Attribute(.unique) var id: UUID
+        var muscle: MuscleGroup
+        var soreness: SorenessLevel
+        var connectiveTissuePain: ConnectiveTissuePainLevel
+        var eagerness: EagernessLevel
+
+        init(
+            id: UUID = UUID(),
+            muscle: MuscleGroup,
+            soreness: SorenessLevel,
+            connectiveTissuePain: ConnectiveTissuePainLevel,
+            eagerness: EagernessLevel
+        ) {
+            self.id = id
+            self.muscle = muscle
+            self.soreness = soreness
+            self.connectiveTissuePain = connectiveTissuePain
+            self.eagerness = eagerness
+        }
+    }
+
     static let models: [any PersistentModel.Type] = OpenLiftSchemaV8.models.filter {
         ObjectIdentifier($0) != ObjectIdentifier(currentSetEntryModel)
             && ObjectIdentifier($0) != ObjectIdentifier(currentAdaptiveSetEntryModel)
     } + [
         SetEntry.self,
         AdaptiveSetEntry.self,
-        FixedCycleReadinessObservation.self,
-        FixedCycleReadinessResponse.self,
+        OpenLiftSchemaV9.FixedCycleReadinessObservation.self,
+        OpenLiftSchemaV9.FixedCycleReadinessResponse.self,
         FixedCycleOccurrenceOverride.self,
         FixedCycleExerciseSnapshot.self
     ]
@@ -211,6 +322,25 @@ enum OpenLiftSchemaV10: VersionedSchema {
     ]
 }
 
+/// V11 is the current runtime schema.
+enum OpenLiftSchemaV11: VersionedSchema {
+    static let versionIdentifier = Schema.Version(11, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV10.models.filter {
+        ObjectIdentifier($0) != ObjectIdentifier(OpenLiftSchemaV3.AdaptiveReadinessResponse.self)
+            && ObjectIdentifier($0) != ObjectIdentifier(OpenLiftSchemaV3.DailyReadinessCheck.self)
+            && ObjectIdentifier($0)
+                != ObjectIdentifier(OpenLiftSchemaV9.FixedCycleReadinessObservation.self)
+            && ObjectIdentifier($0)
+                != ObjectIdentifier(OpenLiftSchemaV9.FixedCycleReadinessResponse.self)
+    } + [
+        AdaptiveReadinessResponse.self,
+        DailyReadinessCheck.self,
+        FixedCycleReadinessObservation.self,
+        FixedCycleReadinessResponse.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
@@ -222,7 +352,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV7.self,
         OpenLiftSchemaV8.self,
         OpenLiftSchemaV9.self,
-        OpenLiftSchemaV10.self
+        OpenLiftSchemaV10.self,
+        OpenLiftSchemaV11.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -261,6 +392,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV9.self,
             toVersion: OpenLiftSchemaV10.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV10.self,
+            toVersion: OpenLiftSchemaV11.self
         )
     ]
 }

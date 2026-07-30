@@ -5,7 +5,7 @@ import SwiftData
 import XCTest
 @testable import OpenLift
 
-private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV10
+private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV11
 
 @Model
 private final class UnsupportedMigrationMarker {
@@ -43,6 +43,27 @@ private enum UnsupportedMigrationPlan: SchemaMigrationPlan {
 }
 
 final class MigrationSafetyTests: XCTestCase {
+    func testHistoricalSchemasNeverReferenceLiveAppModelTypes() {
+        // V1-V8 still carry broad historical-schema debt: unchanged entities
+        // reference their live model classes. This guard is deliberately scoped
+        // to entities whose persisted shape changed after introduction.
+        let changedLiveModelIdentifiers = Set([
+            ObjectIdentifier(AdaptiveReadinessResponse.self),
+            ObjectIdentifier(DailyReadinessCheck.self),
+            ObjectIdentifier(FixedCycleReadinessObservation.self),
+            ObjectIdentifier(FixedCycleReadinessResponse.self)
+        ])
+
+        for schema in OpenLiftSchemaMigrationPlan.schemas.dropLast() {
+            for model in schema.models {
+                XCTAssertFalse(
+                    changedLiveModelIdentifiers.contains(ObjectIdentifier(model)),
+                    "\(schema.versionIdentifier) references changed live model \(model)"
+                )
+            }
+        }
+    }
+
     func testRealDeviceStoreMigrationTargetTracksHeadOfPlan() throws {
         let headSchema = try XCTUnwrap(OpenLiftSchemaMigrationPlan.schemas.last)
         XCTAssertEqual(
@@ -129,6 +150,112 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertNil(adaptive.lockedAt)
     }
 
+    func testV10StoreMigratesToV11WithNilSystemicEagernessAndLegacyResponsesIntact() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let storeURL = fixture.working.appendingPathComponent("default.store")
+        let adaptiveCheckId = UUID()
+        let fixedObservationId = UUID()
+
+        do {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV10.self)
+            XCTAssertNil(
+                schema.entitiesByName["DailyReadinessCheck"]?
+                    .attributesByName["systemicEagerness"]
+            )
+            XCTAssertNil(
+                schema.entitiesByName["FixedCycleReadinessObservation"]?
+                    .attributesByName["systemicEagerness"]
+            )
+            let container = try ModelContainer(
+                for: schema,
+                configurations: [
+                    ModelConfiguration(
+                        "V10SystemicEagernessFixture",
+                        schema: schema,
+                        url: storeURL,
+                        cloudKitDatabase: .none
+                    )
+                ]
+            )
+            let context = ModelContext(container)
+            context.insert(
+                OpenLiftSchemaV3.DailyReadinessCheck(
+                    id: adaptiveCheckId,
+                    localDateKey: "2026-07-28",
+                    timeZoneIdentifier: "America/Los_Angeles",
+                    revision: 1,
+                    adaptiveProgramId: UUID(),
+                    adaptiveProgramVersion: 8,
+                    responses: [
+                        OpenLiftSchemaV3.AdaptiveReadinessResponse(
+                            muscle: .chest,
+                            soreness: .none,
+                            connectiveTissuePain: .none,
+                            eagerness: .neutral
+                        ),
+                        OpenLiftSchemaV3.AdaptiveReadinessResponse(
+                            muscle: .back,
+                            soreness: .mild,
+                            connectiveTissuePain: .none,
+                            eagerness: .reluctant
+                        )
+                    ]
+                )
+            )
+            context.insert(
+                OpenLiftSchemaV9.FixedCycleReadinessObservation(
+                    id: fixedObservationId,
+                    sessionId: UUID(),
+                    localDateKey: "2026-07-28",
+                    timeZoneIdentifier: "America/Los_Angeles",
+                    revision: 1,
+                    responses: [
+                        OpenLiftSchemaV9.FixedCycleReadinessResponse(
+                            muscle: .quads,
+                            soreness: .mild,
+                            connectiveTissuePain: .caution,
+                            eagerness: .neutral
+                        )
+                    ]
+                )
+            )
+            try context.save()
+        }
+
+        let schema = Schema(versionedSchema: OpenLiftSchemaV11.self)
+        let startup = OpenLiftModelContainerFactory.makePersistent(
+            schema: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: ModelConfiguration(
+                "V11SystemicEagernessFixture",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+        )
+
+        XCTAssertNil(startup.issue)
+        let context = ModelContext(startup.container)
+        let adaptive = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<DailyReadinessCheck>())
+                .first { $0.id == adaptiveCheckId }
+        )
+        XCTAssertNil(adaptive.systemicEagerness)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: adaptive.responses.map {
+                ($0.muscle, $0.eagerness)
+            }),
+            [.chest: .neutral, .back: .reluctant]
+        )
+        let fixed = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
+                .first { $0.id == fixedObservationId }
+        )
+        XCTAssertNil(fixed.systemicEagerness)
+        XCTAssertEqual(fixed.responses.first?.eagerness, .neutral)
+    }
+
     func testV8StoreMigratesToV9PreservesHistoryAndReopensNewParallelRecords() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -203,7 +330,9 @@ final class MigrationSafetyTests: XCTestCase {
             1
         )
         XCTAssertEqual(
-            try context.fetchCount(FetchDescriptor<FixedCycleReadinessObservation>()),
+            try context.fetchCount(
+                FetchDescriptor<OpenLiftSchemaV9.FixedCycleReadinessObservation>()
+            ),
             0
         )
         XCTAssertEqual(
@@ -215,13 +344,13 @@ final class MigrationSafetyTests: XCTestCase {
             0
         )
         context.insert(
-            FixedCycleReadinessObservation(
+            OpenLiftSchemaV9.FixedCycleReadinessObservation(
                 sessionId: sessionId,
                 localDateKey: "2026-07-27",
                 timeZoneIdentifier: "America/Los_Angeles",
                 revision: 1,
                 responses: [
-                    FixedCycleReadinessResponse(
+                    OpenLiftSchemaV9.FixedCycleReadinessResponse(
                         muscle: .chest,
                         soreness: .none,
                         connectiveTissuePain: .none,
@@ -267,7 +396,9 @@ final class MigrationSafetyTests: XCTestCase {
         context = ModelContext(reopened)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 1)
         XCTAssertEqual(
-            try context.fetchCount(FetchDescriptor<FixedCycleReadinessObservation>()),
+            try context.fetchCount(
+                FetchDescriptor<OpenLiftSchemaV9.FixedCycleReadinessObservation>()
+            ),
             1
         )
         XCTAssertEqual(
@@ -629,7 +760,7 @@ final class MigrationSafetyTests: XCTestCase {
                 muscleRules: [],
                 complexes: []
             )
-            let readiness = DailyReadinessCheck(
+            let readiness = OpenLiftSchemaV3.DailyReadinessCheck(
                 id: readinessId,
                 localDateKey: "2026-07-20",
                 timeZoneIdentifier: "America/Los_Angeles",
@@ -637,13 +768,13 @@ final class MigrationSafetyTests: XCTestCase {
                 adaptiveProgramId: adaptiveProgramId,
                 adaptiveProgramVersion: 3,
                 responses: [
-                    AdaptiveReadinessResponse(
+                    OpenLiftSchemaV3.AdaptiveReadinessResponse(
                         muscle: .back,
                         soreness: .mild,
                         connectiveTissuePain: .none,
                         eagerness: .eager
                     ),
-                    AdaptiveReadinessResponse(
+                    OpenLiftSchemaV3.AdaptiveReadinessResponse(
                         muscle: .chest,
                         soreness: .high,
                         connectiveTissuePain: .none,
@@ -726,7 +857,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<ExportDiagnostic>()).first?.filename, "workout-existing.json")
         XCTAssertEqual(try context.fetch(FetchDescriptor<AdaptiveProgram>()).first?.id, adaptiveProgramId)
         let migratedReadiness = try XCTUnwrap(
-            context.fetch(FetchDescriptor<DailyReadinessCheck>()).first
+            context.fetch(FetchDescriptor<OpenLiftSchemaV3.DailyReadinessCheck>()).first
         )
         XCTAssertEqual(migratedReadiness.id, readinessId)
         XCTAssertEqual(

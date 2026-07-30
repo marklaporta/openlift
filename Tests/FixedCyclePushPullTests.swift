@@ -114,7 +114,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let schema = Schema(versionedSchema: OpenLiftSchemaV10.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV11.self)
         let storeURL = root.appendingPathComponent("default.store")
         var rolloutTemplateId = UUID()
         var rolloutCycleId = UUID()
@@ -861,7 +861,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         XCTAssertTrue(first.responses.allSatisfy {
             $0.soreness == .none
                 && $0.connectiveTissuePain == .none
-                && $0.eagerness == .eager
+                && $0.eagerness == nil
         })
         XCTAssertTrue(
             FixedCycleWorkoutService.canExecute(
@@ -911,7 +911,7 @@ final class FixedCyclePushPullTests: XCTestCase {
                 template: template,
                 day: day,
                 inputs: partial,
-                systemicEagerness: .reluctant,
+                eagerness: .reluctant,
                 existing: [],
                 now: Date(timeIntervalSince1970: 1_769_299_200),
                 calendar: utcCalendar,
@@ -925,7 +925,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         }
     }
 
-    func testFixedSystemicEagernessFansOutToEveryTrackedMuscleResponse() throws {
+    func testFixedSystemicEagernessPersistsOnlyOnObservation() throws {
         let exercise = Exercise(
             name: "Test Press",
             primaryMuscle: .chest,
@@ -951,7 +951,7 @@ final class FixedCyclePushPullTests: XCTestCase {
             template: template,
             day: day,
             inputs: inputs,
-            systemicEagerness: .reluctant,
+            eagerness: .reluctant,
             existing: [],
             now: Date(timeIntervalSince1970: 1_769_299_200),
             calendar: utcCalendar,
@@ -959,7 +959,33 @@ final class FixedCyclePushPullTests: XCTestCase {
         )
 
         XCTAssertEqual(Set(observation.responses.map(\.muscle)), Set([.chest, .back]))
-        XCTAssertTrue(observation.responses.allSatisfy { $0.eagerness == .reluctant })
+        XCTAssertEqual(observation.systemicEagerness, .reluctant)
+        XCTAssertTrue(observation.responses.allSatisfy { $0.eagerness == nil })
+    }
+
+    func testFixedReadinessEagernessResolverFallsBackToLegacyResponses() {
+        let observation = FixedCycleReadinessObservation(
+            sessionId: UUID(),
+            localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles",
+            revision: 1,
+            responses: [
+                FixedCycleReadinessResponse(
+                    muscle: .chest,
+                    soreness: .none,
+                    connectiveTissuePain: .none,
+                    eagerness: .neutral
+                ),
+                FixedCycleReadinessResponse(
+                    muscle: .back,
+                    soreness: .none,
+                    connectiveTissuePain: .none,
+                    eagerness: .reluctant
+                )
+            ]
+        )
+
+        XCTAssertEqual(ReadinessEagernessResolver.resolve(observation), .reluctant)
     }
 
     func testFixedCycleLookupKeepsSeparateDayBaselinesAndSkipsZeroOccurrences() {
@@ -1877,7 +1903,7 @@ final class FixedCyclePushPullTests: XCTestCase {
     }
 
     private func makeContext() -> (ModelContainer, ModelContext) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV10.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV11.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (container, ModelContext(container))
     }

@@ -82,7 +82,7 @@ enum FixedCycleWorkoutService {
         template: CycleTemplate,
         day: CycleDay,
         inputs: [MuscleGroup: MuscleReadinessInput],
-        systemicEagerness: EagernessLevel? = nil,
+        eagerness: EagernessLevel = .eager,
         existing: [FixedCycleReadinessObservation],
         now: Date = .now,
         calendar: Calendar = .current,
@@ -97,7 +97,7 @@ enum FixedCycleWorkoutService {
                 muscle: muscle,
                 soreness: value.soreness,
                 connectiveTissuePain: value.connectiveTissuePain,
-                eagerness: systemicEagerness ?? value.eagerness
+                eagerness: nil
             )
         }
         let revision = existing
@@ -111,6 +111,7 @@ enum FixedCycleWorkoutService {
             timeZoneIdentifier: timeZone.identifier,
             revision: revision,
             createdAt: now,
+            systemicEagerness: eagerness,
             responses: responses
         )
     }
@@ -1353,7 +1354,7 @@ struct WorkoutView: View {
                 template: template,
                 day: day,
                 inputs: readinessInputs,
-                systemicEagerness: systemicEagerness,
+                eagerness: systemicEagerness,
                 existing: fixedReadiness
             )
             modelContext.insert(observation)
@@ -1392,7 +1393,7 @@ struct WorkoutView: View {
         if let latest = fixedReadiness.max(by: {
             ($0.createdAt, $0.revision) < ($1.createdAt, $1.revision)
         }) {
-            systemicEagerness = .leastEager(in: latest.responses.map(\.eagerness))
+            systemicEagerness = ReadinessEagernessResolver.resolve(latest)
         }
     }
 
