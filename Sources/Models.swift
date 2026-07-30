@@ -218,6 +218,30 @@ enum EagernessLevel: String, Codable, CaseIterable, Hashable {
     }
 }
 
+enum ReadinessEagernessResolver {
+    static func resolve<S: Sequence>(
+        systemicEagerness: EagernessLevel?,
+        legacyResponseEagerness: S
+    ) -> EagernessLevel where S.Element == EagernessLevel? {
+        systemicEagerness
+            ?? EagernessLevel.leastEager(in: legacyResponseEagerness.compactMap { $0 })
+    }
+
+    static func resolve(_ check: DailyReadinessCheck) -> EagernessLevel {
+        resolve(
+            systemicEagerness: check.systemicEagerness,
+            legacyResponseEagerness: check.responses.lazy.map(\.eagerness)
+        )
+    }
+
+    static func resolve(_ observation: FixedCycleReadinessObservation) -> EagernessLevel {
+        resolve(
+            systemicEagerness: observation.systemicEagerness,
+            legacyResponseEagerness: observation.responses.lazy.map(\.eagerness)
+        )
+    }
+}
+
 enum AdaptivePlanStatus: String, Codable, CaseIterable, Hashable {
     case proposed
     case frozen
@@ -676,14 +700,14 @@ final class AdaptiveReadinessResponse {
     var muscle: MuscleGroup
     var soreness: SorenessLevel
     var connectiveTissuePain: ConnectiveTissuePainLevel
-    var eagerness: EagernessLevel
+    var eagerness: EagernessLevel?
 
     init(
         id: UUID = UUID(),
         muscle: MuscleGroup,
         soreness: SorenessLevel,
         connectiveTissuePain: ConnectiveTissuePainLevel,
-        eagerness: EagernessLevel
+        eagerness: EagernessLevel? = nil
     ) {
         self.id = id
         self.muscle = muscle
@@ -702,6 +726,7 @@ final class DailyReadinessCheck {
     var createdAt: Date
     var adaptiveProgramId: UUID
     var adaptiveProgramVersion: Int
+    var systemicEagerness: EagernessLevel?
     @Relationship(deleteRule: .cascade) var responses: [AdaptiveReadinessResponse]
 
     init(
@@ -712,6 +737,7 @@ final class DailyReadinessCheck {
         createdAt: Date = .now,
         adaptiveProgramId: UUID,
         adaptiveProgramVersion: Int,
+        systemicEagerness: EagernessLevel? = nil,
         responses: [AdaptiveReadinessResponse]
     ) {
         self.id = id
@@ -721,6 +747,7 @@ final class DailyReadinessCheck {
         self.createdAt = createdAt
         self.adaptiveProgramId = adaptiveProgramId
         self.adaptiveProgramVersion = adaptiveProgramVersion
+        self.systemicEagerness = systemicEagerness
         self.responses = responses
     }
 }
@@ -1243,6 +1270,7 @@ final class FixedCycleReadinessObservation {
     var timeZoneIdentifier: String
     var revision: Int
     var createdAt: Date
+    var systemicEagerness: EagernessLevel?
     @Relationship(deleteRule: .cascade) var responses: [FixedCycleReadinessResponse]
 
     init(
@@ -1252,6 +1280,7 @@ final class FixedCycleReadinessObservation {
         timeZoneIdentifier: String,
         revision: Int,
         createdAt: Date = .now,
+        systemicEagerness: EagernessLevel? = nil,
         responses: [FixedCycleReadinessResponse]
     ) {
         self.id = id
@@ -1260,6 +1289,7 @@ final class FixedCycleReadinessObservation {
         self.timeZoneIdentifier = timeZoneIdentifier
         self.revision = revision
         self.createdAt = createdAt
+        self.systemicEagerness = systemicEagerness
         self.responses = responses
     }
 }
@@ -1270,14 +1300,14 @@ final class FixedCycleReadinessResponse {
     var muscle: MuscleGroup
     var soreness: SorenessLevel
     var connectiveTissuePain: ConnectiveTissuePainLevel
-    var eagerness: EagernessLevel
+    var eagerness: EagernessLevel?
 
     init(
         id: UUID = UUID(),
         muscle: MuscleGroup,
         soreness: SorenessLevel,
         connectiveTissuePain: ConnectiveTissuePainLevel,
-        eagerness: EagernessLevel
+        eagerness: EagernessLevel? = nil
     ) {
         self.id = id
         self.muscle = muscle

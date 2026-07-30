@@ -617,7 +617,7 @@ private struct SessionDetailView: View {
                             Text("\(observation.localDateKey) · revision \(observation.revision)")
                                 .font(.headline)
                             Text(
-                                "Eagerness to train: \(EagernessLevel.leastEager(in: observation.responses.map(\.eagerness)).displayName)"
+                                "Eagerness to train: \(ReadinessEagernessResolver.resolve(observation).displayName)"
                             )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

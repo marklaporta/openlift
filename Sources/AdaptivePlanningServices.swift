@@ -2027,6 +2027,15 @@ enum AdaptiveForecastService {
 }
 
 enum AdaptiveDoseEvidenceService {
+    static func allowsPositiveProgression(
+        for response: AdaptiveReadinessResponse,
+        in readinessCheck: DailyReadinessCheck
+    ) -> Bool {
+        response.soreness.allowsAutomaticTraining
+            && response.connectiveTissuePain == .none
+            && ReadinessEagernessResolver.resolve(readinessCheck) != .reluctant
+    }
+
     static func recommendations(
         program: AdaptiveProgram,
         plans: [GeneratedWorkoutPlan],
@@ -2105,9 +2114,7 @@ enum AdaptiveDoseEvidenceService {
                 }
                 let componentReadiness = readinessByMuscle[component.primaryMuscle]
                 let recovered = componentReadiness.map {
-                    $0.soreness.allowsAutomaticTraining
-                        && $0.connectiveTissuePain == .none
-                        && $0.eagerness != .reluctant
+                    allowsPositiveProgression(for: $0, in: readinessCheck)
                 } ?? false
                 let recommendation = DoseRecommendationService.recommend(
                     currentSetCount: component.prescribedSetCount,
@@ -2117,9 +2124,7 @@ enum AdaptiveDoseEvidenceService {
                     latestPerformance: latestPerformance,
                     recoveredOnTime: recovered,
                     allowsPositiveProgression: componentReadiness.map {
-                        $0.soreness.allowsAutomaticTraining
-                            && $0.connectiveTissuePain == .none
-                            && $0.eagerness != .reluctant
+                        allowsPositiveProgression(for: $0, in: readinessCheck)
                     } ?? false
                 )
                 result[definition.definitionId, default: [:]][component.position] = recommendation
