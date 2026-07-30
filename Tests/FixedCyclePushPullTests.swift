@@ -925,6 +925,112 @@ final class FixedCyclePushPullTests: XCTestCase {
         }
     }
 
+    func testFixedReadinessFromEarlierSessionSatisfiesLaterDraftOnSameLocalDate() {
+        let earlierSessionId = UUID()
+        let laterSessionId = UUID()
+        let date = Date(timeIntervalSince1970: 1_769_299_200)
+        let observation = FixedCycleReadinessObservation(
+            sessionId: earlierSessionId,
+            localDateKey: FixedCycleWorkoutService.localDateKey(
+                for: date,
+                calendar: utcCalendar
+            ),
+            timeZoneIdentifier: "UTC",
+            revision: 1,
+            createdAt: date,
+            responses: []
+        )
+
+        XCTAssertEqual(
+            FixedCycleWorkoutService.latestObservation(
+                sessionId: laterSessionId,
+                localDateKey: observation.localDateKey,
+                observations: [observation]
+            )?.id,
+            observation.id
+        )
+        XCTAssertTrue(
+            FixedCycleWorkoutService.canExecute(
+                sessionId: laterSessionId,
+                now: date,
+                observations: [observation],
+                calendar: utcCalendar
+            )
+        )
+    }
+
+    func testFixedReadinessFromPriorDateDoesNotSatisfyLaterDraftToday() {
+        let earlierSessionId = UUID()
+        let laterSessionId = UUID()
+        let priorDate = Date(timeIntervalSince1970: 1_769_299_200)
+        let today = priorDate.addingTimeInterval(24 * 60 * 60)
+        let observation = FixedCycleReadinessObservation(
+            sessionId: earlierSessionId,
+            localDateKey: FixedCycleWorkoutService.localDateKey(
+                for: priorDate,
+                calendar: utcCalendar
+            ),
+            timeZoneIdentifier: "UTC",
+            revision: 1,
+            createdAt: priorDate,
+            responses: []
+        )
+
+        XCTAssertNil(
+            FixedCycleWorkoutService.latestObservation(
+                sessionId: laterSessionId,
+                localDateKey: FixedCycleWorkoutService.localDateKey(
+                    for: today,
+                    calendar: utcCalendar
+                ),
+                observations: [observation]
+            )
+        )
+        XCTAssertFalse(
+            FixedCycleWorkoutService.canExecute(
+                sessionId: laterSessionId,
+                now: today,
+                observations: [observation],
+                calendar: utcCalendar
+            )
+        )
+    }
+
+    func testFixedReadinessPrefersCurrentSessionObservationOverDayScopedFallback() {
+        let currentSessionId = UUID()
+        let otherSessionId = UUID()
+        let date = Date(timeIntervalSince1970: 1_769_299_200)
+        let dateKey = FixedCycleWorkoutService.localDateKey(
+            for: date,
+            calendar: utcCalendar
+        )
+        let currentSessionObservation = FixedCycleReadinessObservation(
+            sessionId: currentSessionId,
+            localDateKey: dateKey,
+            timeZoneIdentifier: "UTC",
+            revision: 1,
+            createdAt: date,
+            responses: []
+        )
+        let newerFallback = FixedCycleReadinessObservation(
+            sessionId: otherSessionId,
+            localDateKey: dateKey,
+            timeZoneIdentifier: "UTC",
+            revision: 99,
+            createdAt: date.addingTimeInterval(60),
+            responses: []
+        )
+
+        XCTAssertEqual(
+            FixedCycleWorkoutService.latestObservation(
+                sessionId: currentSessionId,
+                localDateKey: dateKey,
+                observations: [currentSessionObservation, newerFallback]
+            )?.id,
+            currentSessionObservation.id
+        )
+    }
+
     func testFixedSystemicEagernessPersistsOnlyOnObservation() throws {
         let exercise = Exercise(
             name: "Test Press",

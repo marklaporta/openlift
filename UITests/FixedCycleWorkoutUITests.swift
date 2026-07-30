@@ -37,14 +37,11 @@ final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
         XCTAssertTrue(finishButton.waitForExistence(timeout: 5))
         finishButton.tap()
 
-        // Readiness is recorded per draft session, so the next draft re-arms the gate
-        // and has to be cleared before its exercises render.
-        submitFixedReadiness(in: app)
-
         // The list intentionally preserves its scroll position after the next
         // draft replaces the completed workout, so assert on a visible Lower A
         // exercise instead of an off-screen section header.
         scrollToElement(app.staticTexts["Leg Press"], in: app)
         XCTAssertTrue(app.staticTexts["Leg Press"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["fixed.submitReadiness"].exists)
     }
 }
