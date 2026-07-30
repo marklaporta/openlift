@@ -395,7 +395,7 @@ struct WorkoutView: View {
     @State private var systemicEagerness: EagernessLevel = .eager
     @State private var observedLocalDateKey = FixedCycleWorkoutService.localDateKey(for: .now)
     @State private var pendingFixedMutation: PendingFixedMutation?
-    @State private var skippedReason = "user_choice"
+    @State private var pendingSkipContext: SkipContext?
     private let dateRefresh = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     private var trainingMode: TrainingMode {
@@ -554,6 +554,34 @@ struct WorkoutView: View {
         } message: {
             Text(pendingFixedMutation?.message ?? "")
         }
+        .confirmationDialog(
+            pendingSkipContext?.title ?? "Skip for Today?",
+            isPresented: Binding(
+                get: { pendingSkipContext != nil },
+                set: { if !$0 { pendingSkipContext = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pendingSkipContext {
+                Button("Recovery") {
+                    applyPendingSkip(pendingSkipContext, reasonCode: "recovery")
+                }
+                Button("Time") {
+                    applyPendingSkip(pendingSkipContext, reasonCode: "time")
+                }
+                Button("Equipment") {
+                    applyPendingSkip(pendingSkipContext, reasonCode: "equipment")
+                }
+                Button("Other") {
+                    applyPendingSkip(pendingSkipContext, reasonCode: "user_choice")
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingSkipContext = nil
+            }
+        } message: {
+            Text(pendingSkipContext?.message ?? "")
+        }
     }
 
     private var rotationWorkoutContent: some View {
@@ -615,18 +643,21 @@ struct WorkoutView: View {
                                     )
                                 },
                                 onSkipToday: {
-                                    skipExerciseToday(
-                                        resolved.slot,
+                                    pendingSkipContext = SkipContext(
                                         sessionId: draftSession.id,
-                                        reasonCode: skippedReason
+                                        day: activeDay,
+                                        slot: resolved.slot,
+                                        exerciseName: resolvedExercise?.name ?? "Exercise",
+                                        scope: .exercise
                                     )
                                 },
                                 onSkipMuscleToday: {
-                                    skipMuscleToday(
-                                        resolved.slot.muscle,
-                                        day: activeDay,
+                                    pendingSkipContext = SkipContext(
                                         sessionId: draftSession.id,
-                                        reasonCode: skippedReason
+                                        day: activeDay,
+                                        slot: resolved.slot,
+                                        exerciseName: resolvedExercise?.name ?? "Exercise",
+                                        scope: .muscle
                                     )
                                 },
                                 onRemoveFuture: {
@@ -687,15 +718,6 @@ struct WorkoutView: View {
                                         }
                                     }
                                 }
-                            }
-                        }
-
-                        Section("Occurrence Actions") {
-                            Picker("Skip reason", selection: $skippedReason) {
-                                Text("Recovery").tag("recovery")
-                                Text("Time").tag("time")
-                                Text("Equipment").tag("equipment")
-                                Text("Other").tag("user_choice")
                             }
                         }
 
@@ -1459,6 +1481,25 @@ struct WorkoutView: View {
         }
     }
 
+    private func applyPendingSkip(_ context: SkipContext, reasonCode: String) {
+        pendingSkipContext = nil
+        switch context.scope {
+        case .exercise:
+            skipExerciseToday(
+                context.slot,
+                sessionId: context.sessionId,
+                reasonCode: reasonCode
+            )
+        case .muscle:
+            skipMuscleToday(
+                context.slot.muscle,
+                day: context.day,
+                sessionId: context.sessionId,
+                reasonCode: reasonCode
+            )
+        }
+    }
+
     private func skipMuscleToday(
         _ muscle: MuscleGroup,
         day: CycleDay,
@@ -1882,6 +1923,41 @@ private struct AddMovementContext: Identifiable {
     let day: CycleDay
     let sessionId: UUID
     let defaultMuscle: MuscleGroup
+}
+
+private struct SkipContext: Identifiable {
+    enum Scope: String {
+        case exercise
+        case muscle
+    }
+
+    let sessionId: UUID
+    let day: CycleDay
+    let slot: CycleSlot
+    let exerciseName: String
+    let scope: Scope
+
+    var id: String {
+        "\(sessionId.uuidString)-\(slot.position)-\(scope.rawValue)"
+    }
+
+    var title: String {
+        switch scope {
+        case .exercise:
+            return "Skip \(exerciseName) for Today?"
+        case .muscle:
+            return "Skip \(slot.muscle.displayName) for Today?"
+        }
+    }
+
+    var message: String {
+        switch scope {
+        case .exercise:
+            return "This skips only \(exerciseName), not the entire \(slot.muscle.displayName) group, for this \(day.label) workout. Choose a reason."
+        case .muscle:
+            return "This skips the entire \(slot.muscle.displayName) group for this \(day.label) workout. Choose a reason."
+        }
+    }
 }
 
 private enum PendingFixedMutation {
