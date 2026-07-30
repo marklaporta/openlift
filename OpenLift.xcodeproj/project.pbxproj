@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0AC888CF031C9D0C882A272C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F6973607E1B44FC016352114 /* Assets.xcassets */; };
 		A11111111111111111111111 /* LogWorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22222222222222222222222 /* LogWorkoutView.swift */; };
 		02DA37FA2EF34418B76A2695 /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BFA6838778B4C1F8BD337E6 /* AppRuntime.swift */; };
 		04D8FD89F53261F38AEB610E /* PublishedCycleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 152C10B5009490BBC2CAF54F /* PublishedCycleService.swift */; };
@@ -51,6 +52,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		F6973607E1B44FC016352114 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A22222222222222222222222 /* LogWorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogWorkoutView.swift; sourceTree = "<group>"; };
 		152C10B5009490BBC2CAF54F /* PublishedCycleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishedCycleService.swift; sourceTree = "<group>"; };
 		174D0F7D6748402A8FDE3758 /* OpenLiftStateResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenLiftStateResolver.swift; sourceTree = "<group>"; };
@@ -140,6 +142,7 @@
 				F2000000000000000000000C /* AdaptiveWorkoutService.swift */,
 				F2000000000000000000000E /* AdaptiveWorkoutView.swift */,
 				5BFA6838778B4C1F8BD337E6 /* AppRuntime.swift */,
+				F6973607E1B44FC016352114 /* Assets.xcassets */,
 				A35F65E5A97D67A2045F686F /* BootstrapDataService.swift */,
 				C6D2E5FA0D8760A475D05B1A /* CycleOrdering.swift */,
 				94D35FC8C396AB62398530B2 /* CycleView.swift */,
@@ -214,6 +217,7 @@
 			buildConfigurationList = 8E8D5465502CDE0A4678EFB8 /* Build configuration list for PBXNativeTarget "OpenLift" */;
 			buildPhases = (
 				3C3FD5CD3859D2C3A0232498 /* Sources */,
+				FC5282E2AFD23AEEBA81AE4F /* Resources */,
 			);
 			buildRules = (
 			);
@@ -267,6 +271,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		FC5282E2AFD23AEEBA81AE4F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0AC888CF031C9D0C882A272C /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		284AC29CF3AE481C850F1C7C /* Sources */ = {
