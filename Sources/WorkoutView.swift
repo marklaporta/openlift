@@ -68,8 +68,15 @@ enum FixedCycleWorkoutService {
         localDateKey: String,
         observations: [FixedCycleReadinessObservation]
     ) -> FixedCycleReadinessObservation? {
-        observations
-            .filter { $0.sessionId == sessionId && $0.localDateKey == localDateKey }
+        let observationsForDate = observations.filter { $0.localDateKey == localDateKey }
+        let observationsForSession = observationsForDate.filter { $0.sessionId == sessionId }
+        // A re-submission for this session overrides the daily read-through.
+        // Otherwise reuse today's observation without cloning or persisting it.
+        let candidates = observationsForSession.isEmpty
+            ? observationsForDate
+            : observationsForSession
+
+        return candidates
             .max {
                 if $0.revision != $1.revision { return $0.revision < $1.revision }
                 if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
