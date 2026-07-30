@@ -81,6 +81,7 @@ struct RootTabView: View {
         } catch {
             SessionExportService.scheduleBackgroundExportRetry()
         }
+        StoreBackupService.mirrorStoreIfNeeded(modelContext: modelContext)
     }
 
     private func importAvailableWorkoutExportsIfRequested() {

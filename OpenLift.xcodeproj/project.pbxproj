@@ -27,6 +27,7 @@
 		F10000000000000000000001 /* OpenLiftSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* OpenLiftSchema.swift */; };
 		F10000000000000000000003 /* ExerciseCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000003 /* ExerciseCatalogService.swift */; };
 		F10000000000000000000005 /* TrainingModeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000005 /* TrainingModeService.swift */; };
+		F10000000000000000000042 /* StoreBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000042 /* StoreBackupService.swift */; };
 		F10000000000000000000007 /* AdaptiveProgramService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000007 /* AdaptiveProgramService.swift */; };
 		F10000000000000000000008 /* AdaptiveProgramEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000008 /* AdaptiveProgramEditorView.swift */; };
 		F1000000000000000000000A /* AdaptivePlanningServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000A /* AdaptivePlanningServices.swift */; };
@@ -82,6 +83,7 @@
 		F20000000000000000000001 /* OpenLiftSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenLiftSchema.swift; sourceTree = "<group>"; };
 		F20000000000000000000003 /* ExerciseCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseCatalogService.swift; sourceTree = "<group>"; };
 		F20000000000000000000005 /* TrainingModeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingModeService.swift; sourceTree = "<group>"; };
+		F20000000000000000000042 /* StoreBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreBackupService.swift; sourceTree = "<group>"; };
 		F20000000000000000000007 /* AdaptiveProgramService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveProgramService.swift; sourceTree = "<group>"; };
 		F20000000000000000000008 /* AdaptiveProgramEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveProgramEditorView.swift; sourceTree = "<group>"; };
 		F2000000000000000000000A /* AdaptivePlanningServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptivePlanningServices.swift; sourceTree = "<group>"; };
@@ -162,6 +164,7 @@
 				6492CEEF557772DF251890FB /* RootTabView.swift */,
 				4CB4FE3F83FF1998DC82B5D2 /* SessionExportService.swift */,
 				F20000000000000000000005 /* TrainingModeService.swift */,
+				F20000000000000000000042 /* StoreBackupService.swift */,
 				9275815CF668B77423798D35 /* WorkoutView.swift */,
 			);
 			path = Sources;
@@ -318,6 +321,7 @@
 				20C3D90C7DA90E4B1BA220BA /* RootTabView.swift in Sources */,
 				6B0BD985752C67FE87DBF8B3 /* SessionExportService.swift in Sources */,
 				F10000000000000000000005 /* TrainingModeService.swift in Sources */,
+				F10000000000000000000042 /* StoreBackupService.swift in Sources */,
 				978168F33A22E2B56E3A59B8 /* WorkoutView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
