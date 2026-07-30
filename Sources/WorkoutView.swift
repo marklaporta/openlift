@@ -52,6 +52,19 @@ enum FixedCycleWorkoutService {
         }
     }
 
+    static func cautionMuscles(
+        for day: CycleDay,
+        readiness: FixedCycleReadinessObservation
+    ) -> [MuscleGroup] {
+        requiredMuscles(for: day).filter { muscle in
+            guard let response = readiness.responses.first(where: { $0.muscle == muscle }) else {
+                return false
+            }
+            return response.connectiveTissuePain != .none
+                || !response.soreness.allowsAutomaticTraining
+        }
+    }
+
     static func readinessMuscles(
         for template: CycleTemplate,
         targeting day: CycleDay
@@ -560,16 +573,10 @@ struct WorkoutView: View {
                                 .lineLimit(1)
                         }
 
-                        let cautionMuscles = FixedCycleWorkoutService.requiredMuscles(for: activeDay)
-                            .filter { muscle in
-                                guard let response = latestFixedReadiness.responses.first(
-                                    where: { $0.muscle == muscle }
-                                ) else {
-                                    return false
-                                }
-                                return response.connectiveTissuePain != .none
-                                    || !response.soreness.allowsAutomaticTraining
-                            }
+                        let cautionMuscles = FixedCycleWorkoutService.cautionMuscles(
+                            for: activeDay,
+                            readiness: latestFixedReadiness
+                        )
                         if !cautionMuscles.isEmpty {
                             Text(
                                 "Caution: \(cautionMuscles.map(\.displayName).joined(separator: ", "))"
