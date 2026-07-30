@@ -960,22 +960,56 @@ final class MigrationSafetyTests: XCTestCase {
         try copyDirectoryContents(from: suppliedBackup, to: fixture.working)
         let suppliedManifestBefore = try completeStoreManifest(in: suppliedBackup)
 
-        let legacyStoreURL = legacyWorking.appendingPathComponent("default.store")
-        let sourceVersion = try persistentStoreSchemaVersion(at: legacyStoreURL)
-        XCTAssertEqual(sourceVersion, OpenLiftSchemaV9.versionIdentifier)
-        let legacySchema = Schema(versionedSchema: OpenLiftSchemaV9.self)
-        let legacyContainer = try ModelContainer(
-            for: legacySchema,
+        let sourceStoreURL = legacyWorking.appendingPathComponent("default.store")
+        let sourceVersion = try persistentStoreSchemaVersion(at: sourceStoreURL)
+        let headSchema = try XCTUnwrap(OpenLiftSchemaMigrationPlan.schemas.last)
+        guard sourceVersion <= headSchema.versionIdentifier else {
+            XCTFail(
+                """
+                Copied real-device store schema \(sourceVersion) is newer than the \
+                migration-plan head \(headSchema.versionIdentifier). Use a matching \
+                or newer OpenLift build to test this backup.
+                """
+            )
+            return
+        }
+        guard let sourceVersionedSchema = OpenLiftSchemaMigrationPlan.schemas.first(
+            where: { $0.versionIdentifier == sourceVersion }
+        ) else {
+            XCTFail(
+                """
+                Copied real-device store schema \(sourceVersion) is not present in \
+                OpenLiftSchemaMigrationPlan (head: \(headSchema.versionIdentifier)).
+                """
+            )
+            return
+        }
+        print(
+            """
+            OpenLift copied real store detected source schema: \(sourceVersion) \
+            (migration-plan head: \(headSchema.versionIdentifier))
+            """
+        )
+
+        let sourceSchema = Schema(versionedSchema: sourceVersionedSchema)
+        let sourceContainer = try ModelContainer(
+            for: sourceSchema,
             configurations: [
                 ModelConfiguration(
-                    "CopiedRealDeviceV9Readback",
-                    schema: legacySchema,
-                    url: legacyStoreURL,
+                    "CopiedRealDeviceSourceReadback",
+                    schema: sourceSchema,
+                    url: sourceStoreURL,
                     cloudKitDatabase: .none
                 )
             ]
         )
-        let legacyCounts = try v9EntityCounts(in: legacyContainer)
+        let sourceCounts = try sourceEntityCounts(
+            in: sourceContainer,
+            sourceVersion: sourceVersion
+        )
+        let sourceLockedAtCounts = sourceVersion >= OpenLiftSchemaV10.versionIdentifier
+            ? try lockedAtCounts(in: sourceContainer)
+            : nil
 
         let currentSchema = Schema(
             versionedSchema: RealDeviceStoreMigrationTargetSchema.self
@@ -991,31 +1025,36 @@ final class MigrationSafetyTests: XCTestCase {
             )
         )
         XCTAssertNil(startup.issue)
-        let migratedCounts = try currentEntityCounts(in: startup.container)
-        XCTAssertEqual(migratedCounts, legacyCounts)
+        let allMigratedCounts = try currentEntityCounts(in: startup.container)
+        let migratedCounts = allMigratedCounts.filter { sourceCounts[$0.key] != nil }
+        XCTAssertEqual(migratedCounts, sourceCounts)
 
-        let migratedContext = ModelContext(startup.container)
-        let fabricatedFixedTimestamps = try migratedContext
-            .fetch(FetchDescriptor<SetEntry>())
-            .compactMap(\.lockedAt)
-        let fabricatedAdaptiveTimestamps = try migratedContext
-            .fetch(FetchDescriptor<AdaptiveSetEntry>())
-            .compactMap(\.lockedAt)
-        XCTAssertEqual(fabricatedFixedTimestamps.count, 0)
-        XCTAssertEqual(fabricatedAdaptiveTimestamps.count, 0)
+        let migratedLockedAtCounts = try lockedAtCounts(in: startup.container)
+        if let sourceLockedAtCounts {
+            XCTAssertEqual(
+                migratedLockedAtCounts,
+                sourceLockedAtCounts,
+                "Existing set completion timestamps must survive migration."
+            )
+        } else {
+            XCTAssertEqual(
+                migratedLockedAtCounts,
+                ["SetEntry": 0, "AdaptiveSetEntry": 0],
+                "Migration must not fabricate set completion timestamps."
+            )
+        }
         XCTAssertEqual(
             try completeStoreManifest(in: suppliedBackup),
             suppliedManifestBefore
         )
 
-        print("OpenLift copied real store source schema: \(sourceVersion)")
-        print("OpenLift copied real store counts before migration: \(formatted(legacyCounts))")
+        print("OpenLift copied real store counts before migration: \(formatted(sourceCounts))")
         print("OpenLift copied real store counts after migration: \(formatted(migratedCounts))")
         print(
             """
-            OpenLift copied real store fabricated lockedAt values: \
-            fixed=\(fabricatedFixedTimestamps.count), \
-            adaptive=\(fabricatedAdaptiveTimestamps.count)
+            OpenLift copied real store lockedAt values after migration: \
+            fixed=\(migratedLockedAtCounts["SetEntry"] ?? 0), \
+            adaptive=\(migratedLockedAtCounts["AdaptiveSetEntry"] ?? 0)
             """
         )
     }
@@ -1303,6 +1342,108 @@ final class MigrationSafetyTests: XCTestCase {
         return counts
     }
 
+    private func sourceEntityCounts(
+        in container: ModelContainer,
+        sourceVersion: Schema.Version
+    ) throws -> [String: Int] {
+        if sourceVersion == OpenLiftSchemaV9.versionIdentifier {
+            return try v9EntityCounts(in: container)
+        }
+        if sourceVersion >= OpenLiftSchemaV10.versionIdentifier {
+            return try currentEntityCounts(in: container)
+        }
+
+        let context = ModelContext(container)
+        var counts = try legacyEntityCounts(in: container)
+        if sourceVersion >= OpenLiftSchemaV2.versionIdentifier {
+            counts["TrainingPreference"] = try context.fetchCount(
+                FetchDescriptor<TrainingPreference>()
+            )
+        }
+        if sourceVersion >= OpenLiftSchemaV3.versionIdentifier {
+            counts["AdaptiveMuscleRule"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleRule>()
+            )
+            counts["AdaptiveComplexComponent"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveComplexComponent>()
+            )
+            counts["AdaptiveExerciseComplex"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveExerciseComplex>()
+            )
+            counts["AdaptiveProgram"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveProgram>()
+            )
+            counts["AdaptiveReadinessResponse"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveReadinessResponse>()
+            )
+            counts["DailyReadinessCheck"] = try context.fetchCount(
+                FetchDescriptor<DailyReadinessCheck>()
+            )
+            counts["PlannedExerciseSnapshot"] = try context.fetchCount(
+                FetchDescriptor<PlannedExerciseSnapshot>()
+            )
+            counts["PlannedComplexSnapshot"] = try context.fetchCount(
+                FetchDescriptor<PlannedComplexSnapshot>()
+            )
+            counts["GeneratedWorkoutPlan"] = try context.fetchCount(
+                FetchDescriptor<GeneratedWorkoutPlan>()
+            )
+            counts["AdaptiveWorkoutSession"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveWorkoutSession>()
+            )
+            counts["AdaptiveSetEntry"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveSetEntry>()
+            )
+            counts["AdaptiveSetOccurrenceLink"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveSetOccurrenceLink>()
+            )
+            counts["ComplexFeedback"] = try context.fetchCount(
+                FetchDescriptor<ComplexFeedback>()
+            )
+            counts["AdHocExerciseFeedback"] = try context.fetchCount(
+                FetchDescriptor<AdHocExerciseFeedback>()
+            )
+            counts["AdaptiveOverrideEvent"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveOverrideEvent>()
+            )
+        }
+        if sourceVersion >= OpenLiftSchemaV4.versionIdentifier {
+            counts["AdaptiveExerciseSelectionPreference"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveExerciseSelectionPreference>()
+            )
+        }
+        if sourceVersion >= OpenLiftSchemaV5.versionIdentifier {
+            counts["ExportDiagnostic"] = try context.fetchCount(
+                FetchDescriptor<ExportDiagnostic>()
+            )
+        }
+        if sourceVersion >= OpenLiftSchemaV6.versionIdentifier {
+            counts["AdaptiveWorkoutSizePreference"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveWorkoutSizePreference>()
+            )
+            counts["AdaptivePlanDesignState"] = try context.fetchCount(
+                FetchDescriptor<AdaptivePlanDesignState>()
+            )
+        }
+        if sourceVersion >= OpenLiftSchemaV7.versionIdentifier {
+            counts["AdaptiveMuscleVolumeTarget"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleVolumeTarget>()
+            )
+            counts["AdaptiveWorkoutCapacityPreference"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveWorkoutCapacityPreference>()
+            )
+            counts["AdaptiveMuscleVolumeAnchor"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleVolumeAnchor>()
+            )
+        }
+        if sourceVersion >= OpenLiftSchemaV8.versionIdentifier {
+            counts["AdaptiveMuscleExposureConfiguration"] = try context.fetchCount(
+                FetchDescriptor<AdaptiveMuscleExposureConfiguration>()
+            )
+        }
+        return counts
+    }
+
     private func currentEntityCounts(in container: ModelContainer) throws -> [String: Int] {
         let context = ModelContext(container)
         var counts = try sharedV9AndV10EntityCounts(in: context)
@@ -1311,6 +1452,18 @@ final class MigrationSafetyTests: XCTestCase {
             FetchDescriptor<AdaptiveSetEntry>()
         )
         return counts
+    }
+
+    private func lockedAtCounts(in container: ModelContainer) throws -> [String: Int] {
+        let context = ModelContext(container)
+        return [
+            "SetEntry": try context.fetch(FetchDescriptor<SetEntry>())
+                .compactMap(\.lockedAt)
+                .count,
+            "AdaptiveSetEntry": try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+                .compactMap(\.lockedAt)
+                .count
+        ]
     }
 
     private func sharedV9AndV10EntityCounts(

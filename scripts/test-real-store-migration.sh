@@ -68,7 +68,7 @@ cp \
   "$backup_directory/default.store-shm" \
   "$fixture_directory/"
 
-print "Running the V9-to-head migration gate against a working copy…"
+print "Running the detected-version-to-head migration gate against a working copy…"
 xcodebuild test \
   -project OpenLift.xcodeproj \
   -scheme OpenLift \
