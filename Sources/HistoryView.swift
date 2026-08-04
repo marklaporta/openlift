@@ -436,8 +436,10 @@ private struct AdaptiveSessionDetailView: View {
     @Query private var feedback: [ComplexFeedback]
     @Query private var overrides: [AdaptiveOverrideEvent]
     @Query private var exportDiagnostics: [ExportDiagnostic]
+    @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     let session: AdaptiveWorkoutSession
+    @State private var profileError: String?
 
     private var plan: GeneratedWorkoutPlan? {
         plans.first(where: { $0.id == session.generatedPlanId })
@@ -466,9 +468,27 @@ private struct AdaptiveSessionDetailView: View {
                     Section {
                         ForEach(complex.exercises.sorted(by: { $0.position < $1.position })) { snapshot in
                             let rows = entries(for: snapshot, session: session)
+                            let actualExerciseId = rows.first?.exerciseId ?? snapshot.exerciseId
+                            let actualExercise = exercises.first(where: { $0.id == actualExerciseId })
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(exercises.first(where: { $0.id == rows.first?.exerciseId })?.name ?? snapshot.exerciseName)
+                                Text(actualExercise?.name ?? snapshot.exerciseName)
                                     .font(.headline)
+                                if actualExercise?.equipment == .cable {
+                                    let profile = resistanceProfile(
+                                        session: session,
+                                        snapshot: snapshot
+                                    )
+                                    CableResistanceProfileControl(
+                                        workoutKind: .adaptive,
+                                        sessionId: session.id,
+                                        exerciseId: actualExerciseId,
+                                        occurrenceId: snapshot.occurrenceId,
+                                        profile: profile,
+                                        profiles: resistanceProfiles,
+                                        isCompletedOccurrence: true,
+                                        onError: { profileError = $0 }
+                                    )
+                                }
                                 ForEach(rows) { row in
                                     Text("Set \(row.setIndex): \(WeightFormatting.normalized(row.weight), format: WeightFormatting.style) x \(row.reps)")
                                         .foregroundStyle(.secondary)
@@ -502,6 +522,14 @@ private struct AdaptiveSessionDetailView: View {
             }
         }
         .navigationTitle("Adaptive Session")
+        .alert("Resistance Profile Error", isPresented: Binding(
+            get: { profileError != nil },
+            set: { if !$0 { profileError = nil } }
+        )) {
+            Button("OK") { profileError = nil }
+        } message: {
+            Text(profileError ?? "Unknown error")
+        }
     }
 
     private func entries(
@@ -548,6 +576,21 @@ private struct AdaptiveSessionDetailView: View {
                 isSubstitution: isSubstitution(planId: priorPlan.id, occurrenceId: priorSnapshot.occurrenceId),
                 sets: rows.map { .init(setIndex: $0.setIndex, weight: $0.weight, reps: $0.reps, isLocked: $0.isLocked) }
             )
+            if !AdaptiveDoseEvidenceService.profilesPermitComparison(
+                previousExerciseId: previous.exerciseId,
+                previousProfile: profileValue(session: priorSession, snapshot: priorSnapshot),
+                currentExerciseId: current.exerciseId,
+                currentProfile: profileValue(session: session, snapshot: snapshot),
+                cableExerciseIds: Set(
+                    exercises.filter { $0.equipment == .cable }.map(\.id)
+                )
+            ) {
+                return RepeatPerformanceResult(
+                    label: .notComparable,
+                    previous: previous.sets,
+                    current: current.sets
+                )
+            }
             return RepeatPerformanceService.compare(previous: previous, current: current)
         }
         return RepeatPerformanceService.compare(previous: nil, current: current)
@@ -559,6 +602,29 @@ private struct AdaptiveSessionDetailView: View {
                 && $0.occurrenceId == occurrenceId
                 && $0.kind == .substituteExercise
         }
+    }
+
+    private func profileValue(
+        session: AdaptiveWorkoutSession,
+        snapshot: PlannedExerciseSnapshot
+    ) -> ResistanceProfileValue? {
+        resistanceProfile(session: session, snapshot: snapshot)
+            .flatMap(ResistanceProfileService.value)
+    }
+
+    private func resistanceProfile(
+        session: AdaptiveWorkoutSession,
+        snapshot: PlannedExerciseSnapshot
+    ) -> ExerciseResistanceProfile? {
+        let exerciseId = entries(for: snapshot, session: session).first?.exerciseId
+            ?? snapshot.exerciseId
+        return try? ResistanceProfileService.profile(
+            workoutKind: .adaptive,
+            sessionId: session.id,
+            exerciseId: exerciseId,
+            occurrenceId: snapshot.occurrenceId,
+            in: resistanceProfiles
+        )
     }
 
     private func formatted(_ rows: [ComparableSetRow]) -> String {
@@ -577,6 +643,7 @@ private struct SessionDetailView: View {
     @Query private var fixedReadiness: [FixedCycleReadinessObservation]
     @Query private var fixedOverrides: [FixedCycleOccurrenceOverride]
     @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
+    @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     let session: Session
     @State private var exportError: String?
@@ -647,6 +714,20 @@ private struct SessionDetailView: View {
 
             ForEach(groupedExercises, id: \.exercise.id) { group in
                 Section(group.exercise.name) {
+                    if group.exercise.equipment == .cable {
+                        let profile = resistanceProfileModel(for: group.exercise.id)
+                        CableResistanceProfileControl(
+                            workoutKind: profile?.workoutKind
+                                ?? (session.dayLabelSnapshot == "Off-Schedule" ? .adHoc : .fixed),
+                            sessionId: session.id,
+                            exerciseId: group.exercise.id,
+                            occurrenceId: nil,
+                            profile: profile,
+                            profiles: resistanceProfiles,
+                            isCompletedOccurrence: true,
+                            onError: { exportError = $0 }
+                        )
+                    }
                     ForEach(group.sets) { set in
                         HStack {
                             Text("Set \(set.setIndex)")
@@ -670,7 +751,7 @@ private struct SessionDetailView: View {
             }
         }
         .navigationTitle("Session Detail")
-        .alert("Export Error", isPresented: .constant(exportError != nil), actions: {
+        .alert("Session Error", isPresented: .constant(exportError != nil), actions: {
             Button("OK") { exportError = nil }
         }, message: {
             Text(exportError ?? "Unknown error")
@@ -736,6 +817,12 @@ private struct SessionDetailView: View {
             .rating
     }
 
+    private func resistanceProfileModel(for exerciseId: UUID) -> ExerciseResistanceProfile? {
+        resistanceProfiles.first(where: {
+            $0.sessionId == session.id && $0.exerciseId == exerciseId
+        })
+    }
+
     private func retryExport() {
         do {
             let template = activeCycles
@@ -766,6 +853,7 @@ private struct SessionDetailView: View {
                         snapshots: fixedSnapshots
                     )
                 }(),
+                resistanceProfiles: resistanceProfiles,
                 modelContext: modelContext
             )
             try modelContext.save()

@@ -352,6 +352,11 @@ enum BootstrapDataService {
                 feedbackByKey[key] = feedback
             }
         }
+        var resistanceProfileKeys = Set(
+            try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>()).map {
+                "\($0.workoutKind.rawValue)|\($0.sessionId.uuidString)|\($0.exerciseId.uuidString)|\($0.occurrenceId?.uuidString ?? "")"
+            }
+        )
 
         var result = WorkoutImportResult()
         var readinessIds = Set(
@@ -444,6 +449,29 @@ enum BootstrapDataService {
                         try entry.validate()
                         modelContext.insert(entry)
                         entriesByKey[key] = entry
+                    }
+                }
+
+                if let value = exportExercise.resistance_profile?.value {
+                    let kind: ResistanceProfileWorkoutKind = export.workout_kind == "ad_hoc"
+                        ? .adHoc
+                        : .fixed
+                    let profileKey = "\(kind.rawValue)|\(session.id.uuidString)|\(exercise.id.uuidString)|"
+                    if resistanceProfileKeys.insert(profileKey).inserted {
+                        modelContext.insert(
+                            ExerciseResistanceProfile(
+                                workoutKind: kind,
+                                sessionId: session.id,
+                                exerciseId: exercise.id,
+                                resistanceSource: value.resistanceSource,
+                                chainType: value.chainType,
+                                chainPercent: value.chainPercent,
+                                eccentricPercent: value.eccentricPercent,
+                                frozenAt: finishedAt,
+                                createdAt: finishedAt,
+                                updatedAt: finishedAt
+                            )
+                        )
                     }
                 }
 

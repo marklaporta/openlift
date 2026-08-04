@@ -3,7 +3,7 @@ import SwiftData
 
 @main
 struct OpenLiftApp: App {
-    private static let schema = Schema(versionedSchema: OpenLiftSchemaV11.self)
+    private static let schema = Schema(versionedSchema: OpenLiftSchemaV12.self)
 
     private static let startup: OpenLiftContainerStartup = {
         AppRuntime.prepareForUITesting()
@@ -56,6 +56,24 @@ struct OpenLiftApp: App {
                 print(
                     "OPENLIFT_JULY_27_INCLINE_CURL_REPAIR_FAILED \(error.localizedDescription)"
                 )
+            }
+        }
+        if startup.issue == nil, !AppRuntime.isUITesting {
+            let modelContext = ModelContext(startup.container)
+            do {
+                let report = HistoricalResistanceProfileMigration.audit(
+                    sessions: try modelContext.fetch(FetchDescriptor<Session>()),
+                    setEntries: try modelContext.fetch(FetchDescriptor<SetEntry>()),
+                    adaptiveSessions: try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>()),
+                    adaptiveSetEntries: try modelContext.fetch(FetchDescriptor<AdaptiveSetEntry>()),
+                    exercises: try modelContext.fetch(FetchDescriptor<Exercise>())
+                )
+                let outcome = try HistoricalResistanceProfileMigration.writeAuditReport(report)
+                print(
+                    "OPENLIFT_VOLTRA_AUDIT candidates=\(report.candidates.count) expected=\(report.expectedCandidateCount) exact=\(report.isExactExpectedCount) status=\(outcome.status.rawValue) file=\(outcome.filename)"
+                )
+            } catch {
+                print("OPENLIFT_VOLTRA_AUDIT_FAILED \(error.localizedDescription)")
             }
         }
         return startup

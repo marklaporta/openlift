@@ -48,6 +48,86 @@ enum EquipmentType: String, Codable, CaseIterable {
     case bodyweight
 }
 
+enum ResistanceSource: String, Codable, CaseIterable, Hashable {
+    case weightStack = "weight_stack"
+    case voltra
+
+    var displayName: String {
+        switch self {
+        case .weightStack: return "Weight Stack"
+        case .voltra: return "VOLTRA"
+        }
+    }
+}
+
+enum VOLTRAChainType: String, Codable, CaseIterable, Hashable {
+    case none
+    case chains
+    case inverseChains = "inverse_chains"
+
+    var displayName: String {
+        switch self {
+        case .none: return "No Chains"
+        case .chains: return "Chains"
+        case .inverseChains: return "Inverse Chains"
+        }
+    }
+}
+
+enum ResistanceProfileWorkoutKind: String, Codable, CaseIterable, Hashable {
+    case fixed
+    case adHoc = "ad_hoc"
+    case adaptive
+}
+
+/// Canonical raw resistance settings for one performed exercise occurrence.
+/// A missing row means the historical resistance profile is unknown.
+@Model
+final class ExerciseResistanceProfile {
+    @Attribute(.unique) var id: UUID
+    var workoutKind: ResistanceProfileWorkoutKind
+    var sessionId: UUID
+    var exerciseId: UUID
+    /// Adaptive has a durable occurrence ID. Fixed/ad-hoc currently identify
+    /// an occurrence by session + exercise and therefore leave this nil.
+    var occurrenceId: UUID?
+    var resistanceSource: ResistanceSource
+    var chainType: VOLTRAChainType?
+    var chainPercent: Int?
+    var eccentricPercent: Int?
+    var frozenAt: Date?
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        workoutKind: ResistanceProfileWorkoutKind,
+        sessionId: UUID,
+        exerciseId: UUID,
+        occurrenceId: UUID? = nil,
+        resistanceSource: ResistanceSource,
+        chainType: VOLTRAChainType? = nil,
+        chainPercent: Int? = nil,
+        eccentricPercent: Int? = nil,
+        frozenAt: Date? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.id = id
+        self.workoutKind = workoutKind
+        self.sessionId = sessionId
+        self.exerciseId = exerciseId
+        self.occurrenceId = occurrenceId
+        self.resistanceSource = resistanceSource
+        self.chainType = chainType
+        self.chainPercent = chainPercent
+        self.eccentricPercent = eccentricPercent
+        self.frozenAt = frozenAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
 enum SessionStatus: String, Codable {
     case draft
     case completed

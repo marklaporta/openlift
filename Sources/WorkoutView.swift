@@ -202,7 +202,9 @@ enum FixedCycleWorkoutService {
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry]
+        rotationSetEntries: [SetEntry],
+        resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
+        resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> ExerciseEffortLookupResult? {
         ExerciseEffortLookupService.fixedCycleEffort(
             exerciseId: exerciseId,
@@ -212,7 +214,9 @@ enum FixedCycleWorkoutService {
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries
+            rotationSetEntries: rotationSetEntries,
+            resistanceRequirement: resistanceRequirement,
+            resistanceProfiles: resistanceProfiles
         )
     }
 
@@ -385,6 +389,7 @@ struct WorkoutView: View {
     @Query private var fixedReadiness: [FixedCycleReadinessObservation]
     @Query private var fixedOverrides: [FixedCycleOccurrenceOverride]
     @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
+    @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     @State private var errorMessage: String?
     @State private var draftExportTask: Task<Void, Never>?
@@ -515,6 +520,7 @@ struct WorkoutView: View {
         .sheet(item: $historyContext) { context in
             ExerciseHistorySheet(
                 exerciseName: context.exerciseName,
+                showsResistanceProfile: exercises.first(where: { $0.id == context.exerciseId })?.equipment == .cable,
                 efforts: recentEfforts(exerciseId: context.exerciseId, exerciseName: context.exerciseName)
             )
         }
@@ -619,12 +625,22 @@ struct WorkoutView: View {
                                 exerciseId: resolved.exerciseId,
                                 session: draftSession
                             )
+                            let resistanceProfile = try? ResistanceProfileService.profile(
+                                workoutKind: .fixed,
+                                sessionId: draftSession.id,
+                                exerciseId: resolved.exerciseId,
+                                occurrenceId: nil,
+                                in: resistanceProfiles
+                            )
                             ExerciseSection(
                                 slot: resolved.slot,
                                 exercise: resolvedExercise,
                                 entries: entries(for: resolved.exerciseId, sessionId: draftSession.id),
                                 isExecutionEnabled: isFixedExecutionEnabled,
                                 prefillSource: source.map(prefillSourceText),
+                                resistanceProfile: resistanceProfile,
+                                resistanceProfiles: resistanceProfiles,
+                                sessionId: draftSession.id,
                                 onAddSet: { addSet(for: resolved.exerciseId, sessionId: draftSession.id) },
                                 onRemoveSet: { removeSet(for: resolved.exerciseId, sessionId: draftSession.id) },
                                 onSwap: {
@@ -675,7 +691,8 @@ struct WorkoutView: View {
                                         sessionId: draftSession.id
                                     )
                                 },
-                                onEntryUpdated: { scheduleDraftExport() }
+                                onEntryUpdated: { scheduleDraftExport() },
+                                onError: { errorMessage = $0 }
                             )
                         }
 
@@ -766,6 +783,7 @@ struct WorkoutView: View {
         do {
             try bootstrapDataIfNeeded()
             try ensureDraftSession()
+            try ensureResistanceProfilesForDraft()
             try repairKnownMalformedStoredEntries()
         } catch {
             errorMessage = error.localizedDescription
@@ -1048,6 +1066,7 @@ struct WorkoutView: View {
                     setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
                     requireICloudMirror: !AppRuntime.isUITesting,
                     fixedCycleMetadata: fixedMetadata,
+                    resistanceProfiles: resistanceProfiles,
                     modelContext: modelContext
                 )
                 if exportOutcome.status == .success {
@@ -1094,7 +1113,8 @@ struct WorkoutView: View {
             }
         }
 
-        if let rows = effort?.rows, !rows.isEmpty {
+        if let effort, effort.isComparable, !effort.rows.isEmpty {
+            let rows = effort.rows
             let row = rows.first(where: { $0.setIndex == setIndex }) ?? rows.last!
             return (row.weight, row.reps)
         }
@@ -1104,8 +1124,10 @@ struct WorkoutView: View {
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: sessions,
-            rotationSetEntries: setEntries
-        ), !global.rows.isEmpty {
+            rotationSetEntries: setEntries,
+            resistanceRequirement: resistanceRequirement(exerciseId: exerciseId, sessionId: nil),
+            resistanceProfiles: resistanceProfiles
+        ), global.isComparable, !global.rows.isEmpty {
             let row = global.rows.first(where: { $0.setIndex == setIndex }) ?? global.rows.last!
             return (row.weight, row.reps)
         }
@@ -1119,15 +1141,10 @@ struct WorkoutView: View {
 
         let day = CycleOrdering.sortedDays(template.days)[cycle.currentDayIndex]
         for slot in CycleOrdering.sortedSlots(day.slots) {
-            let effort = FixedCycleWorkoutService.prefillEffort(
-                exerciseId: slot.exerciseId,
-                session: session,
-                adaptiveSessions: adaptiveSessions,
-                adaptiveSetEntries: adaptiveSetEntries,
-                rotationSessions: sessions,
-                rotationSetEntries: setEntries
-            )
-            let setCount = effort?.rows.count ?? slot.defaultSetCount
+            let effort = prefillEffort(exerciseId: slot.exerciseId, session: session)
+            let setCount = effort?.isComparable == true
+                ? effort!.rows.count
+                : slot.defaultSetCount
 
             for setIndex in 1...max(1, setCount) {
                 let prefills = prefillValues(
@@ -1258,15 +1275,33 @@ struct WorkoutView: View {
                 slotOverrides: slotOverrides,
                 modelContext: modelContext
             )
-            let effort = FixedCycleWorkoutService.prefillEffort(
-                exerciseId: exercise.id,
-                session: session,
-                adaptiveSessions: adaptiveSessions,
-                adaptiveSetEntries: adaptiveSetEntries,
-                rotationSessions: sessions,
-                rotationSetEntries: setEntries
-            )
-            let setCount = effort?.rows.count ?? oldCount
+            var currentProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+            if let old = try ResistanceProfileService.profile(
+                workoutKind: .fixed,
+                sessionId: sessionId,
+                exerciseId: fromExerciseId,
+                occurrenceId: nil,
+                in: currentProfiles
+            ) {
+                modelContext.delete(old)
+                currentProfiles.removeAll { $0.id == old.id }
+            }
+            if exercise.equipment == .cable,
+               let value = ResistanceProfileService.lastUsedValue(
+                   exerciseId: exercise.id,
+                   profiles: currentProfiles
+               ) {
+                _ = try ResistanceProfileService.create(
+                    workoutKind: .fixed,
+                    sessionId: sessionId,
+                    exerciseId: exercise.id,
+                    value: value,
+                    profiles: currentProfiles,
+                    modelContext: modelContext
+                )
+            }
+            let effort = prefillEffort(exerciseId: exercise.id, session: session)
+            let setCount = effort?.isComparable == true ? effort!.rows.count : oldCount
             for setIndex in 1...max(1, setCount) {
                 let values = prefillValues(
                     exerciseId: exercise.id,
@@ -1443,8 +1478,69 @@ struct WorkoutView: View {
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: sessions,
-            rotationSetEntries: setEntries
+            rotationSetEntries: setEntries,
+            resistanceRequirement: resistanceRequirement(
+                exerciseId: exerciseId,
+                sessionId: session.id
+            ),
+            resistanceProfiles: resistanceProfiles
         )
+    }
+
+    private func resistanceRequirement(
+        exerciseId: UUID,
+        sessionId: UUID?
+    ) -> ResistanceProfileLookupRequirement {
+        guard exercises.first(where: { $0.id == exerciseId })?.equipment == .cable else {
+            return .notApplicable
+        }
+        let current = sessionId.flatMap { currentSessionId in
+            (try? ResistanceProfileService.profile(
+                workoutKind: .fixed,
+                sessionId: currentSessionId,
+                exerciseId: exerciseId,
+                occurrenceId: nil,
+                in: resistanceProfiles
+            )).flatMap(ResistanceProfileService.value)
+        } ?? ResistanceProfileService.lastUsedValue(
+            exerciseId: exerciseId,
+            profiles: resistanceProfiles
+        )
+        return .cable(current)
+    }
+
+    @MainActor
+    private func ensureResistanceProfilesForDraft() throws {
+        guard let session = draftSession else { return }
+        var currentProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        let cableExerciseIds = Set(setEntries.filter { $0.sessionId == session.id }.compactMap { entry in
+            exercises.first(where: { $0.id == entry.exerciseId })?.equipment == .cable
+                ? entry.exerciseId
+                : nil
+        })
+        for exerciseId in cableExerciseIds {
+            guard try ResistanceProfileService.profile(
+                workoutKind: .fixed,
+                sessionId: session.id,
+                exerciseId: exerciseId,
+                occurrenceId: nil,
+                in: currentProfiles
+            ) == nil,
+            let defaultValue = ResistanceProfileService.lastUsedValue(
+                exerciseId: exerciseId,
+                profiles: currentProfiles
+            ) else { continue }
+            let created = try ResistanceProfileService.create(
+                workoutKind: .fixed,
+                sessionId: session.id,
+                exerciseId: exerciseId,
+                value: defaultValue,
+                profiles: currentProfiles,
+                modelContext: modelContext
+            )
+            currentProfiles.append(created)
+        }
+        if modelContext.hasChanges { try modelContext.save() }
     }
 
     private func prefillSourceText(_ result: ExerciseEffortLookupResult) -> String {
@@ -1455,7 +1551,13 @@ struct WorkoutView: View {
         case .adaptive: kind = "Adaptive"
         case .adHoc: kind = "Ad hoc"
         }
-        return "\(match) · \(kind) · \(result.completedAt.formatted(date: .abbreviated, time: .omitted))"
+        let profile: String
+        switch result.profileComparison {
+        case .exact: profile = result.resistanceProfile?.displayName ?? "Same resistance"
+        case .different: profile = "Different resistance profile — reference only"
+        case .unknown: profile = "Resistance profile unknown — reference only"
+        }
+        return "\(match) · \(kind) · \(profile) · \(result.completedAt.formatted(date: .abbreviated, time: .omitted))"
     }
 
     private func skipExerciseToday(
@@ -1591,22 +1693,30 @@ struct WorkoutView: View {
         do {
             guard isFixedExecutionEnabled else { throw FixedCycleWorkoutError.readinessRequired }
             guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
-            let effort = FixedCycleWorkoutService.prefillEffort(
-                exerciseId: exercise.id,
-                session: session,
-                adaptiveSessions: adaptiveSessions,
-                adaptiveSetEntries: adaptiveSetEntries,
-                rotationSessions: sessions,
-                rotationSetEntries: setEntries
-            )
+            if exercise.equipment == .cable,
+               let value = ResistanceProfileService.lastUsedValue(
+                   exerciseId: exercise.id,
+                   profiles: resistanceProfiles
+               ) {
+                _ = try ResistanceProfileService.create(
+                    workoutKind: .fixed,
+                    sessionId: sessionId,
+                    exerciseId: exercise.id,
+                    value: value,
+                    profiles: resistanceProfiles,
+                    modelContext: modelContext
+                )
+            }
+            let effort = prefillEffort(exerciseId: exercise.id, session: session)
+            let comparableCount = effort?.isComparable == true ? effort!.rows.count : nil
             let slot = try FixedCycleWorkoutService.addMovement(
                 exercise: exercise,
                 to: day,
                 sessionId: sessionId,
-                defaultSetCount: effort?.rows.count ?? 3,
+                defaultSetCount: comparableCount ?? 3,
                 modelContext: modelContext
             )
-            for index in 1...max(1, effort?.rows.count ?? slot.defaultSetCount) {
+            for index in 1...max(1, comparableCount ?? slot.defaultSetCount) {
                 let value = prefillValues(exerciseId: exercise.id, setIndex: index, effort: effort)
                 modelContext.insert(
                     SetEntry(
@@ -1778,6 +1888,9 @@ struct WorkoutView: View {
                     date: session.finishedAt ?? session.createdAt,
                     cycleName: cycleName(for: session),
                     dayLabel: dayLabel(for: session),
+                    resistanceProfile: resistanceProfiles.first(where: {
+                        $0.sessionId == session.id && $0.exerciseId == exerciseId
+                    }).flatMap(ResistanceProfileService.value),
                     sets: sets
                 )
             )
@@ -1848,6 +1961,7 @@ struct WorkoutView: View {
                         date: date,
                         cycleName: payload.cycle_name,
                         dayLabel: "Day \(payload.cycle_day_index + 1)",
+                        resistanceProfile: exercise.resistance_profile?.value,
                         sets: exercise.sets.map {
                             ExerciseEffortSet(setIndex: $0.set_index, weight: $0.weight, reps: $0.reps)
                         }
@@ -2006,7 +2120,24 @@ struct ExerciseEffort: Identifiable {
     let date: Date
     let cycleName: String
     let dayLabel: String
+    let resistanceProfile: ResistanceProfileValue?
     let sets: [ExerciseEffortSet]
+
+    init(
+        id: String,
+        date: Date,
+        cycleName: String,
+        dayLabel: String,
+        resistanceProfile: ResistanceProfileValue? = nil,
+        sets: [ExerciseEffortSet]
+    ) {
+        self.id = id
+        self.date = date
+        self.cycleName = cycleName
+        self.dayLabel = dayLabel
+        self.resistanceProfile = resistanceProfile
+        self.sets = sets
+    }
 }
 
 struct ExerciseEffortSet {
@@ -2023,6 +2154,9 @@ private struct ExerciseSection: View {
     let entries: [SetEntry]
     let isExecutionEnabled: Bool
     let prefillSource: String?
+    let resistanceProfile: ExerciseResistanceProfile?
+    let resistanceProfiles: [ExerciseResistanceProfile]
+    let sessionId: UUID
     let onAddSet: () -> Void
     let onRemoveSet: () -> Void
     let onSwap: () -> Void
@@ -2032,6 +2166,7 @@ private struct ExerciseSection: View {
     let onRemoveFuture: () -> Void
     let onRemoveMuscleFuture: () -> Void
     let onEntryUpdated: () -> Void
+    let onError: (String) -> Void
     private let actionButtonSize: CGFloat = 30
     private var usesAssistanceLoad: Bool {
         exercise?.usesAssistanceLoad ?? false
@@ -2048,6 +2183,17 @@ private struct ExerciseSection: View {
                 Label(prefillSource, systemImage: "arrow.uturn.backward.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if exercise?.equipment == .cable, let exercise {
+                CableResistanceProfileControl(
+                    workoutKind: .fixed,
+                    sessionId: sessionId,
+                    exerciseId: exercise.id,
+                    occurrenceId: nil,
+                    profile: resistanceProfile,
+                    profiles: resistanceProfiles,
+                    onError: onError
+                )
             }
             ForEach(entries) { entry in
                 HStack {
@@ -2137,6 +2283,17 @@ private struct ExerciseSection: View {
                         if !entry.isLocked && entry.weight == 0 && entry.reps == 0 {
                             return
                         }
+                        if !entry.isLocked, exercise?.equipment == .cable {
+                            do {
+                                try ResistanceProfileService.freezeBeforeLock(
+                                    resistanceProfile,
+                                    modelContext: modelContext
+                                )
+                            } catch {
+                                onError(error.localizedDescription)
+                                return
+                            }
+                        }
                         WorkoutEntryEditing.setLocked(
                             !entry.isLocked,
                             entry: entry
@@ -2219,6 +2376,7 @@ private struct ExerciseSection: View {
 
 struct ExerciseHistorySheet: View {
     let exerciseName: String
+    let showsResistanceProfile: Bool
     let efforts: [ExerciseEffort]
 
     @Environment(\.dismiss) private var dismiss
@@ -2246,6 +2404,11 @@ struct ExerciseHistorySheet: View {
                                 Text("\(effort.cycleName) · \(effort.dayLabel)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if showsResistanceProfile {
+                                    Text(effort.resistanceProfile?.displayName ?? "Resistance profile unknown")
+                                        .font(.caption2)
+                                        .foregroundStyle(effort.resistanceProfile == nil ? .orange : .secondary)
+                                }
                             }
                         }
                     }

@@ -42,6 +42,7 @@ The main SwiftData models are defined in [`Models.swift`](../Sources/Models.swif
 - `SessionSlotOverride`
 - `FixedCycleReadinessObservation`, `FixedCycleReadinessResponse`
 - `FixedCycleOccurrenceOverride`
+- `ExerciseResistanceProfile`
 
 Design intent:
 
@@ -55,6 +56,25 @@ Design intent:
 - `ActiveCycleInstance` tracks where the user currently is in a cycle
 - `Session` is the workout occurrence
 - `SetEntry` stores logged sets for a session
+
+### Cable Resistance Profiles (V12)
+
+`Exercise.equipment` continues to describe movement mechanics, so a
+conventional stack and VOLTRA remain one `cable` exercise. The parallel
+`ExerciseResistanceProfile` identifies one performed occurrence: Fixed/ad-hoc
+use session + exercise, while Adaptive also uses its durable occurrence ID.
+
+Canonical settings are `weightStack`, or `voltra` with exactly one of `none`,
+`chains`, `inverseChains` plus raw chain/eccentric percentages. Effective load
+is derived and never stored. A missing row means unknown, including all
+unmigrated legacy cable work.
+
+The profile freezes when its first set is locked. Correction then requires an
+explicit occurrence-wide confirmation. New cable work first copies the last
+complete profile for that exercise, falling back to the newest complete cable
+profile for Mark's usually-stable setup; a complete selection is still required
+before the first set locks. Repeat-last and progression scoring require an
+exact complete match. Unlike/unknown history remains visible as reference.
 
 ## State Selection
 

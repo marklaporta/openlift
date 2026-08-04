@@ -1,0 +1,795 @@
+import Foundation
+import SwiftData
+import SwiftUI
+
+struct ResistanceProfileValue: Codable, Equatable, Hashable, Sendable {
+    let resistanceSource: ResistanceSource
+    let chainType: VOLTRAChainType?
+    let chainPercent: Int?
+    let eccentricPercent: Int?
+
+    static let weightStack = ResistanceProfileValue(
+        resistanceSource: .weightStack,
+        chainType: nil,
+        chainPercent: nil,
+        eccentricPercent: nil
+    )
+
+    static func voltra(
+        chainType: VOLTRAChainType,
+        chainPercent: Int,
+        eccentricPercent: Int
+    ) -> ResistanceProfileValue {
+        ResistanceProfileValue(
+            resistanceSource: .voltra,
+            chainType: chainType,
+            chainPercent: chainType == .none ? 0 : chainPercent,
+            eccentricPercent: eccentricPercent
+        )
+    }
+
+    var isComplete: Bool {
+        switch resistanceSource {
+        case .weightStack:
+            return chainType == nil && chainPercent == nil && eccentricPercent == nil
+        case .voltra:
+            guard let chainType, let chainPercent, let eccentricPercent,
+                  (0...100).contains(chainPercent),
+                  (0...100).contains(eccentricPercent) else { return false }
+            return chainType == .none ? chainPercent == 0 : true
+        }
+    }
+
+    var displayName: String {
+        switch resistanceSource {
+        case .weightStack:
+            return "Cable · Weight Stack"
+        case .voltra:
+            guard let chainType, let chainPercent, let eccentricPercent else {
+                return "VOLTRA · Incomplete Profile"
+            }
+            let chain = chainType == .none
+                ? "No Chains"
+                : "\(chainType.displayName) \(chainPercent)%"
+            return "VOLTRA · \(chain) · Eccentric \(eccentricPercent)%"
+        }
+    }
+}
+
+struct CableResistanceProfileControl: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+
+    let workoutKind: ResistanceProfileWorkoutKind
+    let sessionId: UUID
+    let exerciseId: UUID
+    let occurrenceId: UUID?
+    let profile: ExerciseResistanceProfile?
+    let profiles: [ExerciseResistanceProfile]
+    let isCompletedOccurrence: Bool
+    let onError: (String) -> Void
+
+    @State private var isEditing = false
+    @State private var source: ResistanceSource
+    @State private var chainType: VOLTRAChainType
+    @State private var chainPercent: Int
+    @State private var eccentricPercent: Int
+    @State private var pendingFrozenSave = false
+
+    init(
+        workoutKind: ResistanceProfileWorkoutKind,
+        sessionId: UUID,
+        exerciseId: UUID,
+        occurrenceId: UUID?,
+        profile: ExerciseResistanceProfile?,
+        profiles: [ExerciseResistanceProfile],
+        isCompletedOccurrence: Bool = false,
+        onError: @escaping (String) -> Void
+    ) {
+        self.workoutKind = workoutKind
+        self.sessionId = sessionId
+        self.exerciseId = exerciseId
+        self.occurrenceId = occurrenceId
+        self.profile = profile
+        self.profiles = profiles
+        self.isCompletedOccurrence = isCompletedOccurrence
+        self.onError = onError
+        let initial = ResistanceProfileService.value(profile)
+            ?? ResistanceProfileService.lastUsedValue(exerciseId: exerciseId, profiles: profiles)
+            ?? .weightStack
+        _source = State(initialValue: initial.resistanceSource)
+        _chainType = State(initialValue: initial.chainType ?? .inverseChains)
+        _chainPercent = State(initialValue: initial.chainPercent ?? 0)
+        _eccentricPercent = State(initialValue: initial.eccentricPercent ?? 0)
+    }
+
+    var body: some View {
+        Button {
+            isEditing = true
+        } label: {
+            Label(
+                ResistanceProfileService.value(profile)?.displayName ?? "Set Cable Resistance",
+                systemImage: profile == nil ? "questionmark.circle" : "cable.connector"
+            )
+            .font(.caption)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(profile == nil ? .orange : .secondary)
+        .sheet(isPresented: $isEditing) {
+            NavigationStack {
+                Form {
+                    Section("Resistance Source") {
+                        Picker("Source", selection: $source) {
+                            Text("Weight Stack").tag(ResistanceSource.weightStack)
+                            Text("VOLTRA").tag(ResistanceSource.voltra)
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    if source == .voltra {
+                        Section("VOLTRA Percentage Profile") {
+                            Picker("Chain mode", selection: $chainType) {
+                                ForEach(VOLTRAChainType.allCases, id: \.self) {
+                                    Text($0.displayName).tag($0)
+                                }
+                            }
+                            if chainType != .none {
+                                Stepper("Chain: \(chainPercent)%", value: $chainPercent, in: 0...100, step: 5)
+                            }
+                            Stepper("Eccentric: \(eccentricPercent)%", value: $eccentricPercent, in: 0...100, step: 5)
+                        }
+                    }
+                    Section {
+                        Text(draftValue.displayName)
+                            .foregroundStyle(.secondary)
+                    } footer: {
+                        if profile?.frozenAt != nil {
+                            Text("This profile is frozen with the performed occurrence. Saving requires confirmation and corrects every set in this occurrence.")
+                        } else if profile == nil && isCompletedOccurrence {
+                            Text("This occurrence already has performed sets. Saving requires confirmation and records an occurrence-wide correction.")
+                        }
+                    }
+                }
+                .navigationTitle("Cable Resistance")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { isEditing = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            if (profile?.frozenAt != nil
+                                && ResistanceProfileService.value(profile) != draftValue)
+                                || (profile == nil && isCompletedOccurrence) {
+                                pendingFrozenSave = true
+                            } else {
+                                save(confirmed: false)
+                            }
+                        }
+                    }
+                }
+                .alert("Correct Entire Occurrence?", isPresented: $pendingFrozenSave) {
+                    Button("Correct Profile", role: .destructive) { save(confirmed: true) }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("All performed sets in this exercise occurrence will be treated as \(draftValue.displayName).")
+                }
+            }
+        }
+    }
+
+    private var draftValue: ResistanceProfileValue {
+        source == .weightStack
+            ? .weightStack
+            : .voltra(
+                chainType: chainType,
+                chainPercent: chainPercent,
+                eccentricPercent: eccentricPercent
+            )
+    }
+
+    private func save(confirmed: Bool) {
+        do {
+            if let profile {
+                try ResistanceProfileService.update(
+                    profile,
+                    to: draftValue,
+                    confirmedOccurrenceWideCorrection: confirmed,
+                    modelContext: modelContext
+                )
+            } else {
+                if isCompletedOccurrence {
+                    _ = try ResistanceProfileService.createPerformedOccurrence(
+                        workoutKind: workoutKind,
+                        sessionId: sessionId,
+                        exerciseId: exerciseId,
+                        occurrenceId: occurrenceId,
+                        value: draftValue,
+                        profiles: profiles,
+                        confirmedOccurrenceWideCorrection: confirmed,
+                        modelContext: modelContext
+                    )
+                } else {
+                    _ = try ResistanceProfileService.create(
+                        workoutKind: workoutKind,
+                        sessionId: sessionId,
+                        exerciseId: exerciseId,
+                        occurrenceId: occurrenceId,
+                        value: draftValue,
+                        profiles: profiles,
+                        modelContext: modelContext
+                    )
+                    try modelContext.save()
+                }
+            }
+            isEditing = false
+        } catch {
+            onError(error.localizedDescription)
+        }
+    }
+}
+
+struct CableResistanceProfileDraftControl: View {
+    @Binding var value: ResistanceProfileValue?
+    @State private var isEditing = false
+    @State private var source: ResistanceSource = .weightStack
+    @State private var chainType: VOLTRAChainType = .inverseChains
+    @State private var chainPercent = 0
+    @State private var eccentricPercent = 0
+
+    var body: some View {
+        Button {
+            if let value {
+                source = value.resistanceSource
+                chainType = value.chainType ?? .inverseChains
+                chainPercent = value.chainPercent ?? 0
+                eccentricPercent = value.eccentricPercent ?? 0
+            }
+            isEditing = true
+        } label: {
+            Label(
+                value?.displayName ?? "Set Cable Resistance",
+                systemImage: value == nil ? "questionmark.circle" : "cable.connector"
+            )
+            .font(.caption)
+        }
+        .foregroundStyle(value == nil ? .orange : .secondary)
+        .sheet(isPresented: $isEditing) {
+            NavigationStack {
+                Form {
+                    Picker("Source", selection: $source) {
+                        Text("Weight Stack").tag(ResistanceSource.weightStack)
+                        Text("VOLTRA").tag(ResistanceSource.voltra)
+                    }
+                    .pickerStyle(.segmented)
+                    if source == .voltra {
+                        Picker("Chain mode", selection: $chainType) {
+                            ForEach(VOLTRAChainType.allCases, id: \.self) {
+                                Text($0.displayName).tag($0)
+                            }
+                        }
+                        if chainType != .none {
+                            Stepper("Chain: \(chainPercent)%", value: $chainPercent, in: 0...100, step: 5)
+                        }
+                        Stepper("Eccentric: \(eccentricPercent)%", value: $eccentricPercent, in: 0...100, step: 5)
+                    }
+                    Text(draftValue.displayName).foregroundStyle(.secondary)
+                }
+                .navigationTitle("Cable Resistance")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { isEditing = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            value = draftValue
+                            isEditing = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var draftValue: ResistanceProfileValue {
+        source == .weightStack
+            ? .weightStack
+            : .voltra(
+                chainType: chainType,
+                chainPercent: chainPercent,
+                eccentricPercent: eccentricPercent
+            )
+    }
+}
+
+enum ResistanceProfileComparison: String, Codable, Equatable, Sendable {
+    case exact
+    case different
+    case unknown
+
+    static func compare(
+        current: ResistanceProfileValue?,
+        historical: ResistanceProfileValue?
+    ) -> ResistanceProfileComparison {
+        guard let current, current.isComplete,
+              let historical, historical.isComplete else { return .unknown }
+        return current == historical ? .exact : .different
+    }
+}
+
+enum ResistanceProfileError: LocalizedError, Equatable {
+    case incomplete
+    case invalidOccurrenceIdentity
+    case duplicateOccurrence
+    case frozenConfirmationRequired
+    case profileRequiredBeforeLock
+    case emptyManifest
+    case auditCountMismatch(expected: Int, actual: Int)
+    case manifestMismatch
+    case conflictingExistingProfile
+
+    var errorDescription: String? {
+        switch self {
+        case .incomplete:
+            return "Choose a complete cable resistance profile."
+        case .invalidOccurrenceIdentity:
+            return "The resistance profile does not identify one performed exercise occurrence."
+        case .duplicateOccurrence:
+            return "More than one resistance profile exists for this exercise occurrence."
+        case .frozenConfirmationRequired:
+            return "This occurrence already has performed sets. Confirm an occurrence-wide correction before changing its resistance profile."
+        case .profileRequiredBeforeLock:
+            return "Choose Weight Stack or a complete VOLTRA profile before locking the first cable set."
+        case .emptyManifest:
+            return "Historical resistance repair is disabled until an exact reviewed manifest is supplied."
+        case .auditCountMismatch(let expected, let actual):
+            return "Historical audit found \(actual) candidate occurrences; expected exactly \(expected)."
+        case .manifestMismatch:
+            return "The historical manifest does not exactly match the audited occurrence keys and set counts."
+        case .conflictingExistingProfile:
+            return "An audited occurrence already has a different resistance profile."
+        }
+    }
+}
+
+enum ResistanceProfileService {
+    static func value(_ profile: ExerciseResistanceProfile?) -> ResistanceProfileValue? {
+        guard let profile else { return nil }
+        let value = ResistanceProfileValue(
+            resistanceSource: profile.resistanceSource,
+            chainType: profile.chainType,
+            chainPercent: profile.chainPercent,
+            eccentricPercent: profile.eccentricPercent
+        )
+        return value.isComplete ? value : nil
+    }
+
+    static func profile(
+        workoutKind: ResistanceProfileWorkoutKind,
+        sessionId: UUID,
+        exerciseId: UUID,
+        occurrenceId: UUID?,
+        in profiles: [ExerciseResistanceProfile]
+    ) throws -> ExerciseResistanceProfile? {
+        let matches = profiles.filter {
+            $0.workoutKind == workoutKind
+                && $0.sessionId == sessionId
+                && $0.exerciseId == exerciseId
+                && $0.occurrenceId == occurrenceId
+        }
+        guard matches.count <= 1 else { throw ResistanceProfileError.duplicateOccurrence }
+        return matches.first
+    }
+
+    /// Exercise-specific history wins. The global cable fallback intentionally
+    /// carries Mark's usually-stable VOLTRA setting across movements while
+    /// still making a per-occurrence copy that can later be corrected.
+    static func lastUsedValue(
+        exerciseId: UUID,
+        profiles: [ExerciseResistanceProfile]
+    ) -> ResistanceProfileValue? {
+        let complete = profiles.filter { value($0) != nil }
+        let preferred = complete.filter { $0.exerciseId == exerciseId }
+        return value((preferred.isEmpty ? complete : preferred).max {
+            if $0.updatedAt != $1.updatedAt { return $0.updatedAt < $1.updatedAt }
+            return $0.id.uuidString < $1.id.uuidString
+        })
+    }
+
+    @MainActor
+    @discardableResult
+    static func create(
+        workoutKind: ResistanceProfileWorkoutKind,
+        sessionId: UUID,
+        exerciseId: UUID,
+        occurrenceId: UUID? = nil,
+        value: ResistanceProfileValue,
+        profiles: [ExerciseResistanceProfile],
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws -> ExerciseResistanceProfile {
+        guard value.isComplete else { throw ResistanceProfileError.incomplete }
+        guard (workoutKind == .adaptive) == (occurrenceId != nil) else {
+            throw ResistanceProfileError.invalidOccurrenceIdentity
+        }
+        if let existing = try profile(
+            workoutKind: workoutKind,
+            sessionId: sessionId,
+            exerciseId: exerciseId,
+            occurrenceId: occurrenceId,
+            in: profiles
+        ) {
+            return existing
+        }
+        let profile = ExerciseResistanceProfile(
+            workoutKind: workoutKind,
+            sessionId: sessionId,
+            exerciseId: exerciseId,
+            occurrenceId: occurrenceId,
+            resistanceSource: value.resistanceSource,
+            chainType: value.chainType,
+            chainPercent: value.chainPercent,
+            eccentricPercent: value.eccentricPercent,
+            createdAt: now,
+            updatedAt: now
+        )
+        modelContext.insert(profile)
+        return profile
+    }
+
+    @MainActor
+    @discardableResult
+    static func createPerformedOccurrence(
+        workoutKind: ResistanceProfileWorkoutKind,
+        sessionId: UUID,
+        exerciseId: UUID,
+        occurrenceId: UUID? = nil,
+        value: ResistanceProfileValue,
+        profiles: [ExerciseResistanceProfile],
+        confirmedOccurrenceWideCorrection: Bool,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws -> ExerciseResistanceProfile {
+        guard confirmedOccurrenceWideCorrection else {
+            throw ResistanceProfileError.frozenConfirmationRequired
+        }
+        let profile = try create(
+            workoutKind: workoutKind,
+            sessionId: sessionId,
+            exerciseId: exerciseId,
+            occurrenceId: occurrenceId,
+            value: value,
+            profiles: profiles,
+            modelContext: modelContext,
+            now: now
+        )
+        profile.frozenAt = now
+        profile.updatedAt = now
+        try markExportPending(for: profile, modelContext: modelContext)
+        try modelContext.save()
+        SessionExportService.scheduleBackgroundExportRetry()
+        return profile
+    }
+
+    @MainActor
+    static func update(
+        _ profile: ExerciseResistanceProfile,
+        to value: ResistanceProfileValue,
+        confirmedOccurrenceWideCorrection: Bool,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        guard value.isComplete else { throw ResistanceProfileError.incomplete }
+        guard Self.value(profile) != value else { return }
+        guard profile.frozenAt == nil || confirmedOccurrenceWideCorrection else {
+            throw ResistanceProfileError.frozenConfirmationRequired
+        }
+
+        switch profile.workoutKind {
+        case .fixed, .adHoc:
+            for entry in try modelContext.fetch(FetchDescriptor<SetEntry>())
+            where entry.sessionId == profile.sessionId
+                && entry.exerciseId == profile.exerciseId
+                && !entry.isLocked {
+                entry.weight = 0
+                entry.reps = 0
+            }
+        case .adaptive:
+            for entry in try modelContext.fetch(FetchDescriptor<AdaptiveSetEntry>())
+            where entry.adaptiveSessionId == profile.sessionId
+                && entry.occurrenceId == profile.occurrenceId
+                && !entry.isLocked {
+                entry.weight = 0
+                entry.reps = 0
+            }
+        }
+
+        profile.resistanceSource = value.resistanceSource
+        profile.chainType = value.chainType
+        profile.chainPercent = value.chainPercent
+        profile.eccentricPercent = value.eccentricPercent
+        profile.updatedAt = now
+        if profile.frozenAt != nil {
+            try markExportPending(for: profile, modelContext: modelContext)
+        }
+        try modelContext.save()
+        if profile.frozenAt != nil {
+            SessionExportService.scheduleBackgroundExportRetry()
+        }
+    }
+
+    @MainActor
+    static func freezeBeforeLock(
+        _ profile: ExerciseResistanceProfile?,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        guard let profile, value(profile) != nil else {
+            throw ResistanceProfileError.profileRequiredBeforeLock
+        }
+        if profile.frozenAt == nil {
+            profile.frozenAt = now
+            profile.updatedAt = now
+            try modelContext.save()
+        }
+    }
+
+    @MainActor
+    private static func markExportPending(
+        for profile: ExerciseResistanceProfile,
+        modelContext: ModelContext
+    ) throws {
+        switch profile.workoutKind {
+        case .fixed, .adHoc:
+            try modelContext.fetch(FetchDescriptor<Session>())
+                .first(where: { $0.id == profile.sessionId })?
+                .exportStatus = .pending
+        case .adaptive:
+            try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+                .first(where: { $0.id == profile.sessionId })?
+                .exportStatus = .pending
+        }
+    }
+}
+
+struct ResistanceProfilePayload: Codable, Equatable, Sendable {
+    let resistance_source: String
+    let chain_type: String?
+    let chain_percent: Int?
+    let eccentric_percent: Int?
+
+    init(_ value: ResistanceProfileValue) {
+        resistance_source = value.resistanceSource.rawValue
+        chain_type = value.chainType?.rawValue
+        chain_percent = value.chainPercent
+        eccentric_percent = value.eccentricPercent
+    }
+
+    var value: ResistanceProfileValue? {
+        guard let source = ResistanceSource(rawValue: resistance_source) else { return nil }
+        let decoded = ResistanceProfileValue(
+            resistanceSource: source,
+            chainType: chain_type.flatMap(VOLTRAChainType.init(rawValue:)),
+            chainPercent: chain_percent,
+            eccentricPercent: eccentric_percent
+        )
+        return decoded.isComplete ? decoded : nil
+    }
+}
+
+enum HistoricalResistanceProfileMigration {
+    static let expectedCandidateCount = 19
+    static let preAugust3SessionPrefixes = [
+        "8DC5D239", "0DADB7CE", "476348F2", "86B9C09E", "9814E290",
+        "D21627D8", "78F895B2", "08476AD8", "887431EA"
+    ]
+    static let august3SessionId = UUID(uuidString: "FF0623F5-92DF-484A-857F-A4FEFC540AD9")!
+
+    struct OccurrenceKey: Codable, Equatable, Hashable, Sendable {
+        let workoutKind: ResistanceProfileWorkoutKind
+        let sessionId: UUID
+        let exerciseId: UUID
+        let occurrenceId: UUID?
+    }
+
+    struct Candidate: Codable, Equatable, Sendable {
+        let key: OccurrenceKey
+        let exerciseName: String
+        let performedSetCount: Int
+        let intendedProfile: ResistanceProfileValue
+    }
+
+    struct AuditReport: Codable, Equatable, Sendable {
+        let schemaVersion: Int
+        let generatedAt: Date
+        let expectedCandidateCount: Int
+        let candidates: [Candidate]
+        let isExactExpectedCount: Bool
+    }
+
+    struct ManifestEntry: Codable, Equatable, Sendable {
+        let key: OccurrenceKey
+        let exerciseName: String
+        let expectedPerformedSetCount: Int
+        let profile: ResistanceProfileValue
+    }
+
+    static let reviewedManifest: [ManifestEntry] = []
+
+    static func audit(
+        sessions: [Session],
+        setEntries: [SetEntry],
+        adaptiveSessions: [AdaptiveWorkoutSession],
+        adaptiveSetEntries: [AdaptiveSetEntry],
+        exercises: [Exercise],
+        now: Date = .now
+    ) -> AuditReport {
+        let exerciseById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
+        func intended(_ id: UUID) -> ResistanceProfileValue {
+            id == august3SessionId
+                ? .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
+                : .voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
+        }
+        func selected(_ id: UUID) -> Bool {
+            id == august3SessionId
+                || preAugust3SessionPrefixes.contains { id.uuidString.hasPrefix($0) }
+        }
+
+        var candidates: [Candidate] = []
+        for session in sessions where selected(session.id) {
+            let grouped = Dictionary(grouping: setEntries.filter {
+                $0.sessionId == session.id && $0.isLocked && $0.reps > 0
+            }, by: \SetEntry.exerciseId)
+            for (exerciseId, rows) in grouped {
+                guard let exercise = exerciseById[exerciseId], exercise.equipment == .cable else { continue }
+                candidates.append(
+                    Candidate(
+                        key: OccurrenceKey(
+                            workoutKind: session.dayLabelSnapshot == "Off-Schedule" ? .adHoc : .fixed,
+                            sessionId: session.id,
+                            exerciseId: exerciseId,
+                            occurrenceId: nil
+                        ),
+                        exerciseName: exercise.name,
+                        performedSetCount: rows.count,
+                        intendedProfile: intended(session.id)
+                    )
+                )
+            }
+        }
+        for session in adaptiveSessions where selected(session.id) {
+            let grouped = Dictionary(grouping: adaptiveSetEntries.filter {
+                $0.adaptiveSessionId == session.id && $0.isLocked && $0.reps > 0
+            }, by: \AdaptiveSetEntry.occurrenceId)
+            for (occurrenceId, rows) in grouped {
+                guard let exerciseId = rows.first?.exerciseId,
+                      let exercise = exerciseById[exerciseId],
+                      exercise.equipment == .cable else { continue }
+                candidates.append(
+                    Candidate(
+                        key: OccurrenceKey(
+                            workoutKind: .adaptive,
+                            sessionId: session.id,
+                            exerciseId: exerciseId,
+                            occurrenceId: occurrenceId
+                        ),
+                        exerciseName: exercise.name,
+                        performedSetCount: rows.count,
+                        intendedProfile: intended(session.id)
+                    )
+                )
+            }
+        }
+        candidates.sort {
+            let left = "\($0.key.sessionId.uuidString)|\($0.key.occurrenceId?.uuidString ?? "")|\($0.key.exerciseId.uuidString)"
+            let right = "\($1.key.sessionId.uuidString)|\($1.key.occurrenceId?.uuidString ?? "")|\($1.key.exerciseId.uuidString)"
+            return left < right
+        }
+        return AuditReport(
+            schemaVersion: 1,
+            generatedAt: now,
+            expectedCandidateCount: expectedCandidateCount,
+            candidates: candidates,
+            isExactExpectedCount: candidates.count == expectedCandidateCount
+        )
+    }
+
+    /// This is deliberately separate from `audit`: tests and callers can inspect
+    /// the report without touching iCloud. The app may explicitly publish the
+    /// read-only result to the same durable mirror used for exports.
+    @discardableResult
+    static func writeAuditReport(
+        _ report: AuditReport,
+        environment: SessionExportService.ExportEnvironment = .live()
+    ) throws -> SessionExportService.ExportWriteOutcome {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try SessionExportService.writeExportData(
+            data: try encoder.encode(report),
+            relativeSubdirectory: "audits",
+            filename: "voltra-resistance-profile-audit.json",
+            requireICloudMirror: true,
+            environment: environment
+        )
+    }
+
+    @MainActor
+    static func applyReviewedManifest(
+        _ manifest: [ManifestEntry] = reviewedManifest,
+        audit report: AuditReport,
+        existingProfiles: [ExerciseResistanceProfile],
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        guard !manifest.isEmpty else { throw ResistanceProfileError.emptyManifest }
+        guard report.candidates.count == expectedCandidateCount else {
+            throw ResistanceProfileError.auditCountMismatch(
+                expected: expectedCandidateCount,
+                actual: report.candidates.count
+            )
+        }
+        let manifestGroups = Dictionary(grouping: manifest, by: \.key)
+        let candidateGroups = Dictionary(grouping: report.candidates, by: \.key)
+        guard manifestGroups.values.allSatisfy({ $0.count == 1 }),
+              candidateGroups.values.allSatisfy({ $0.count == 1 }) else {
+            throw ResistanceProfileError.manifestMismatch
+        }
+        let manifestByKey = manifestGroups.compactMapValues(\.first)
+        let candidatesByKey = candidateGroups.compactMapValues(\.first)
+        guard manifestByKey.count == manifest.count,
+              Set(manifestByKey.keys) == Set(candidatesByKey.keys),
+              manifest.allSatisfy({ item in
+                  guard let candidate = candidatesByKey[item.key] else { return false }
+                  return item.exerciseName == candidate.exerciseName
+                      && item.expectedPerformedSetCount == candidate.performedSetCount
+                      && item.profile == candidate.intendedProfile
+                      && item.profile.isComplete
+              }) else { throw ResistanceProfileError.manifestMismatch }
+
+        for item in manifest {
+            if let existing = try ResistanceProfileService.profile(
+                workoutKind: item.key.workoutKind,
+                sessionId: item.key.sessionId,
+                exerciseId: item.key.exerciseId,
+                occurrenceId: item.key.occurrenceId,
+                in: existingProfiles
+            ) {
+                guard ResistanceProfileService.value(existing) == item.profile else {
+                    throw ResistanceProfileError.conflictingExistingProfile
+                }
+            }
+        }
+        do {
+            for item in manifest where !existingProfiles.contains(where: {
+                $0.workoutKind == item.key.workoutKind
+                    && $0.sessionId == item.key.sessionId
+                    && $0.exerciseId == item.key.exerciseId
+                    && $0.occurrenceId == item.key.occurrenceId
+            }) {
+                let created = try ResistanceProfileService.create(
+                    workoutKind: item.key.workoutKind,
+                    sessionId: item.key.sessionId,
+                    exerciseId: item.key.exerciseId,
+                    occurrenceId: item.key.occurrenceId,
+                    value: item.profile,
+                    profiles: existingProfiles,
+                    modelContext: modelContext,
+                    now: now
+                )
+                created.frozenAt = now
+            }
+            let repairedSessionIds = Set(manifest.map { $0.key.sessionId })
+            for session in try modelContext.fetch(FetchDescriptor<Session>())
+            where repairedSessionIds.contains(session.id) && session.status == .completed {
+                session.exportStatus = .pending
+            }
+            for session in try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+            where repairedSessionIds.contains(session.id) && session.status == .completed {
+                session.exportStatus = .pending
+            }
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+}

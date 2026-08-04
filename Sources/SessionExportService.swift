@@ -76,6 +76,7 @@ enum SessionExportService {
         let fixedReadiness = try modelContext.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
         let fixedOverrides = try modelContext.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>())
         let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
+        let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
 
         for session in retryableSessions {
             let cycleName = exportCycleName(
@@ -117,6 +118,7 @@ enum SessionExportService {
                     requireICloudMirror: true,
                     adHocFeedback: adHocFeedback.filter { $0.sessionId == session.id },
                     fixedCycleMetadata: fixedMetadata,
+                    resistanceProfiles: resistanceProfiles,
                     modelContext: modelContext,
                     environment: environment
                 )
@@ -211,19 +213,22 @@ enum SessionExportService {
         let muscle: String
         let sets: [ExportSet]
         let volume_feedback: String?
+        let resistance_profile: ResistanceProfilePayload?
 
         init(
             exercise_id: String? = nil,
             exercise_name: String,
             muscle: String,
             sets: [ExportSet],
-            volume_feedback: String? = nil
+            volume_feedback: String? = nil,
+            resistance_profile: ResistanceProfilePayload? = nil
         ) {
             self.exercise_id = exercise_id
             self.exercise_name = exercise_name
             self.muscle = muscle
             self.sets = sets
             self.volume_feedback = volume_feedback
+            self.resistance_profile = resistance_profile
         }
     }
 
@@ -498,7 +503,7 @@ enum SessionExportService {
         }
         let iso = ISO8601DateFormatter()
         return FixedCycleMetadata(
-            schema_version: 2,
+            schema_version: 3,
             template_id: template.id.uuidString,
             cycle_instance_id: session.cycleInstanceId.uuidString,
             day_label: day.label,
@@ -555,6 +560,7 @@ enum SessionExportService {
         requireICloudMirror: Bool = false,
         adHocFeedback: [AdHocExerciseFeedback] = [],
         fixedCycleMetadata: FixedCycleMetadata? = nil,
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
         environment: ExportEnvironment = .live()
     ) throws -> ExportWriteOutcome {
         let loggedEntries = setEntries.filter { $0.reps > 0 }
@@ -586,7 +592,14 @@ enum SessionExportService {
                 volume_feedback: adHocFeedback
                     .filter { $0.sessionId == session.id && $0.exerciseId == exerciseId }
                     .max(by: { $0.createdAt < $1.createdAt })?
-                    .rating.rawValue
+                    .rating.rawValue,
+                resistance_profile: (try? ResistanceProfileService.profile(
+                    workoutKind: session.dayLabelSnapshot == "Off-Schedule" ? .adHoc : .fixed,
+                    sessionId: session.id,
+                    exerciseId: exerciseId,
+                    occurrenceId: nil,
+                    in: resistanceProfiles
+                )).flatMap(ResistanceProfileService.value).map(ResistanceProfilePayload.init)
             )
         }
         .sorted {
@@ -609,6 +622,11 @@ enum SessionExportService {
         )
 
         let data = try JSONEncoder.pretty.encode(payload)
+        try replaceExistingWorkoutExportCopies(
+            data: data,
+            sessionId: session.id,
+            environment: environment
+        )
         let filename = existingLocalExportFilename(sessionId: session.id)
             ?? "workout-\(filenameDateFormatter.string(from: session.finishedAt ?? .now))-\(session.id.uuidString).json"
         return try writeExportData(
@@ -618,6 +636,52 @@ enum SessionExportService {
             requireICloudMirror: requireICloudMirror,
             environment: environment
         )
+    }
+
+    /// Replaces every valid local/iCloud workout export carrying the same
+    /// session identity before the canonical write. This prevents recovery
+    /// from selecting a stale same-session copy after an occurrence-wide
+    /// resistance-profile correction or reviewed historical repair.
+    static func replaceExistingWorkoutExportCopies(
+        data: Data,
+        sessionId: UUID,
+        environment: ExportEnvironment
+    ) throws {
+        var destinations: [(directory: URL, coordinated: Bool)] = []
+        if let iCloud = environment.iCloudContainerURL {
+            destinations.append((exportDirectory(containerURL: iCloud, relativeSubdirectory: "exports"), true))
+        }
+        if let documents = environment.localDocumentsURL {
+            destinations.append((
+                documents.appendingPathComponent("OpenLift/exports", isDirectory: true),
+                false
+            ))
+        }
+        var visited = Set<String>()
+        for destination in destinations {
+            let directory = destination.directory.standardizedFileURL
+            guard visited.insert(directory.path).inserted,
+                  let files = try? FileManager.default.contentsOfDirectory(
+                      at: directory,
+                      includingPropertiesForKeys: nil,
+                      options: [.skipsHiddenFiles]
+                  ) else { continue }
+            for file in files where file.pathExtension == "json"
+                && file.lastPathComponent.hasPrefix("workout-") {
+                guard let oldData = try? Data(contentsOf: file) else { continue }
+                let fixedId = decodeExportPayload(data: oldData, fileURL: file)?.session_id
+                let adaptiveId = AdaptiveExportService.decode(oldData)?.session_id
+                guard (fixedId ?? adaptiveId) == sessionId.uuidString, oldData != data else { continue }
+                if destination.coordinated {
+                    try environment.coordinatedWrite(data, file)
+                } else {
+                    try data.write(to: file, options: [.atomic])
+                }
+                guard (try? Data(contentsOf: file)) == data else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+            }
+        }
     }
 
     @MainActor
@@ -630,6 +694,7 @@ enum SessionExportService {
         requireICloudMirror: Bool,
         adHocFeedback: [AdHocExerciseFeedback] = [],
         fixedCycleMetadata: FixedCycleMetadata? = nil,
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
         modelContext: ModelContext,
         environment: ExportEnvironment = .live()
     ) throws -> ExportWriteOutcome {
@@ -642,6 +707,7 @@ enum SessionExportService {
                 requireICloudMirror: requireICloudMirror,
                 adHocFeedback: adHocFeedback,
                 fixedCycleMetadata: fixedCycleMetadata,
+                resistanceProfiles: resistanceProfiles,
                 environment: environment
             )
             session.exportStatus = outcome.status
@@ -1346,6 +1412,7 @@ enum AdaptiveExportService {
         let secondary_muscle: String?
         let difficulty: String
         let prescribed_set_count: Int
+        let resistance_profile: ResistanceProfilePayload?
         let sets: [SetV2]
     }
 
@@ -1411,7 +1478,8 @@ enum AdaptiveExportService {
         setEntries: [AdaptiveSetEntry],
         exercises: [Exercise],
         overrides: [AdaptiveOverrideEvent],
-        feedback: [ComplexFeedback]
+        feedback: [ComplexFeedback],
+        resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> PayloadV2 {
         let exerciseById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
         let iso = ISO8601DateFormatter()
@@ -1459,13 +1527,21 @@ enum AdaptiveExportService {
                         secondary_muscle: snapshot.secondaryMuscle?.rawValue,
                         difficulty: snapshot.difficulty.rawValue,
                         prescribed_set_count: snapshot.prescribedSetCount,
+                        resistance_profile: (try? ResistanceProfileService.profile(
+                            workoutKind: .adaptive,
+                            sessionId: session.id,
+                            exerciseId: rows.first.flatMap { UUID(uuidString: $0.exercise_id) }
+                                ?? snapshot.exerciseId,
+                            occurrenceId: snapshot.occurrenceId,
+                            in: resistanceProfiles
+                        )).flatMap(ResistanceProfileService.value).map(ResistanceProfilePayload.init),
                         sets: rows
                     )
                 }
             )
         }
         return PayloadV2(
-            schema_version: 3,
+            schema_version: 4,
             workout_kind: "adaptive",
             session_id: session.id.uuidString,
             date: iso.string(from: session.finishedAt ?? .now),
@@ -1530,7 +1606,7 @@ enum AdaptiveExportService {
 
     static func decode(_ data: Data) -> PayloadV2? {
         guard let payload = try? JSONDecoder().decode(PayloadV2.self, from: data),
-              [2, 3].contains(payload.schema_version),
+              [2, 3, 4].contains(payload.schema_version),
               payload.workout_kind == "adaptive" else { return nil }
         return payload
     }
@@ -1544,6 +1620,7 @@ enum AdaptiveExportService {
         exercises: [Exercise],
         overrides: [AdaptiveOverrideEvent],
         feedback: [ComplexFeedback],
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
         requireICloudMirror: Bool = false,
         environment: SessionExportService.ExportEnvironment = .live()
     ) throws -> SessionExportService.ExportWriteOutcome {
@@ -1554,9 +1631,15 @@ enum AdaptiveExportService {
             setEntries: setEntries,
             exercises: exercises,
             overrides: overrides,
-            feedback: feedback
+            feedback: feedback,
+            resistanceProfiles: resistanceProfiles
         )
         let data = try encode(payload)
+        try SessionExportService.replaceExistingWorkoutExportCopies(
+            data: data,
+            sessionId: session.id,
+            environment: environment
+        )
         let stamp = exportFilenameDateFormatter.string(from: session.finishedAt ?? .now)
         return try SessionExportService.writeExportData(
             data: data,
@@ -1577,6 +1660,7 @@ enum AdaptiveExportService {
         exercises: [Exercise],
         overrides: [AdaptiveOverrideEvent],
         feedback: [ComplexFeedback],
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
         requireICloudMirror: Bool,
         modelContext: ModelContext,
         environment: SessionExportService.ExportEnvironment = .live()
@@ -1590,6 +1674,7 @@ enum AdaptiveExportService {
                 exercises: exercises,
                 overrides: overrides,
                 feedback: feedback,
+                resistanceProfiles: resistanceProfiles,
                 requireICloudMirror: requireICloudMirror,
                 environment: environment
             )
@@ -1629,6 +1714,7 @@ enum AdaptiveExportService {
         let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
         let overrides = try modelContext.fetch(FetchDescriptor<AdaptiveOverrideEvent>())
         let feedback = try modelContext.fetch(FetchDescriptor<ComplexFeedback>())
+        let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
         for session in sessions {
             guard let plan = plans.first(where: { $0.id == session.generatedPlanId }),
                   let check = checks.first(where: { $0.id == plan.readinessCheckId }) else {
@@ -1644,6 +1730,7 @@ enum AdaptiveExportService {
                     exercises: exercises,
                     overrides: overrides,
                     feedback: feedback,
+                    resistanceProfiles: resistanceProfiles,
                     requireICloudMirror: true,
                     modelContext: modelContext,
                     environment: environment
@@ -1683,6 +1770,7 @@ enum AdaptiveExportService {
         let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
         let overrides = try modelContext.fetch(FetchDescriptor<AdaptiveOverrideEvent>())
         let feedback = try modelContext.fetch(FetchDescriptor<ComplexFeedback>())
+        let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
         do {
             let payloadData = try encode(
                 makePayload(
@@ -1692,10 +1780,11 @@ enum AdaptiveExportService {
                     setEntries: entries,
                     exercises: exercises,
                     overrides: overrides,
-                    feedback: feedback
+                    feedback: feedback,
+                    resistanceProfiles: resistanceProfiles
                 )
             )
-            try replaceExistingExportCopies(
+            try SessionExportService.replaceExistingWorkoutExportCopies(
                 data: payloadData,
                 sessionId: sessionId,
                 environment: environment
@@ -1708,6 +1797,7 @@ enum AdaptiveExportService {
                 exercises: exercises,
                 overrides: overrides,
                 feedback: feedback,
+                resistanceProfiles: resistanceProfiles,
                 requireICloudMirror: true,
                 modelContext: modelContext,
                 environment: environment
@@ -1717,69 +1807,6 @@ enum AdaptiveExportService {
         } catch {
             try? modelContext.save()
             throw error
-        }
-    }
-
-    /// Replaces only valid Adaptive export copies carrying the target session
-    /// ID. This preserves old filenames while ensuring recovery cannot select
-    /// a stale same-session fallback after a one-time data repair.
-    private static func replaceExistingExportCopies(
-        data: Data,
-        sessionId: UUID,
-        environment: SessionExportService.ExportEnvironment
-    ) throws {
-        var destinations: [(directory: URL, coordinated: Bool)] = []
-        if let iCloud = environment.iCloudContainerURL {
-            destinations.append(
-                (
-                    SessionExportService.exportDirectory(
-                        containerURL: iCloud,
-                        relativeSubdirectory: "exports"
-                    ),
-                    true
-                )
-            )
-        }
-        if let documents = environment.localDocumentsURL {
-            destinations.append(
-                (
-                    documents
-                        .appendingPathComponent("OpenLift", isDirectory: true)
-                        .appendingPathComponent("exports", isDirectory: true),
-                    false
-                )
-            )
-        }
-
-        var visitedPaths = Set<String>()
-        for destination in destinations {
-            let directory = destination.directory.standardizedFileURL
-            guard visitedPaths.insert(directory.path).inserted,
-                  let files = try? FileManager.default.contentsOfDirectory(
-                      at: directory,
-                      includingPropertiesForKeys: nil,
-                      options: [.skipsHiddenFiles]
-                  ) else {
-                continue
-            }
-            for file in files where
-                file.pathExtension == "json"
-                    && file.lastPathComponent.hasPrefix("workout-") {
-                guard let oldData = try? Data(contentsOf: file),
-                      let oldPayload = decode(oldData),
-                      oldPayload.session_id == sessionId.uuidString,
-                      oldData != data else {
-                    continue
-                }
-                if destination.coordinated {
-                    try environment.coordinatedWrite(data, file)
-                } else {
-                    try data.write(to: file, options: [.atomic])
-                }
-                guard (try? Data(contentsOf: file)) == data else {
-                    throw CocoaError(.fileWriteUnknown)
-                }
-            }
         }
     }
 
@@ -1886,6 +1913,7 @@ enum AdaptiveExportService {
         modelContext.insert(check)
 
         var recoveredEntries: [AdaptiveSetEntry] = []
+        var recoveredProfiles: [ExerciseResistanceProfile] = []
         let complexes = payload.plan.complexes.sorted { $0.position < $1.position }.compactMap { item -> PlannedComplexSnapshot? in
             guard let snapshotId = UUID(uuidString: item.snapshot_id),
                   let definitionId = UUID(uuidString: item.definition_id),
@@ -1912,6 +1940,23 @@ enum AdaptiveExportService {
                             reps: row.reps,
                             isLocked: row.is_locked,
                             lockedAt: row.locked_at.flatMap(SessionExportService.parseExportDate)
+                        )
+                    )
+                }
+                if let value = exercise.resistance_profile?.value {
+                    recoveredProfiles.append(
+                        ExerciseResistanceProfile(
+                            workoutKind: .adaptive,
+                            sessionId: sessionId,
+                            exerciseId: localExerciseId ?? exportedExerciseId,
+                            occurrenceId: occurrenceId,
+                            resistanceSource: value.resistanceSource,
+                            chainType: value.chainType,
+                            chainPercent: value.chainPercent,
+                            eccentricPercent: value.eccentricPercent,
+                            frozenAt: finishedAt,
+                            createdAt: finishedAt,
+                            updatedAt: finishedAt
                         )
                     )
                 }
@@ -1967,6 +2012,7 @@ enum AdaptiveExportService {
             )
         )
         recoveredEntries.forEach(modelContext.insert)
+        recoveredProfiles.forEach(modelContext.insert)
         for item in payload.overrides {
             guard let id = UUID(uuidString: item.override_id),
                   let kind = AdaptiveOverrideKind(rawValue: item.kind) else { continue }

@@ -21,6 +21,7 @@ struct AdaptiveWorkoutView: View {
     @Query private var planDesignStates: [AdaptivePlanDesignState]
     @Query private var exposureConfigurations: [AdaptiveMuscleExposureConfiguration]
     @Query private var capacityPreferences: [AdaptiveWorkoutCapacityPreference]
+    @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     @State private var readiness: [MuscleGroup: ReadinessSelection] = Dictionary(
         uniqueKeysWithValues: MuscleGroup.allCases.map { ($0, ReadinessSelection()) }
@@ -401,12 +402,22 @@ struct AdaptiveWorkoutView: View {
                         } else {
                             let entries = entries(for: snapshot.occurrenceId, sessionId: session.id)
                             let effectiveExerciseId = entries.first?.exerciseId ?? snapshot.exerciseId
+                            let effectiveExercise = exercises.first(where: { $0.id == effectiveExerciseId })
+                            let resistanceProfile = try? ResistanceProfileService.profile(
+                                workoutKind: .adaptive,
+                                sessionId: session.id,
+                                exerciseId: effectiveExerciseId,
+                                occurrenceId: snapshot.occurrenceId,
+                                in: resistanceProfiles
+                            )
                             AdaptiveExerciseSection(
-                                title: exercises.first(where: { $0.id == effectiveExerciseId })?.name
-                                    ?? snapshot.exerciseName,
-                                usesAssistanceLoad: exercises.first(where: { $0.id == effectiveExerciseId })?
-                                    .adaptiveUsesAssistanceLoad ?? false,
+                                title: effectiveExercise?.name ?? snapshot.exerciseName,
+                                exercise: effectiveExercise,
                                 entries: entries,
+                                resistanceProfile: resistanceProfile,
+                                resistanceProfiles: resistanceProfiles,
+                                sessionId: session.id,
+                                occurrenceId: snapshot.occurrenceId,
                                 canMoveEarlier: canMoveMovement(snapshot, in: plan, direction: .earlier),
                                 canMoveLater: canMoveMovement(snapshot, in: plan, direction: .later),
                                 onMoveEarlier: { moveMovement(snapshot, in: plan, direction: .earlier) },
@@ -434,7 +445,8 @@ struct AdaptiveWorkoutView: View {
                                             errorMessage = error.localizedDescription
                                         }
                                     }
-                                }
+                                },
+                                onError: { errorMessage = $0 }
                             )
                         }
                     }
@@ -800,7 +812,9 @@ struct AdaptiveWorkoutView: View {
                 feedback: complexFeedback,
                 adHocFeedback: adHocFeedback,
                 overrides: overrides,
-                readinessCheck: readinessCheck
+                readinessCheck: readinessCheck,
+                cableExerciseIds: cableExerciseIds,
+                resistanceProfiles: resistanceProfiles
             ),
             exerciseSelections: exerciseSelections,
             now: .now
@@ -817,7 +831,10 @@ struct AdaptiveWorkoutView: View {
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries
+            rotationSetEntries: rotationSetEntries,
+            currentResistanceProfiles: defaultResistanceProfiles(for: plan),
+            cableExerciseIds: cableExerciseIds,
+            resistanceProfiles: resistanceProfiles
         )
         return plan
     }
@@ -884,6 +901,7 @@ struct AdaptiveWorkoutView: View {
 
     private func freeze(plan: GeneratedWorkoutPlan) {
         do {
+            let defaults = defaultResistanceProfiles(for: plan)
             _ = try AdaptiveWorkoutService.freeze(
                 plan: plan,
                 modelContext: modelContext,
@@ -892,9 +910,32 @@ struct AdaptiveWorkoutView: View {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries
+                    rotationSetEntries: rotationSetEntries,
+                    currentResistanceProfiles: defaults,
+                    cableExerciseIds: cableExerciseIds,
+                    resistanceProfiles: resistanceProfiles
                 )
             )
+            guard let session = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+                .first(where: { $0.generatedPlanId == plan.id }) else {
+                throw AdaptiveWorkoutServiceError.adaptiveSessionNotFound
+            }
+            var currentProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+            for snapshot in plan.complexes.flatMap(\.exercises)
+            where cableExerciseIds.contains(snapshot.exerciseId) {
+                guard let value = defaults[snapshot.occurrenceId] else { continue }
+                let created = try ResistanceProfileService.create(
+                    workoutKind: .adaptive,
+                    sessionId: session.id,
+                    exerciseId: snapshot.exerciseId,
+                    occurrenceId: snapshot.occurrenceId,
+                    value: value,
+                    profiles: currentProfiles,
+                    modelContext: modelContext
+                )
+                currentProfiles.append(created)
+            }
+            try modelContext.save()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -904,13 +945,54 @@ struct AdaptiveWorkoutView: View {
         plan: GeneratedWorkoutPlan,
         exercise: PlannedExerciseSnapshot
     ) -> [ComparableSetRow] {
-        AdaptivePrefillService.rows(
+        let requirement: ResistanceProfileLookupRequirement = cableExerciseIds.contains(exercise.exerciseId)
+            ? .cable(currentResistanceValue(plan: plan, exercise: exercise))
+            : .notApplicable
+        return AdaptivePrefillService.rows(
             plan: plan,
             exercise: exercise,
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries
+            rotationSetEntries: rotationSetEntries,
+            resistanceRequirement: requirement,
+            resistanceProfiles: resistanceProfiles
+        )
+    }
+
+    private var cableExerciseIds: Set<UUID> {
+        Set(exercises.filter { $0.equipment == .cable }.map(\.id))
+    }
+
+    private func defaultResistanceProfiles(
+        for plan: GeneratedWorkoutPlan
+    ) -> [UUID: ResistanceProfileValue] {
+        Dictionary(uniqueKeysWithValues: plan.complexes.flatMap(\.exercises).compactMap { snapshot in
+            guard cableExerciseIds.contains(snapshot.exerciseId),
+                  let value = ResistanceProfileService.lastUsedValue(
+                    exerciseId: snapshot.exerciseId,
+                    profiles: resistanceProfiles
+                  ) else { return nil }
+            return (snapshot.occurrenceId, value)
+        })
+    }
+
+    private func currentResistanceValue(
+        plan: GeneratedWorkoutPlan,
+        exercise: PlannedExerciseSnapshot
+    ) -> ResistanceProfileValue? {
+        let persisted = plan.sessionId.flatMap { sessionId in
+            (try? ResistanceProfileService.profile(
+                workoutKind: .adaptive,
+                sessionId: sessionId,
+                exerciseId: exercise.exerciseId,
+                occurrenceId: exercise.occurrenceId,
+                in: resistanceProfiles
+            )).flatMap(ResistanceProfileService.value)
+        }
+        return persisted ?? ResistanceProfileService.lastUsedValue(
+            exerciseId: exercise.exerciseId,
+            profiles: resistanceProfiles
         )
     }
 
@@ -1033,6 +1115,7 @@ struct AdaptiveWorkoutView: View {
                     exercises: exercises,
                     overrides: overrides,
                     feedback: complexFeedback,
+                    resistanceProfiles: resistanceProfiles,
                     requireICloudMirror: !AppRuntime.isUITesting,
                     modelContext: modelContext
                 )
@@ -1239,6 +1322,37 @@ struct AdaptiveWorkoutView: View {
                     rotationSetEntries: rotationSetEntries,
                     modelContext: modelContext
                 )
+                if let session = adaptiveSessions.first(where: { $0.generatedPlanId == plan.id }) {
+                    var currentProfiles = try modelContext.fetch(
+                        FetchDescriptor<ExerciseResistanceProfile>()
+                    )
+                    if let old = try ResistanceProfileService.profile(
+                        workoutKind: .adaptive,
+                        sessionId: session.id,
+                        exerciseId: context.currentExerciseId,
+                        occurrenceId: context.occurrenceId,
+                        in: currentProfiles
+                    ) {
+                        modelContext.delete(old)
+                        currentProfiles.removeAll { $0.id == old.id }
+                    }
+                    if exercise.equipment == .cable,
+                       let value = ResistanceProfileService.lastUsedValue(
+                           exerciseId: exercise.id,
+                           profiles: currentProfiles
+                       ) {
+                        _ = try ResistanceProfileService.create(
+                            workoutKind: .adaptive,
+                            sessionId: session.id,
+                            exerciseId: exercise.id,
+                            occurrenceId: context.occurrenceId,
+                            value: value,
+                            profiles: currentProfiles,
+                            modelContext: modelContext
+                        )
+                    }
+                    try modelContext.save()
+                }
             }
         } catch { errorMessage = error.localizedDescription }
     }
@@ -1840,8 +1954,12 @@ private struct AdaptiveExerciseSection: View {
     @Environment(\.modelContext) private var modelContext
 
     let title: String
-    let usesAssistanceLoad: Bool
+    let exercise: Exercise?
     let entries: [AdaptiveSetEntry]
+    let resistanceProfile: ExerciseResistanceProfile?
+    let resistanceProfiles: [ExerciseResistanceProfile]
+    let sessionId: UUID
+    let occurrenceId: UUID
     let canMoveEarlier: Bool
     let canMoveLater: Bool
     let onMoveEarlier: () -> Void
@@ -1852,6 +1970,11 @@ private struct AdaptiveExerciseSection: View {
     let onSkip: () -> Void
     let onRemove: () -> Void
     let onEntryUpdated: (Bool) -> Void
+    let onError: (String) -> Void
+
+    private var usesAssistanceLoad: Bool {
+        exercise?.adaptiveUsesAssistanceLoad ?? false
+    }
 
     private enum RowField: Hashable {
         case weight(UUID), reps(UUID)
@@ -1860,6 +1983,17 @@ private struct AdaptiveExerciseSection: View {
 
     var body: some View {
         Section {
+            if exercise?.equipment == .cable, let exercise {
+                CableResistanceProfileControl(
+                    workoutKind: .adaptive,
+                    sessionId: sessionId,
+                    exerciseId: exercise.id,
+                    occurrenceId: occurrenceId,
+                    profile: resistanceProfile,
+                    profiles: resistanceProfiles,
+                    onError: onError
+                )
+            }
             ForEach(entries) { entry in
                 HStack {
                     Text("S\(entry.setIndex)")
@@ -1912,6 +2046,17 @@ private struct AdaptiveExerciseSection: View {
                     Button {
                         focusedField = nil
                         guard entry.isLocked || entry.weight != 0 || entry.reps != 0 else { return }
+                        if !entry.isLocked, exercise?.equipment == .cable {
+                            do {
+                                try ResistanceProfileService.freezeBeforeLock(
+                                    resistanceProfile,
+                                    modelContext: modelContext
+                                )
+                            } catch {
+                                onError(error.localizedDescription)
+                                return
+                            }
+                        }
                         WorkoutEntryEditing.setLocked(
                             !entry.isLocked,
                             entry: entry

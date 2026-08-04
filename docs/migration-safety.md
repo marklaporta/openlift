@@ -21,6 +21,13 @@ V9 adds only parallel Fixed Cycle readiness-response, occurrence-skip, and
 ordered completed-occurrence snapshot entities. No shipped V1-V8 entity shape
 or checksum is modified.
 
+V10 adds optional set-lock timestamps and V11 moves eagerness to the systemic
+readiness record using frozen historical model copies. V12 is additive again:
+it adds only `ExerciseResistanceProfile`. Opening a V11 store under V12 must
+preserve every exercise/session/set and create zero profile rows, so legacy
+cable settings remain unknown. The Sherwick audit and reviewed-manifest repair
+are separate from schema migration and never run as a migration stage.
+
 ## Push/Pull A/B one-time rollout
 
 `BootstrapDataService.preparePushPullABRollout` is an explicit migration

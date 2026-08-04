@@ -8,6 +8,7 @@ struct LogWorkoutView: View {
     @Query private var templates: [CycleTemplate]
     @Query(sort: \Session.createdAt, order: .reverse) private var sessions: [Session]
     @Query private var setEntries: [SetEntry]
+    @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     @State private var name = "Off-Schedule"
     @State private var date = Date()
@@ -51,6 +52,10 @@ struct LogWorkoutView: View {
 
                         Button("Create New Exercise…") {
                             newExerciseRequest = NewExerciseRequest(draftId: exerciseDraft.id)
+                        }
+
+                        if exercises.first(where: { $0.id == exerciseDraft.exerciseId })?.equipment == .cable {
+                            CableResistanceProfileDraftControl(value: $exerciseDraft.resistanceProfile)
                         }
 
                         ForEach($exerciseDraft.sets) { $set in
@@ -202,6 +207,7 @@ struct LogWorkoutView: View {
         .sheet(item: $historyContext) { context in
             ExerciseHistorySheet(
                 exerciseName: context.exerciseName,
+                showsResistanceProfile: exercises.first(where: { $0.id == context.exerciseId })?.equipment == .cable,
                 efforts: recentEfforts(exerciseId: context.exerciseId, exerciseName: context.exerciseName)
             )
         }
@@ -217,6 +223,7 @@ struct LogWorkoutView: View {
         exerciseDrafts.append(
             LogExerciseDraft(
                 exerciseId: exerciseId,
+                resistanceProfile: defaultResistanceProfile(for: exerciseId),
                 sets: prefilledSets(for: exerciseId)
             )
         )
@@ -227,9 +234,16 @@ struct LogWorkoutView: View {
         if let draftId,
            let index = exerciseDrafts.firstIndex(where: { $0.id == draftId }) {
             exerciseDrafts[index].exerciseId = exercise.id
+            exerciseDrafts[index].resistanceProfile = defaultResistanceProfile(for: exercise.id)
             exerciseDrafts[index].sets = blankSets
         } else {
-            exerciseDrafts.append(LogExerciseDraft(exerciseId: exercise.id, sets: blankSets))
+            exerciseDrafts.append(
+                LogExerciseDraft(
+                    exerciseId: exercise.id,
+                    resistanceProfile: defaultResistanceProfile(for: exercise.id),
+                    sets: blankSets
+                )
+            )
         }
         savedMessage = "Created \(exercise.name)."
     }
@@ -301,6 +315,7 @@ struct LogWorkoutView: View {
     private func applyExerciseSelection(draftId: UUID, exerciseId: UUID) {
         guard let index = exerciseDrafts.firstIndex(where: { $0.id == draftId }) else { return }
         exerciseDrafts[index].exerciseId = exerciseId
+        exerciseDrafts[index].resistanceProfile = defaultResistanceProfile(for: exerciseId)
         exerciseDrafts[index].sets = prefilledSets(for: exerciseId)
     }
 
@@ -316,6 +331,7 @@ struct LogWorkoutView: View {
                 return LogExerciseInput(
                     exerciseId: draft.exerciseId,
                     feedback: draft.feedback,
+                    resistanceProfile: draft.resistanceProfile,
                     sets: cleanedSets.map { LogSetInput(weight: $0.weight, reps: $0.reps) }
                 )
             }
@@ -340,7 +356,27 @@ struct LogWorkoutView: View {
 
             var insertedEntries: [SetEntry] = []
             var insertedFeedback: [AdHocExerciseFeedback] = []
+            var insertedProfiles: [ExerciseResistanceProfile] = []
             for exerciseInput in cleanedExercises {
+                if exercises.first(where: { $0.id == exerciseInput.exerciseId })?.equipment == .cable {
+                    guard let value = exerciseInput.resistanceProfile, value.isComplete else {
+                        throw LogWorkoutError.resistanceProfileRequired
+                    }
+                    let profile = ExerciseResistanceProfile(
+                        workoutKind: .adHoc,
+                        sessionId: session.id,
+                        exerciseId: exerciseInput.exerciseId,
+                        resistanceSource: value.resistanceSource,
+                        chainType: value.chainType,
+                        chainPercent: value.chainPercent,
+                        eccentricPercent: value.eccentricPercent,
+                        frozenAt: date,
+                        createdAt: date,
+                        updatedAt: date
+                    )
+                    modelContext.insert(profile)
+                    insertedProfiles.append(profile)
+                }
                 for (index, set) in exerciseInput.sets.enumerated() {
                     let entry = SetEntry(
                         sessionId: session.id,
@@ -374,6 +410,7 @@ struct LogWorkoutView: View {
                     setEntries: insertedEntries,
                     requireICloudMirror: true,
                     adHocFeedback: insertedFeedback,
+                    resistanceProfiles: insertedProfiles,
                     modelContext: modelContext
                 )
             } catch {
@@ -396,7 +433,10 @@ struct LogWorkoutView: View {
 
     private func prefilledSets(for exerciseId: UUID) -> [LogSetDraft] {
         let exerciseName = exerciseName(for: exerciseId)
-        if let latest = recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName).first {
+        if let latest = recentComparableEfforts(
+            exerciseId: exerciseId,
+            exerciseName: exerciseName
+        ).first {
             return latest.sets
                 .sorted { $0.setIndex < $1.setIndex }
                 .map { LogSetDraft(weight: $0.weight, reps: $0.reps) }
@@ -404,9 +444,20 @@ struct LogWorkoutView: View {
         return [LogSetDraft(), LogSetDraft(), LogSetDraft()]
     }
 
+    private func defaultResistanceProfile(for exerciseId: UUID) -> ResistanceProfileValue? {
+        guard exercises.first(where: { $0.id == exerciseId })?.equipment == .cable else { return nil }
+        return ResistanceProfileService.lastUsedValue(
+            exerciseId: exerciseId,
+            profiles: resistanceProfiles
+        )
+    }
+
     private func prefilledSet(for exerciseId: UUID, setIndex: Int) -> LogSetDraft {
         let exerciseName = exerciseName(for: exerciseId)
-        guard let latest = recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName).first else {
+        guard let latest = recentComparableEfforts(
+            exerciseId: exerciseId,
+            exerciseName: exerciseName
+        ).first else {
             let previousWeight = exerciseDrafts
                 .first(where: { $0.exerciseId == exerciseId })?
                 .sets
@@ -445,6 +496,9 @@ struct LogWorkoutView: View {
                     date: session.finishedAt ?? session.createdAt,
                     cycleName: cycleName(for: session),
                     dayLabel: dayLabel(for: session),
+                    resistanceProfile: resistanceProfiles.first(where: {
+                        $0.sessionId == session.id && $0.exerciseId == exerciseId
+                    }).flatMap(ResistanceProfileService.value),
                     sets: sets
                 )
             )
@@ -459,6 +513,26 @@ struct LogWorkoutView: View {
             .sorted { $0.date > $1.date }
             .prefix(8)
             .map { $0 }
+    }
+
+    private func recentComparableEfforts(
+        exerciseId: UUID,
+        exerciseName: String
+    ) -> [ExerciseEffort] {
+        guard exercises.first(where: { $0.id == exerciseId })?.equipment == .cable else {
+            return recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName)
+        }
+        guard let current = defaultResistanceProfile(for: exerciseId) else { return [] }
+        return recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName).filter { effort in
+            guard let sessionId = UUID(uuidString: effort.id),
+                  let profile = resistanceProfiles.first(where: {
+                      $0.sessionId == sessionId && $0.exerciseId == exerciseId
+                  }) else { return false }
+            return ResistanceProfileComparison.compare(
+                current: current,
+                historical: ResistanceProfileService.value(profile)
+            ) == .exact
+        }
     }
 
     private func cycleName(for session: Session) -> String {
@@ -515,6 +589,7 @@ struct LogWorkoutView: View {
                         date: date,
                         cycleName: payload.cycle_name,
                         dayLabel: "Day \(payload.cycle_day_index + 1)",
+                        resistanceProfile: exercise.resistance_profile?.value,
                         sets: exercise.sets.map {
                             ExerciseEffortSet(setIndex: $0.set_index, weight: $0.weight, reps: $0.reps)
                         }
@@ -649,6 +724,7 @@ struct NewExerciseSheet: View {
 private struct LogExerciseInput {
     let exerciseId: UUID
     let feedback: ComplexFeedbackRating?
+    let resistanceProfile: ResistanceProfileValue?
     let sets: [LogSetInput]
 }
 
@@ -660,6 +736,7 @@ private struct LogSetInput {
 private struct LogExerciseDraft: Identifiable {
     let id = UUID()
     var exerciseId: UUID
+    var resistanceProfile: ResistanceProfileValue? = nil
     var feedback: ComplexFeedbackRating? = nil
     var sets: [LogSetDraft] = [LogSetDraft(), LogSetDraft(), LogSetDraft()]
 }
@@ -673,6 +750,7 @@ private struct LogSetDraft: Identifiable {
 private enum LogWorkoutError: LocalizedError {
     case noActiveCycle
     case noLoggedSets
+    case resistanceProfileRequired
 
     var errorDescription: String? {
         switch self {
@@ -680,6 +758,8 @@ private enum LogWorkoutError: LocalizedError {
             return "Activate a cycle before logging an off-schedule workout."
         case .noLoggedSets:
             return "Enter at least one set with reps > 0."
+        case .resistanceProfileRequired:
+            return "Choose Weight Stack or a complete VOLTRA profile for every cable exercise."
         }
     }
 }
