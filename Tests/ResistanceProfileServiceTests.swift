@@ -449,7 +449,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testBackfillStaysDisabledWithoutReviewedExactManifest() throws {
+    func testBackfillRejectsAnEmptyManifest() throws {
         let (context, _) = makeContext()
         let report = HistoricalResistanceProfileMigration.AuditReport(
             schemaVersion: 1,
@@ -460,6 +460,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try HistoricalResistanceProfileMigration.applyReviewedManifest(
+                [],
                 audit: report,
                 existingProfiles: [],
                 modelContext: context
@@ -467,6 +468,166 @@ final class ResistanceProfileServiceTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? ResistanceProfileError, .emptyManifest)
         }
+    }
+
+    func testReviewedManifestExactlyMatchesTheDeviceAudit() {
+        let manifest = HistoricalResistanceProfileMigration.reviewedManifest
+        XCTAssertEqual(manifest.count, 19)
+        XCTAssertEqual(Set(manifest.map(\.key.sessionId)).count, 10)
+
+        let expectedIdentityAndCounts = [
+            "adaptive|08476AD8-9550-4A33-94DF-55B12E6161F2|87A21249-FE4B-4C3E-8F5B-E02944C57263|ED4C9952-8F7D-42A1-9928-8FF5265463D8|3",
+            "adaptive|0DADB7CE-573E-477E-8838-E6D69A27ED3C|17BC2F9D-F0A2-4604-AA41-33ADD79ED16B|D9C9805E-A95A-45F8-B674-7A1FCF639626|2",
+            "adaptive|476348F2-D693-40B6-8761-866676A20676|C7CAFFE5-CBF9-44B3-94BA-DE29FD8F94E3|0EE78BC6-6514-40C9-A401-FE0A7DD6CFB6|2",
+            "adaptive|78F895B2-10DE-4AAA-AD74-97AB243C52E1|81739325-64CA-4686-B2D5-72A310832DA0|1BCE6A23-AD9B-4C60-BF5F-AA6CCFCD170E|3",
+            "adaptive|78F895B2-10DE-4AAA-AD74-97AB243C52E1|742E75C7-9F97-4F1A-AB41-896B10402731|E4217C1E-A0D6-43F2-B70B-2BFE08B12DF5|3",
+            "adaptive|86B9C09E-B52A-4864-B715-D5745CED523A|17BC2F9D-F0A2-4604-AA41-33ADD79ED16B|30E35887-912A-4C45-BBCE-9160C3EEB284|2",
+            "adaptive|86B9C09E-B52A-4864-B715-D5745CED523A|27FC2511-A469-438D-8E46-6C6D99B30F42|9DA39594-9DAB-4E10-8521-5A008A642F4F|2",
+            "adaptive|86B9C09E-B52A-4864-B715-D5745CED523A|87A21249-FE4B-4C3E-8F5B-E02944C57263|CDBB2B7B-B081-436A-8DF1-AE2733008295|2",
+            "fixed|887431EA-2E20-45A3-A3FD-B1B65383961C|17BC2F9D-F0A2-4604-AA41-33ADD79ED16B|-|3",
+            "fixed|887431EA-2E20-45A3-A3FD-B1B65383961C|31714E52-46E3-4080-8403-222537D68E10|-|3",
+            "fixed|887431EA-2E20-45A3-A3FD-B1B65383961C|C7CAFFE5-CBF9-44B3-94BA-DE29FD8F94E3|-|3",
+            "ad_hoc|8DC5D239-F5FB-4E0F-B181-DF1F8EA5B52B|C7CAFFE5-CBF9-44B3-94BA-DE29FD8F94E3|-|1",
+            "ad_hoc|8DC5D239-F5FB-4E0F-B181-DF1F8EA5B52B|E27608C0-2EFD-436C-A01E-BAF327F44055|-|1",
+            "adaptive|9814E290-49A9-480C-B654-85B7D61F05CF|C7CAFFE5-CBF9-44B3-94BA-DE29FD8F94E3|9604D053-19FF-4BB7-BF2F-A3C5410AC49D|3",
+            "adaptive|9814E290-49A9-480C-B654-85B7D61F05CF|E27608C0-2EFD-436C-A01E-BAF327F44055|BB3F4A65-F304-4667-8B2E-3329572DD1F5|3",
+            "adaptive|D21627D8-34D5-4044-990A-6B7C036E230F|87A21249-FE4B-4C3E-8F5B-E02944C57263|E5347F42-3AC1-4817-ABFE-34A858DD921B|3",
+            "adaptive|D21627D8-34D5-4044-990A-6B7C036E230F|8C24C3C7-EB71-4523-BA0C-BB22B1F8CE7D|F47ABA45-6FB0-40F3-90F4-433851F29B3D|4",
+            "fixed|FF0623F5-92DF-484A-857F-A4FEFC540AD9|8C24C3C7-EB71-4523-BA0C-BB22B1F8CE7D|-|3",
+            "fixed|FF0623F5-92DF-484A-857F-A4FEFC540AD9|C7CAFFE5-CBF9-44B3-94BA-DE29FD8F94E3|-|3"
+        ]
+        XCTAssertEqual(manifest.map(manifestIdentityAndCount), expectedIdentityAndCounts)
+        XCTAssertTrue(manifest.dropLast(2).allSatisfy {
+            $0.profile == .voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
+        })
+        XCTAssertTrue(manifest.suffix(2).allSatisfy {
+            $0.profile == .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
+        })
+        XCTAssertEqual(
+            manifest.map(\.exerciseName),
+            [
+                "Chest Supported Cable Row",
+                "Overhead Single-Arm Cable Extension",
+                "Cable Lateral Raise",
+                "Cable Crossover Lateral Raise",
+                "Cable Preacher Curl",
+                "Overhead Single-Arm Cable Extension",
+                "Lat Prayer",
+                "Chest Supported Cable Row",
+                "Overhead Single-Arm Cable Extension",
+                "Incline Cable Flye",
+                "Cable Lateral Raise",
+                "Cable Lateral Raise",
+                "Bayesian Curl",
+                "Cable Lateral Raise",
+                "Bayesian Curl",
+                "Chest Supported Cable Row",
+                "Cable Pushdown",
+                "Cable Pushdown",
+                "Cable Lateral Raise"
+            ]
+        )
+    }
+
+    @MainActor
+    func testBackfillFailsClosedOnAuditMismatch() throws {
+        let (context, _) = makeContext()
+        var candidates = exactManifestReport().candidates
+        let first = candidates.removeFirst()
+        candidates.insert(
+            .init(
+                key: first.key,
+                exerciseName: first.exerciseName,
+                performedSetCount: first.performedSetCount + 1,
+                intendedProfile: first.intendedProfile
+            ),
+            at: 0
+        )
+        let report = HistoricalResistanceProfileMigration.AuditReport(
+            schemaVersion: 1,
+            generatedAt: .now,
+            expectedCandidateCount: 19,
+            candidates: candidates,
+            isExactExpectedCount: true
+        )
+
+        XCTAssertThrowsError(
+            try HistoricalResistanceProfileMigration.applyReviewedManifest(
+                audit: report,
+                existingProfiles: [],
+                modelContext: context
+            )
+        ) { error in
+            XCTAssertEqual(error as? ResistanceProfileError, .manifestMismatch)
+        }
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).isEmpty)
+    }
+
+    @MainActor
+    func testBackfillConflictIsAtomic() throws {
+        let (context, _) = makeContext()
+        let conflictingItem = HistoricalResistanceProfileMigration.reviewedManifest.last!
+        let conflicting = ExerciseResistanceProfile(
+            workoutKind: conflictingItem.key.workoutKind,
+            sessionId: conflictingItem.key.sessionId,
+            exerciseId: conflictingItem.key.exerciseId,
+            occurrenceId: conflictingItem.key.occurrenceId,
+            resistanceSource: .weightStack
+        )
+        context.insert(conflicting)
+        try context.save()
+
+        XCTAssertThrowsError(
+            try HistoricalResistanceProfileMigration.applyReviewedManifest(
+                audit: exactManifestReport(),
+                existingProfiles: [conflicting],
+                modelContext: context
+            )
+        ) { error in
+            XCTAssertEqual(error as? ResistanceProfileError, .conflictingExistingProfile)
+        }
+        let profiles = try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        XCTAssertEqual(profiles.count, 1)
+        XCTAssertEqual(profiles.first?.resistanceSource, .weightStack)
+    }
+
+    @MainActor
+    func testStartupBackfillAppliesThenBecomesNoOpWithoutRedirtyingExports() throws {
+        let (context, _) = makeContext()
+        try insertExactAuditedHistory(into: context)
+        let appliedAt = Date(timeIntervalSince1970: 1_786_000_000)
+
+        let first = try HistoricalResistanceProfileMigration.runAtStartup(
+            modelContext: context,
+            now: appliedAt
+        )
+        XCTAssertEqual(first.status, .applied)
+        XCTAssertEqual(first.auditedCandidateCount, 19)
+        XCTAssertEqual(first.createdProfileCount, 19)
+        XCTAssertEqual(first.repairedSessionCount, 10)
+        let profiles = try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        XCTAssertEqual(profiles.count, 19)
+        XCTAssertTrue(profiles.allSatisfy { $0.frozenAt == appliedAt })
+
+        let fixedSessions = try context.fetch(FetchDescriptor<Session>())
+        let adaptiveSessions = try context.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+        XCTAssertTrue(fixedSessions.allSatisfy { $0.exportStatus == .pending })
+        XCTAssertTrue(adaptiveSessions.allSatisfy { $0.exportStatus == .pending })
+        fixedSessions.forEach { $0.exportStatus = .success }
+        adaptiveSessions.forEach { $0.exportStatus = .success }
+        try context.save()
+
+        let second = try HistoricalResistanceProfileMigration.runAtStartup(
+            modelContext: context,
+            now: appliedAt.addingTimeInterval(60)
+        )
+        XCTAssertEqual(second.status, .alreadyApplied)
+        XCTAssertEqual(second.auditedCandidateCount, 19)
+        XCTAssertEqual(second.createdProfileCount, 0)
+        XCTAssertEqual(second.repairedSessionCount, 0)
+        XCTAssertTrue(fixedSessions.allSatisfy { $0.exportStatus == .success })
+        XCTAssertTrue(adaptiveSessions.allSatisfy { $0.exportStatus == .success })
+        XCTAssertEqual(try context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).count, 19)
     }
 
     func testFixedExportRoundTripPreservesOptionalProfileAndLegacyUnknown() throws {
@@ -501,6 +662,114 @@ final class ResistanceProfileServiceTests: XCTestCase {
             SessionExportService.decodeExportPayload(data: legacy)?.exercises.first?
                 .resistance_profile
         )
+    }
+
+    private func manifestIdentityAndCount(
+        _ item: HistoricalResistanceProfileMigration.ManifestEntry
+    ) -> String {
+        [
+            item.key.workoutKind.rawValue,
+            item.key.sessionId.uuidString,
+            item.key.exerciseId.uuidString,
+            item.key.occurrenceId?.uuidString ?? "-",
+            String(item.expectedPerformedSetCount)
+        ].joined(separator: "|")
+    }
+
+    private func exactManifestReport() -> HistoricalResistanceProfileMigration.AuditReport {
+        let candidates = HistoricalResistanceProfileMigration.reviewedManifest.map {
+            HistoricalResistanceProfileMigration.Candidate(
+                key: $0.key,
+                exerciseName: $0.exerciseName,
+                performedSetCount: $0.expectedPerformedSetCount,
+                intendedProfile: $0.profile
+            )
+        }
+        return HistoricalResistanceProfileMigration.AuditReport(
+            schemaVersion: 1,
+            generatedAt: .now,
+            expectedCandidateCount: 19,
+            candidates: candidates,
+            isExactExpectedCount: true
+        )
+    }
+
+    @MainActor
+    private func insertExactAuditedHistory(into context: ModelContext) throws {
+        let manifest = HistoricalResistanceProfileMigration.reviewedManifest
+        var insertedExerciseIds: Set<UUID> = []
+        for item in manifest where insertedExerciseIds.insert(item.key.exerciseId).inserted {
+            context.insert(
+                Exercise(
+                    id: item.key.exerciseId,
+                    name: item.exerciseName,
+                    primaryMuscle: .sideDelts,
+                    type: .isolation,
+                    equipment: .cable
+                )
+            )
+        }
+
+        let bySession = Dictionary(grouping: manifest, by: { $0.key.sessionId })
+        for (sessionId, items) in bySession {
+            switch items[0].key.workoutKind {
+            case .fixed, .adHoc:
+                context.insert(
+                    Session(
+                        id: sessionId,
+                        cycleInstanceId: UUID(),
+                        cycleDayIndex: 0,
+                        dayLabelSnapshot: items[0].key.workoutKind == .adHoc
+                            ? "Off-Schedule"
+                            : "Push",
+                        finishedAt: .now,
+                        status: .completed,
+                        exportStatus: .success
+                    )
+                )
+            case .adaptive:
+                context.insert(
+                    AdaptiveWorkoutSession(
+                        id: sessionId,
+                        generatedPlanId: UUID(),
+                        finishedAt: .now,
+                        status: .completed,
+                        exportStatus: .success
+                    )
+                )
+            }
+        }
+
+        for item in manifest {
+            for setIndex in 1...item.expectedPerformedSetCount {
+                switch item.key.workoutKind {
+                case .fixed, .adHoc:
+                    context.insert(
+                        SetEntry(
+                            sessionId: item.key.sessionId,
+                            exerciseId: item.key.exerciseId,
+                            setIndex: setIndex,
+                            weight: 10,
+                            reps: 10,
+                            isLocked: true
+                        )
+                    )
+                case .adaptive:
+                    context.insert(
+                        AdaptiveSetEntry(
+                            adaptiveSessionId: item.key.sessionId,
+                            occurrenceId: item.key.occurrenceId!,
+                            exerciseId: item.key.exerciseId,
+                            setIndex: setIndex,
+                            weight: 10,
+                            reps: 10,
+                            isLocked: true
+                        )
+                    )
+                }
+            }
+        }
+        try context.save()
     }
 
     @MainActor

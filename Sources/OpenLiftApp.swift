@@ -61,19 +61,27 @@ struct OpenLiftApp: App {
         if startup.issue == nil, !AppRuntime.isUITesting {
             let modelContext = ModelContext(startup.container)
             do {
-                let report = HistoricalResistanceProfileMigration.audit(
-                    sessions: try modelContext.fetch(FetchDescriptor<Session>()),
-                    setEntries: try modelContext.fetch(FetchDescriptor<SetEntry>()),
-                    adaptiveSessions: try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>()),
-                    adaptiveSetEntries: try modelContext.fetch(FetchDescriptor<AdaptiveSetEntry>()),
-                    exercises: try modelContext.fetch(FetchDescriptor<Exercise>())
+                let result = try HistoricalResistanceProfileMigration.runAtStartup(
+                    modelContext: modelContext
                 )
-                let outcome = try HistoricalResistanceProfileMigration.writeAuditReport(report)
                 print(
-                    "OPENLIFT_VOLTRA_AUDIT candidates=\(report.candidates.count) expected=\(report.expectedCandidateCount) exact=\(report.isExactExpectedCount) status=\(outcome.status.rawValue) file=\(outcome.filename)"
+                    "OPENLIFT_VOLTRA_BACKFILL_RESULT status=\(result.status.rawValue) candidates=\(result.auditedCandidateCount) profiles=\(result.createdProfileCount) sessions=\(result.repairedSessionCount)"
                 )
+                if result.status == .applied {
+                    do {
+                        let exportCount = try SessionExportService.retryPendingCompletedSessionExports(
+                            modelContext: modelContext
+                        )
+                        print("OPENLIFT_VOLTRA_BACKFILL_EXPORT_RESULT successes=\(exportCount)")
+                    } catch {
+                        SessionExportService.scheduleBackgroundExportRetry()
+                        print(
+                            "OPENLIFT_VOLTRA_BACKFILL_EXPORT_FAILED \(error.localizedDescription)"
+                        )
+                    }
+                }
             } catch {
-                print("OPENLIFT_VOLTRA_AUDIT_FAILED \(error.localizedDescription)")
+                print("OPENLIFT_VOLTRA_BACKFILL_FAILED \(error.localizedDescription)")
             }
         }
         return startup

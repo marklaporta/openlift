@@ -28,6 +28,16 @@ preserve every exercise/session/set and create zero profile rows, so legacy
 cable settings remain unknown. The Sherwick audit and reviewed-manifest repair
 are separate from schema migration and never run as a migration stage.
 
+The reviewed Sherwick repair runs only after the V12 store opens successfully.
+Its frozen manifest contains the exact 19 occurrences from the reviewed
+2026-08-04 device audit. Each launch recomputes the source audit and requires an
+exact match on schema/count, occurrence keys, exercise names, performed-set
+counts, and resistance values. It preflights every existing profile before
+inserting any missing rows, so a conflicting row or audit drift fails closed
+without a partial repair. Only sessions receiving a newly inserted profile are
+marked export-pending. Once every exact row exists, the repair is a no-op and
+does not repeatedly dirty completed-session exports.
+
 ## Push/Pull A/B one-time rollout
 
 `BootstrapDataService.preparePushPullABRollout` is an explicit migration
