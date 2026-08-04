@@ -2036,6 +2036,21 @@ enum AdaptiveDoseEvidenceService {
             && ReadinessEagernessResolver.resolve(readinessCheck) != .reluctant
     }
 
+    static func profilesPermitComparison(
+        previousExerciseId: UUID,
+        previousProfile: ResistanceProfileValue?,
+        currentExerciseId: UUID,
+        currentProfile: ResistanceProfileValue?,
+        cableExerciseIds: Set<UUID>
+    ) -> Bool {
+        guard cableExerciseIds.contains(previousExerciseId)
+                || cableExerciseIds.contains(currentExerciseId) else { return true }
+        return ResistanceProfileComparison.compare(
+            current: currentProfile,
+            historical: previousProfile
+        ) == .exact
+    }
+
     static func recommendations(
         program: AdaptiveProgram,
         plans: [GeneratedWorkoutPlan],
@@ -2044,7 +2059,9 @@ enum AdaptiveDoseEvidenceService {
         feedback: [ComplexFeedback],
         adHocFeedback: [AdHocExerciseFeedback],
         overrides: [AdaptiveOverrideEvent],
-        readinessCheck: DailyReadinessCheck
+        readinessCheck: DailyReadinessCheck,
+        cableExerciseIds: Set<UUID> = [],
+        resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> [UUID: [Int: DoseRecommendation]] {
         let planById = Dictionary(uniqueKeysWithValues: plans.map { ($0.id, $0) })
         let completedSessions = sessions
@@ -2077,7 +2094,7 @@ enum AdaptiveDoseEvidenceService {
                     datedFeedback.removeLast()
                 }
 
-                var occurrences: [PerformanceOccurrence] = []
+                var occurrences: [(performance: PerformanceOccurrence, profile: ResistanceProfileValue?)] = []
                 for session in completedSessions {
                     guard let plan = planById[session.generatedPlanId],
                           let complex = plan.complexes.first(where: { $0.sourceDefinitionId == definition.definitionId }),
@@ -2085,9 +2102,11 @@ enum AdaptiveDoseEvidenceService {
                     let rows = setEntries.filter {
                         $0.adaptiveSessionId == session.id && $0.occurrenceId == snapshot.occurrenceId
                     }
+                    let actualExerciseId = rows.first?.exerciseId ?? snapshot.exerciseId
                     occurrences.append(
+                        (
                         PerformanceOccurrence(
-                            exerciseId: rows.first?.exerciseId ?? snapshot.exerciseId,
+                            exerciseId: actualExerciseId,
                             complexDefinitionId: complex.sourceDefinitionId,
                             componentPosition: snapshot.position,
                             isCompleted: true,
@@ -2100,15 +2119,35 @@ enum AdaptiveDoseEvidenceService {
                                     isLocked: $0.isLocked
                                 )
                             }
+                        ),
+                        (try? ResistanceProfileService.profile(
+                            workoutKind: .adaptive,
+                            sessionId: session.id,
+                            exerciseId: actualExerciseId,
+                            occurrenceId: snapshot.occurrenceId,
+                            in: resistanceProfiles
+                        )).flatMap(ResistanceProfileService.value)
                         )
                     )
                 }
                 let latestPerformance: RepeatPerformanceLabel?
                 if occurrences.count >= 2 {
-                    latestPerformance = RepeatPerformanceService.compare(
-                        previous: occurrences[occurrences.count - 2],
-                        current: occurrences[occurrences.count - 1]
-                    ).label
+                    let previous = occurrences[occurrences.count - 2]
+                    let current = occurrences[occurrences.count - 1]
+                    if !profilesPermitComparison(
+                        previousExerciseId: previous.performance.exerciseId,
+                        previousProfile: previous.profile,
+                        currentExerciseId: current.performance.exerciseId,
+                        currentProfile: current.profile,
+                        cableExerciseIds: cableExerciseIds
+                    ) {
+                        latestPerformance = .notComparable
+                    } else {
+                        latestPerformance = RepeatPerformanceService.compare(
+                            previous: previous.performance,
+                            current: current.performance
+                        ).label
+                    }
                 } else {
                     latestPerformance = nil
                 }
@@ -2370,6 +2409,17 @@ struct ExerciseEffortLookupResult: Equatable {
     let cycleName: String?
     let dayLabel: String?
     let rows: [ComparableSetRow]
+    let resistanceProfile: ResistanceProfileValue?
+    let profileComparison: ResistanceProfileComparison
+
+    var isComparable: Bool {
+        profileComparison == .exact
+    }
+}
+
+enum ResistanceProfileLookupRequirement: Equatable {
+    case notApplicable
+    case cable(ResistanceProfileValue?)
 }
 
 /// The one repeat-last lookup used by Fixed Cycle and Adaptive. It copies
@@ -2384,7 +2434,9 @@ enum ExerciseEffortLookupService {
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry]
+        rotationSetEntries: [SetEntry],
+        resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
+        resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> ExerciseEffortLookupResult? {
         let sameDay = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
             guard session.id != excludingSessionId,
@@ -2398,10 +2450,12 @@ enum ExerciseEffortLookupService {
                 session: session,
                 exerciseId: exerciseId,
                 matchKind: .sameCycleDay,
-                entries: rotationSetEntries
+                entries: rotationSetEntries,
+                resistanceRequirement: resistanceRequirement,
+                resistanceProfiles: resistanceProfiles
             )
         }
-        if let result = newest(sameDay) {
+        if let result = preferred(sameDay) {
             return result
         }
         return globalEffort(
@@ -2411,7 +2465,9 @@ enum ExerciseEffortLookupService {
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries
+            rotationSetEntries: rotationSetEntries,
+            resistanceRequirement: resistanceRequirement,
+            resistanceProfiles: resistanceProfiles
         )
     }
 
@@ -2422,23 +2478,24 @@ enum ExerciseEffortLookupService {
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry]
+        rotationSetEntries: [SetEntry],
+        resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
+        resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> ExerciseEffortLookupResult? {
-        let adaptive = adaptiveSessions.compactMap { session -> ExerciseEffortLookupResult? in
+        let adaptive = adaptiveSessions.flatMap { session -> [ExerciseEffortLookupResult] in
             guard session.status == .completed,
                   session.id != excludingSessionId,
                   session.generatedPlanId != excludingPlanId else {
-                return nil
+                return []
             }
-            let rows = adaptiveSetEntries
-                .filter {
+            let occurrenceRows = Dictionary(grouping: adaptiveSetEntries.filter {
                     $0.adaptiveSessionId == session.id
                         && $0.exerciseId == exerciseId
                         && $0.isLocked
                         && $0.reps > 0
-                }
-                .sorted { $0.setIndex < $1.setIndex }
-                .map {
+                }, by: \AdaptiveSetEntry.occurrenceId)
+            return occurrenceRows.map { occurrenceId, entries in
+                let rows = entries.sorted { $0.setIndex < $1.setIndex }.map {
                     ComparableSetRow(
                         setIndex: $0.setIndex,
                         weight: $0.weight,
@@ -2446,16 +2503,25 @@ enum ExerciseEffortLookupService {
                         isLocked: true
                     )
                 }
-            guard !rows.isEmpty else { return nil }
-            return ExerciseEffortLookupResult(
-                sessionId: session.id,
-                completedAt: session.finishedAt ?? session.createdAt,
-                sourceKind: .adaptive,
-                matchKind: .globalLatest,
-                cycleName: nil,
-                dayLabel: nil,
-                rows: rows
-            )
+                let profile = (try? ResistanceProfileService.profile(
+                    workoutKind: .adaptive,
+                    sessionId: session.id,
+                    exerciseId: exerciseId,
+                    occurrenceId: occurrenceId,
+                    in: resistanceProfiles
+                )).flatMap(ResistanceProfileService.value)
+                return ExerciseEffortLookupResult(
+                    sessionId: session.id,
+                    completedAt: session.finishedAt ?? session.createdAt,
+                    sourceKind: .adaptive,
+                    matchKind: .globalLatest,
+                    cycleName: nil,
+                    dayLabel: nil,
+                    rows: rows,
+                    resistanceProfile: profile,
+                    profileComparison: comparison(requirement: resistanceRequirement, historical: profile)
+                )
+            }
         }
 
         let rotation = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
@@ -2464,17 +2530,21 @@ enum ExerciseEffortLookupService {
                 session: session,
                 exerciseId: exerciseId,
                 matchKind: .globalLatest,
-                entries: rotationSetEntries
+                entries: rotationSetEntries,
+                resistanceRequirement: resistanceRequirement,
+                resistanceProfiles: resistanceProfiles
             )
         }
-        return newest(adaptive + rotation)
+        return preferred(adaptive + rotation)
     }
 
     private static func rotationResult(
         session: Session,
         exerciseId: UUID,
         matchKind: ExerciseEffortMatchKind,
-        entries: [SetEntry]
+        entries: [SetEntry],
+        resistanceRequirement: ResistanceProfileLookupRequirement,
+        resistanceProfiles: [ExerciseResistanceProfile]
     ) -> ExerciseEffortLookupResult? {
         guard session.status == .completed else { return nil }
         let rows = entries
@@ -2494,6 +2564,16 @@ enum ExerciseEffortLookupService {
                 )
             }
         guard !rows.isEmpty else { return nil }
+        let kind: ResistanceProfileWorkoutKind = session.dayLabelSnapshot == "Off-Schedule"
+            ? .adHoc
+            : .fixed
+        let profile = (try? ResistanceProfileService.profile(
+            workoutKind: kind,
+            sessionId: session.id,
+            exerciseId: exerciseId,
+            occurrenceId: nil,
+            in: resistanceProfiles
+        )).flatMap(ResistanceProfileService.value)
         return ExerciseEffortLookupResult(
             sessionId: session.id,
             completedAt: session.finishedAt ?? session.createdAt,
@@ -2501,8 +2581,27 @@ enum ExerciseEffortLookupService {
             matchKind: matchKind,
             cycleName: session.cycleNameSnapshot,
             dayLabel: session.dayLabelSnapshot,
-            rows: rows
+            rows: rows,
+            resistanceProfile: profile,
+            profileComparison: comparison(requirement: resistanceRequirement, historical: profile)
         )
+    }
+
+    private static func comparison(
+        requirement: ResistanceProfileLookupRequirement,
+        historical: ResistanceProfileValue?
+    ) -> ResistanceProfileComparison {
+        switch requirement {
+        case .notApplicable: return .exact
+        case .cable(let current):
+            return ResistanceProfileComparison.compare(current: current, historical: historical)
+        }
+    }
+
+    private static func preferred(
+        _ results: [ExerciseEffortLookupResult]
+    ) -> ExerciseEffortLookupResult? {
+        newest(results.filter(\.isComparable)) ?? newest(results)
     }
 
     private static func newest(
@@ -2527,7 +2626,10 @@ enum AdaptivePrefillService {
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry]
+        rotationSetEntries: [SetEntry],
+        currentResistanceProfiles: [UUID: ResistanceProfileValue] = [:],
+        cableExerciseIds: Set<UUID> = [],
+        resistanceProfiles: [ExerciseResistanceProfile] = []
     ) {
         for complex in plan.complexes {
             for exercise in complex.exercises {
@@ -2537,7 +2639,11 @@ enum AdaptivePrefillService {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries
+                    rotationSetEntries: rotationSetEntries,
+                    resistanceRequirement: cableExerciseIds.contains(exercise.exerciseId)
+                        ? .cable(currentResistanceProfiles[exercise.occurrenceId])
+                        : .notApplicable,
+                    resistanceProfiles: resistanceProfiles
                 )
                 if !previous.isEmpty {
                     exercise.prescribedSetCount = previous.count
@@ -2552,7 +2658,9 @@ enum AdaptivePrefillService {
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry]
+        rotationSetEntries: [SetEntry],
+        resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
+        resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> [ComparableSetRow] {
         return latestRows(
             exerciseId: exercise.exerciseId,
@@ -2560,7 +2668,9 @@ enum AdaptivePrefillService {
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries
+            rotationSetEntries: rotationSetEntries,
+            resistanceRequirement: resistanceRequirement,
+            resistanceProfiles: resistanceProfiles
         )
     }
 
@@ -2570,7 +2680,9 @@ enum AdaptivePrefillService {
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry]
+        rotationSetEntries: [SetEntry],
+        resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
+        resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> [ComparableSetRow] {
         ExerciseEffortLookupService.globalEffort(
             exerciseId: exerciseId,
@@ -2578,8 +2690,10 @@ enum AdaptivePrefillService {
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries
-        )?.rows ?? []
+            rotationSetEntries: rotationSetEntries,
+            resistanceRequirement: resistanceRequirement,
+            resistanceProfiles: resistanceProfiles
+        ).flatMap { $0.isComparable ? $0.rows : nil } ?? []
     }
 
     static func prefill(
@@ -2587,7 +2701,10 @@ enum AdaptivePrefillService {
         adaptiveSessions: [AdaptiveWorkoutSession],
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
-        rotationSetEntries: [SetEntry]
+        rotationSetEntries: [SetEntry],
+        currentResistanceProfiles: [UUID: ResistanceProfileValue] = [:],
+        cableExerciseIds: Set<UUID> = [],
+        resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> [UUID: [Int: AdaptiveSetPrefill]] {
         var result: [UUID: [Int: AdaptiveSetPrefill]] = [:]
         for complex in plan.complexes {
@@ -2598,7 +2715,11 @@ enum AdaptivePrefillService {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries
+                    rotationSetEntries: rotationSetEntries,
+                    resistanceRequirement: cableExerciseIds.contains(exercise.exerciseId)
+                        ? .cable(currentResistanceProfiles[exercise.occurrenceId])
+                        : .notApplicable,
+                    resistanceProfiles: resistanceProfiles
                 )
                 guard !previous.isEmpty else { continue }
                 // Preserve the literal qualifying effort, including its exact

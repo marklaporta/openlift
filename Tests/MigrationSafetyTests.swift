@@ -5,7 +5,7 @@ import SwiftData
 import XCTest
 @testable import OpenLift
 
-private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV11
+private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV12
 
 @Model
 private final class UnsupportedMigrationMarker {
@@ -54,7 +54,10 @@ final class MigrationSafetyTests: XCTestCase {
             ObjectIdentifier(FixedCycleReadinessResponse.self)
         ])
 
-        for schema in OpenLiftSchemaMigrationPlan.schemas.dropLast() {
+        // V11's live readiness models are byte-for-byte unchanged in V12; V12
+        // adds only a parallel resistance-profile entity. The changed-type
+        // guard therefore applies through V10, not the immediately prior head.
+        for schema in OpenLiftSchemaMigrationPlan.schemas.dropLast(2) {
             for model in schema.models {
                 XCTAssertFalse(
                     changedLiveModelIdentifiers.contains(ObjectIdentifier(model)),
@@ -70,6 +73,81 @@ final class MigrationSafetyTests: XCTestCase {
             RealDeviceStoreMigrationTargetSchema.versionIdentifier,
             headSchema.versionIdentifier,
             "Update the real-device-store migration target whenever the migration plan gains a schema."
+        )
+    }
+
+    func testV11StoreMigratesToV12WithoutInventingResistanceProfiles() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let storeURL = fixture.working.appendingPathComponent("default.store")
+        let exerciseId = UUID()
+        let sessionId = UUID()
+
+        autoreleasepool {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV11.self)
+            let container = try! ModelContainer(
+                for: schema,
+                configurations: [
+                    ModelConfiguration(
+                        "V11Fixture",
+                        schema: schema,
+                        url: storeURL,
+                        cloudKitDatabase: .none
+                    )
+                ]
+            )
+            let context = ModelContext(container)
+            context.insert(
+                Exercise(
+                    id: exerciseId,
+                    name: "Legacy Cable Exercise",
+                    primaryMuscle: .triceps,
+                    type: .isolation,
+                    equipment: .cable
+                )
+            )
+            context.insert(
+                Session(
+                    id: sessionId,
+                    cycleInstanceId: UUID(),
+                    cycleDayIndex: 0,
+                    finishedAt: .now,
+                    status: .completed
+                )
+            )
+            context.insert(
+                SetEntry(
+                    sessionId: sessionId,
+                    exerciseId: exerciseId,
+                    setIndex: 1,
+                    weight: 40,
+                    reps: 12,
+                    isLocked: true
+                )
+            )
+            try! context.save()
+        }
+
+        let schema = Schema(versionedSchema: OpenLiftSchemaV12.self)
+        let startup = OpenLiftModelContainerFactory.makePersistent(
+            schema: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: ModelConfiguration(
+                "V12Readback",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+        )
+        XCTAssertNil(startup.issue)
+        let context = ModelContext(startup.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Exercise>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 1)
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<ExerciseResistanceProfile>()),
+            0,
+            "Legacy cable work must remain unknown after the lightweight migration."
         )
     }
 

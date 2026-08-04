@@ -1091,10 +1091,10 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         )
         let encodedPayload = try AdaptiveExportService.encode(payload)
         let decoded = try XCTUnwrap(AdaptiveExportService.decode(encodedPayload))
-        XCTAssertEqual(decoded.schema_version, 3)
+        XCTAssertEqual(decoded.schema_version, 4)
         let legacyV2JSON = try XCTUnwrap(String(data: encodedPayload, encoding: .utf8))
             .replacingOccurrences(
-                of: "\"schema_version\" : 3",
+                of: "\"schema_version\" : 4",
                 with: "\"schema_version\" : 2"
             )
         XCTAssertEqual(

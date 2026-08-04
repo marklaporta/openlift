@@ -322,7 +322,7 @@ enum OpenLiftSchemaV10: VersionedSchema {
     ]
 }
 
-/// V11 is the current runtime schema.
+/// V11 makes readiness eagerness systemic.
 enum OpenLiftSchemaV11: VersionedSchema {
     static let versionIdentifier = Schema.Version(11, 0, 0)
 
@@ -341,6 +341,17 @@ enum OpenLiftSchemaV11: VersionedSchema {
     ]
 }
 
+/// Adds occurrence-level cable resistance metadata as a parallel model. No
+/// existing exercise, session, or set entity is changed, so legacy cable work
+/// remains explicitly unknown until an exact occurrence is audited/backfilled.
+enum OpenLiftSchemaV12: VersionedSchema {
+    static let versionIdentifier = Schema.Version(12, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV11.models + [
+        ExerciseResistanceProfile.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
@@ -353,7 +364,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV8.self,
         OpenLiftSchemaV9.self,
         OpenLiftSchemaV10.self,
-        OpenLiftSchemaV11.self
+        OpenLiftSchemaV11.self,
+        OpenLiftSchemaV12.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -396,6 +408,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV10.self,
             toVersion: OpenLiftSchemaV11.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV11.self,
+            toVersion: OpenLiftSchemaV12.self
         )
     ]
 }

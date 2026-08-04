@@ -43,6 +43,10 @@ Fixed Cycle, Adaptive, or ad hoc effort. Adaptive and ad hoc have no stable
 cycle-day identity and use the global newest effort directly. Prefill copies
 the literal completed set count, weights, and reps without conversion.
 
+Cable effort adds one more identity gate: resistance source and the complete
+raw profile must match. Different or unknown profiles are shown as reference
+history but are not silently prefilled or scored against each other.
+
 Legacy Rotation `Session` and `SetEntry` shapes remain unchanged for copied-store
 migration safety. Adaptive planning/execution provenance lives in parallel
 records keyed by stable plan, session, set-entry, and planned-occurrence IDs.
@@ -56,6 +60,20 @@ Relevant logic:
 - export payload writing: [`SessionExportService.swift`](../Sources/SessionExportService.swift)
 
 ## Export Paths
+
+Completed Fixed/ad-hoc exported exercises may carry optional
+`resistance_profile`; Adaptive carries it on each exported occurrence. Fixed
+cycle metadata is schema v3 and Adaptive workout export is schema v4. Older
+payloads still decode, with an absent field remaining unknown. Hydration creates
+a profile only from a complete valid payload.
+
+The audit-first Sherwick migration writes
+`OpenLift/audits/voltra-resistance-profile-audit.json` for the ten allowlisted
+session identities. It never selects by date (the Aug. 3 session was created
+July 29), expects exactly 19 cable occurrences, and records exact occurrence
+keys plus performed-set counts. The reviewed backfill manifest is intentionally
+empty at ship time, so historical mutation fails closed until that report is
+reviewed and an exact manifest is deliberately added.
 
 Completed workouts:
 
