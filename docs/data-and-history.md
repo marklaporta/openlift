@@ -67,13 +67,24 @@ cycle metadata is schema v3 and Adaptive workout export is schema v4. Older
 payloads still decode, with an absent field remaining unknown. Hydration creates
 a profile only from a complete valid payload.
 
-The audit-first Sherwick migration writes
+The audit-first Sherwick migration stage wrote
 `OpenLift/audits/voltra-resistance-profile-audit.json` for the ten allowlisted
 session identities. It never selects by date (the Aug. 3 session was created
 July 29), expects exactly 19 cable occurrences, and records exact occurrence
-keys plus performed-set counts. The reviewed backfill manifest is intentionally
-empty at ship time, so historical mutation fails closed until that report is
-reviewed and an exact manifest is deliberately added.
+keys plus performed-set counts. The device report generated
+`2026-08-04T11:53:19Z` was reviewed and frozen verbatim in
+`HistoricalResistanceProfileMigration.reviewedManifest`: 17 occurrences use
+VOLTRA inverse chains 25% / eccentric 25%, and the two Aug. 3 occurrences use
+inverse chains 70% / eccentric 30%.
+
+On startup, OpenLift recomputes the audit from SwiftData and applies the repair
+only if schema version, expected count, all 19 occurrence identities, exercise
+names, performed-set counts, and intended profiles exactly match the frozen
+manifest. A missing/extra candidate, duplicate key, or conflicting existing
+profile aborts before any insertion. Newly repaired completed sessions are
+marked export-pending and immediately enter the normal export retry path. If
+all 19 exact profiles already exist, startup reports `already_applied`, performs
+no writes, and does not dirty or re-export those sessions again.
 
 Completed workouts:
 
