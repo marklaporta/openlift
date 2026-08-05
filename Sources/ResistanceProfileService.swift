@@ -66,6 +66,7 @@ struct CableResistanceProfileControl: View {
     let occurrenceId: UUID?
     let profile: ExerciseResistanceProfile?
     let profiles: [ExerciseResistanceProfile]
+    let isRequired: Bool
     let isCompletedOccurrence: Bool
     let onError: (String) -> Void
 
@@ -83,6 +84,7 @@ struct CableResistanceProfileControl: View {
         occurrenceId: UUID?,
         profile: ExerciseResistanceProfile?,
         profiles: [ExerciseResistanceProfile],
+        isRequired: Bool = true,
         isCompletedOccurrence: Bool = false,
         onError: @escaping (String) -> Void
     ) {
@@ -92,10 +94,15 @@ struct CableResistanceProfileControl: View {
         self.occurrenceId = occurrenceId
         self.profile = profile
         self.profiles = profiles
+        self.isRequired = isRequired
         self.isCompletedOccurrence = isCompletedOccurrence
         self.onError = onError
         let initial = ResistanceProfileService.value(profile)
-            ?? ResistanceProfileService.lastUsedValue(exerciseId: exerciseId, profiles: profiles)
+            ?? ResistanceProfileService.lastUsedValue(
+                exerciseId: exerciseId,
+                profiles: profiles,
+                allowsGlobalFallback: isRequired
+            )
             ?? .weightStack
         _source = State(initialValue: initial.resistanceSource)
         _chainType = State(initialValue: initial.chainType ?? .inverseChains)
@@ -108,13 +115,14 @@ struct CableResistanceProfileControl: View {
             isEditing = true
         } label: {
             Label(
-                ResistanceProfileService.value(profile)?.displayName ?? "Set Cable Resistance",
+                ResistanceProfileService.value(profile)?.displayName
+                    ?? (isRequired ? "Set Cable Resistance" : "Add Resistance Profile"),
                 systemImage: profile == nil ? "questionmark.circle" : "cable.connector"
             )
             .font(.caption)
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(profile == nil ? .orange : .secondary)
+        .foregroundStyle(profile == nil && isRequired ? .orange : .secondary)
         .sheet(isPresented: $isEditing) {
             NavigationStack {
                 Form {
@@ -149,7 +157,7 @@ struct CableResistanceProfileControl: View {
                         }
                     }
                 }
-                .navigationTitle("Cable Resistance")
+                .navigationTitle("Resistance Profile")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { isEditing = false }
@@ -229,6 +237,7 @@ struct CableResistanceProfileControl: View {
 
 struct CableResistanceProfileDraftControl: View {
     @Binding var value: ResistanceProfileValue?
+    let isRequired: Bool
     @State private var isEditing = false
     @State private var source: ResistanceSource = .weightStack
     @State private var chainType: VOLTRAChainType = .inverseChains
@@ -246,12 +255,12 @@ struct CableResistanceProfileDraftControl: View {
             isEditing = true
         } label: {
             Label(
-                value?.displayName ?? "Set Cable Resistance",
+                value?.displayName ?? (isRequired ? "Set Cable Resistance" : "Add Resistance Profile"),
                 systemImage: value == nil ? "questionmark.circle" : "cable.connector"
             )
             .font(.caption)
         }
-        .foregroundStyle(value == nil ? .orange : .secondary)
+        .foregroundStyle(value == nil && isRequired ? .orange : .secondary)
         .sheet(isPresented: $isEditing) {
             NavigationStack {
                 Form {
@@ -273,7 +282,7 @@ struct CableResistanceProfileDraftControl: View {
                     }
                     Text(draftValue.displayName).foregroundStyle(.secondary)
                 }
-                .navigationTitle("Cable Resistance")
+                .navigationTitle("Resistance Profile")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { isEditing = false }
@@ -329,7 +338,7 @@ enum ResistanceProfileError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .incomplete:
-            return "Choose a complete cable resistance profile."
+            return "Choose a complete resistance profile."
         case .invalidOccurrenceIdentity:
             return "The resistance profile does not identify one performed exercise occurrence."
         case .duplicateOccurrence:
@@ -379,16 +388,18 @@ enum ResistanceProfileService {
         return matches.first
     }
 
-    /// Exercise-specific history wins. The global cable fallback intentionally
-    /// carries Mark's usually-stable VOLTRA setting across movements while
-    /// still making a per-occurrence copy that can later be corrected.
+    /// Exercise-specific history always wins. Callers may opt into the global
+    /// fallback for cable movements; non-cable movements must never inherit an
+    /// unrelated movement's profile.
     static func lastUsedValue(
         exerciseId: UUID,
-        profiles: [ExerciseResistanceProfile]
+        profiles: [ExerciseResistanceProfile],
+        allowsGlobalFallback: Bool = true
     ) -> ResistanceProfileValue? {
         let complete = profiles.filter { value($0) != nil }
         let preferred = complete.filter { $0.exerciseId == exerciseId }
-        return value((preferred.isEmpty ? complete : preferred).max {
+        let candidates = preferred.isEmpty && allowsGlobalFallback ? complete : preferred
+        return value(candidates.max {
             if $0.updatedAt != $1.updatedAt { return $0.updatedAt < $1.updatedAt }
             return $0.id.uuidString < $1.id.uuidString
         })
@@ -519,10 +530,12 @@ enum ResistanceProfileService {
     @MainActor
     static func freezeBeforeLock(
         _ profile: ExerciseResistanceProfile?,
+        required: Bool = true,
         modelContext: ModelContext,
         now: Date = .now
     ) throws {
         guard let profile, value(profile) != nil else {
+            if !required { return }
             throw ResistanceProfileError.profileRequiredBeforeLock
         }
         if profile.frozenAt == nil {
@@ -576,12 +589,21 @@ struct ResistanceProfilePayload: Codable, Equatable, Sendable {
 }
 
 enum HistoricalResistanceProfileMigration {
-    static let expectedCandidateCount = 19
+    static let expectedCandidateCount = 24
+    static let latPulldownExerciseId = UUID(uuidString: "54214942-679D-4CBB-9B27-F78601897BA2")!
     static let preAugust3SessionPrefixes = [
         "8DC5D239", "0DADB7CE", "476348F2", "86B9C09E", "9814E290",
         "D21627D8", "78F895B2", "08476AD8", "887431EA"
     ]
     static let august3SessionId = UUID(uuidString: "FF0623F5-92DF-484A-857F-A4FEFC540AD9")!
+    static let latPulldownSessionIds: Set<UUID> = [
+        UUID(uuidString: "0DADB7CE-573E-477E-8838-E6D69A27ED3C")!,
+        UUID(uuidString: "D21627D8-34D5-4044-990A-6B7C036E230F")!,
+        UUID(uuidString: "08476AD8-9550-4A33-94DF-55B12E6161F2")!,
+        UUID(uuidString: "FBE13920-FF2C-437F-8A38-C09CF1409C09")!,
+        UUID(uuidString: "317EE106-323C-405B-A110-260870F22993")!
+    ]
+    static let latestLatPulldownSessionId = UUID(uuidString: "317EE106-323C-405B-A110-260870F22993")!
 
     struct OccurrenceKey: Codable, Equatable, Hashable, Sendable {
         let workoutKind: ResistanceProfileWorkoutKind
@@ -622,10 +644,11 @@ enum HistoricalResistanceProfileMigration {
         let auditedCandidateCount: Int
         let createdProfileCount: Int
         let repairedSessionCount: Int
+        let repairedSessionIds: Set<UUID>
     }
 
-    /// Frozen from the device audit generated 2026-08-04T11:53:19Z. Do not
-    /// add an occurrence here without a separately reviewed device audit.
+    /// Frozen from the reviewed device audits on 2026-08-04. Do not add an
+    /// occurrence here without a separately reviewed device audit.
     static let reviewedManifest: [ManifestEntry] = [
         manifestEntry(.adaptive, "08476AD8-9550-4A33-94DF-55B12E6161F2", "87A21249-FE4B-4C3E-8F5B-E02944C57263", "ED4C9952-8F7D-42A1-9928-8FF5265463D8", "Chest Supported Cable Row", 3),
         manifestEntry(.adaptive, "0DADB7CE-573E-477E-8838-E6D69A27ED3C", "17BC2F9D-F0A2-4604-AA41-33ADD79ED16B", "D9C9805E-A95A-45F8-B674-7A1FCF639626", "Overhead Single-Arm Cable Extension", 2),
@@ -645,7 +668,12 @@ enum HistoricalResistanceProfileMigration {
         manifestEntry(.adaptive, "D21627D8-34D5-4044-990A-6B7C036E230F", "87A21249-FE4B-4C3E-8F5B-E02944C57263", "E5347F42-3AC1-4817-ABFE-34A858DD921B", "Chest Supported Cable Row", 3),
         manifestEntry(.adaptive, "D21627D8-34D5-4044-990A-6B7C036E230F", "8C24C3C7-EB71-4523-BA0C-BB22B1F8CE7D", "F47ABA45-6FB0-40F3-90F4-433851F29B3D", "Cable Pushdown", 4),
         manifestEntry(.fixed, "FF0623F5-92DF-484A-857F-A4FEFC540AD9", "8C24C3C7-EB71-4523-BA0C-BB22B1F8CE7D", nil, "Cable Pushdown", 3, chainPercent: 70, eccentricPercent: 30),
-        manifestEntry(.fixed, "FF0623F5-92DF-484A-857F-A4FEFC540AD9", "C7CAFFE5-CBF9-44B3-94BA-DE29FD8F94E3", nil, "Cable Lateral Raise", 3, chainPercent: 70, eccentricPercent: 30)
+        manifestEntry(.fixed, "FF0623F5-92DF-484A-857F-A4FEFC540AD9", "C7CAFFE5-CBF9-44B3-94BA-DE29FD8F94E3", nil, "Cable Lateral Raise", 3, chainPercent: 70, eccentricPercent: 30),
+        manifestEntry(.adaptive, "0DADB7CE-573E-477E-8838-E6D69A27ED3C", "54214942-679D-4CBB-9B27-F78601897BA2", "E7045F23-F2CC-4295-B2BC-AEEEC19F72B4", "Lat Pulldown", 2),
+        manifestEntry(.adaptive, "D21627D8-34D5-4044-990A-6B7C036E230F", "54214942-679D-4CBB-9B27-F78601897BA2", "4AACD4E1-DB9F-4BB4-B918-E51415CE3D95", "Lat Pulldown", 3),
+        manifestEntry(.adaptive, "08476AD8-9550-4A33-94DF-55B12E6161F2", "54214942-679D-4CBB-9B27-F78601897BA2", "F77E334D-C843-45C1-84AD-68762C87DA4D", "Lat Pulldown", 3),
+        manifestEntry(.fixed, "FBE13920-FF2C-437F-8A38-C09CF1409C09", "54214942-679D-4CBB-9B27-F78601897BA2", nil, "Lat Pulldown", 3),
+        manifestEntry(.fixed, "317EE106-323C-405B-A110-260870F22993", "54214942-679D-4CBB-9B27-F78601897BA2", nil, "Lat Pulldown", 3, chainPercent: 30, eccentricPercent: 70)
     ]
 
     private static func manifestEntry(
@@ -685,7 +713,9 @@ enum HistoricalResistanceProfileMigration {
     ) -> AuditReport {
         let exerciseById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
         func intended(_ id: UUID) -> ResistanceProfileValue {
-            id == august3SessionId
+            id == latestLatPulldownSessionId
+                ? .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 70)
+                : id == august3SessionId
                 ? .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
                 : .voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
         }
@@ -695,12 +725,17 @@ enum HistoricalResistanceProfileMigration {
         }
 
         var candidates: [Candidate] = []
-        for session in sessions where selected(session.id) {
+        for session in sessions where session.status == .completed
+            && (selected(session.id) || latPulldownSessionIds.contains(session.id)) {
             let grouped = Dictionary(grouping: setEntries.filter {
                 $0.sessionId == session.id && $0.isLocked && $0.reps > 0
             }, by: \SetEntry.exerciseId)
             for (exerciseId, rows) in grouped {
-                guard let exercise = exerciseById[exerciseId], exercise.equipment == .cable else { continue }
+                guard let exercise = exerciseById[exerciseId],
+                      Set(rows.map(\.setIndex)) == Set(1...rows.count),
+                      (selected(session.id) && exercise.equipment == .cable
+                        || latPulldownSessionIds.contains(session.id)
+                            && exerciseId == latPulldownExerciseId) else { continue }
                 candidates.append(
                     Candidate(
                         key: OccurrenceKey(
@@ -716,14 +751,19 @@ enum HistoricalResistanceProfileMigration {
                 )
             }
         }
-        for session in adaptiveSessions where selected(session.id) {
+        for session in adaptiveSessions where session.status == .completed
+            && (selected(session.id) || latPulldownSessionIds.contains(session.id)) {
             let grouped = Dictionary(grouping: adaptiveSetEntries.filter {
                 $0.adaptiveSessionId == session.id && $0.isLocked && $0.reps > 0
             }, by: \AdaptiveSetEntry.occurrenceId)
             for (occurrenceId, rows) in grouped {
                 guard let exerciseId = rows.first?.exerciseId,
+                      rows.allSatisfy({ $0.exerciseId == exerciseId }),
+                      Set(rows.map(\.setIndex)) == Set(1...rows.count),
                       let exercise = exerciseById[exerciseId],
-                      exercise.equipment == .cable else { continue }
+                      (selected(session.id) && exercise.equipment == .cable
+                        || latPulldownSessionIds.contains(session.id)
+                            && exerciseId == latPulldownExerciseId) else { continue }
                 candidates.append(
                     Candidate(
                         key: OccurrenceKey(
@@ -778,6 +818,10 @@ enum HistoricalResistanceProfileMigration {
         modelContext: ModelContext,
         now: Date = .now
     ) throws -> ApplicationResult {
+        let existingProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        if let complete = try alreadyAppliedResult(existingProfiles: existingProfiles) {
+            return complete
+        }
         let report = audit(
             sessions: try modelContext.fetch(FetchDescriptor<Session>()),
             setEntries: try modelContext.fetch(FetchDescriptor<SetEntry>()),
@@ -788,9 +832,33 @@ enum HistoricalResistanceProfileMigration {
         )
         return try applyReviewedManifest(
             audit: report,
-            existingProfiles: try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>()),
+            existingProfiles: existingProfiles,
             modelContext: modelContext,
             now: now
+        )
+    }
+
+    private static func alreadyAppliedResult(
+        existingProfiles: [ExerciseResistanceProfile]
+    ) throws -> ApplicationResult? {
+        for item in reviewedManifest {
+            guard let existing = try ResistanceProfileService.profile(
+                workoutKind: item.key.workoutKind,
+                sessionId: item.key.sessionId,
+                exerciseId: item.key.exerciseId,
+                occurrenceId: item.key.occurrenceId,
+                in: existingProfiles
+            ) else { return nil }
+            guard ResistanceProfileService.value(existing) == item.profile else {
+                throw ResistanceProfileError.conflictingExistingProfile
+            }
+        }
+        return ApplicationResult(
+            status: .alreadyApplied,
+            auditedCandidateCount: expectedCandidateCount,
+            createdProfileCount: 0,
+            repairedSessionCount: 0,
+            repairedSessionIds: []
         )
     }
 
@@ -858,12 +926,16 @@ enum HistoricalResistanceProfileMigration {
                 status: .alreadyApplied,
                 auditedCandidateCount: report.candidates.count,
                 createdProfileCount: 0,
-                repairedSessionCount: 0
+                repairedSessionCount: 0,
+                repairedSessionIds: []
             )
         }
 
         do {
             for item in missingItems {
+                let profileNow = item.key.sessionId == latestLatPulldownSessionId
+                    ? now
+                    : now.addingTimeInterval(-1)
                 let created = try ResistanceProfileService.create(
                     workoutKind: item.key.workoutKind,
                     sessionId: item.key.sessionId,
@@ -872,7 +944,7 @@ enum HistoricalResistanceProfileMigration {
                     value: item.profile,
                     profiles: existingProfiles,
                     modelContext: modelContext,
-                    now: now
+                    now: profileNow
                 )
                 created.frozenAt = now
             }
@@ -890,7 +962,8 @@ enum HistoricalResistanceProfileMigration {
                 status: .applied,
                 auditedCandidateCount: report.candidates.count,
                 createdProfileCount: missingItems.count,
-                repairedSessionCount: repairedSessionIds.count
+                repairedSessionCount: repairedSessionIds.count,
+                repairedSessionIds: repairedSessionIds
             )
         } catch {
             modelContext.rollback()

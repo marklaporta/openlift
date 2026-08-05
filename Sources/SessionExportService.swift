@@ -57,6 +57,17 @@ enum SessionExportService {
         }
     }
 
+    enum CompletedSessionRetryError: LocalizedError {
+        case sessionMissing(UUID)
+
+        var errorDescription: String? {
+            switch self {
+            case .sessionMissing(let id):
+                return "Completed session \(id.uuidString) is missing."
+            }
+        }
+    }
+
     @MainActor
     @discardableResult
     static func retryPendingCompletedSessionExports(
@@ -142,6 +153,73 @@ enum SessionExportService {
         return retryableSessions.filter { $0.exportStatus == .success }.count
             + adaptiveSuccessCount
             + readinessSuccessCount
+    }
+
+    /// Retries exactly one completed fixed-cycle or ad-hoc session. Historical
+    /// repairs use this so unrelated pending exports and diagnostics stay put.
+    @MainActor
+    @discardableResult
+    static func retryCompletedSessionExport(
+        sessionId: UUID,
+        modelContext: ModelContext,
+        environment: ExportEnvironment = .live()
+    ) throws -> ExportWriteOutcome {
+        let sessions = try modelContext.fetch(FetchDescriptor<Session>())
+        guard let session = sessions.first(where: {
+            $0.id == sessionId && $0.status == .completed
+        }) else { throw CompletedSessionRetryError.sessionMissing(sessionId) }
+        let activeCycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+        let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let setEntries = try modelContext.fetch(FetchDescriptor<SetEntry>())
+        let adHocFeedback = try modelContext.fetch(FetchDescriptor<AdHocExerciseFeedback>())
+        let fixedReadiness = try modelContext.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
+        let fixedOverrides = try modelContext.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>())
+        let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
+        let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        let cycleName = exportCycleName(
+            for: session,
+            activeCycles: activeCycles,
+            templates: templates
+        )
+        let fixedTemplate = activeCycles
+            .first(where: { $0.id == session.cycleInstanceId })
+            .flatMap { cycle in templates.first(where: { $0.id == cycle.templateId }) }
+            ?? templates.first(where: {
+                $0.name.caseInsensitiveCompare(session.cycleNameSnapshot ?? "") == .orderedSame
+            })
+        let fixedMetadata: FixedCycleMetadata?
+        if session.dayLabelSnapshot != "Off-Schedule", let fixedTemplate {
+            let days = CycleOrdering.sortedDays(fixedTemplate.days)
+            fixedMetadata = days.indices.contains(session.cycleDayIndex)
+                ? fixedCycleMetadata(
+                    session: session,
+                    template: fixedTemplate,
+                    day: days[session.cycleDayIndex],
+                    exercises: exercises,
+                    setEntries: setEntries,
+                    readiness: fixedReadiness,
+                    overrides: fixedOverrides,
+                    snapshots: fixedSnapshots
+                )
+                : nil
+        } else {
+            fixedMetadata = nil
+        }
+        return try exportAndTrack(
+            session: session,
+            cycleName: cycleName,
+            exercises: exercises,
+            setEntries: setEntries.filter {
+                $0.sessionId == session.id && $0.reps > 0 && $0.isLocked
+            },
+            requireICloudMirror: true,
+            adHocFeedback: adHocFeedback.filter { $0.sessionId == session.id },
+            fixedCycleMetadata: fixedMetadata,
+            resistanceProfiles: resistanceProfiles,
+            modelContext: modelContext,
+            environment: environment
+        )
     }
 
     @MainActor
