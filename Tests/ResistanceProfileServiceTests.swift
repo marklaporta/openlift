@@ -705,7 +705,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testStageTwoAddsOnlyFiveProfilesAndDirtiesOnlyTheirFiveSessions() throws {
+    func testStageThreeAddsOnlyFiveProfilesAndDirtiesOnlyTheirFiveSessions() throws {
         let (context, _) = makeContext()
         try insertExactAuditedHistory(into: context)
         let originalDate = Date(timeIntervalSince1970: 1_700_000_000)

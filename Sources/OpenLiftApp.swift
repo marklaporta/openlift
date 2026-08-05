@@ -72,6 +72,7 @@ struct OpenLiftApp: App {
                         try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>()).map(\.id)
                     )
                     var successes = 0
+                    var hadFailure = false
                     for sessionId in result.repairedSessionIds {
                         do {
                             if adaptiveIds.contains(sessionId) {
@@ -87,10 +88,14 @@ struct OpenLiftApp: App {
                             }
                             successes += 1
                         } catch {
+                            hadFailure = true
                             print(
                                 "OPENLIFT_VOLTRA_BACKFILL_EXPORT_FAILED session=\(sessionId.uuidString) \(error.localizedDescription)"
                             )
                         }
+                    }
+                    if hadFailure {
+                        SessionExportService.scheduleBackgroundExportRetry()
                     }
                     print("OPENLIFT_VOLTRA_BACKFILL_EXPORT_RESULT successes=\(successes)")
                 }

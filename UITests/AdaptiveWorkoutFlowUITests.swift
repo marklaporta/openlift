@@ -142,17 +142,19 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
         XCTAssertTrue(addedAfterFreeze.waitForExistence(timeout: 5))
         addedAfterFreeze.tap()
         XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
-        let editFrozen = app.buttons["Edit Flat Dumbbell Press"].firstMatch
+        let editFrozen = app.descendants(matching: .any)["Edit Flat Dumbbell Press"].firstMatch
         scrollToElement(editFrozen, in: app)
         editFrozen.tap()
         app.buttons["Move Earlier"].tap()
-        app.buttons["Edit Flat Dumbbell Press"].firstMatch.tap()
+        let editMoved = app.descendants(matching: .any)["Edit Flat Dumbbell Press"].firstMatch
+        scrollToElement(editMoved, in: app)
+        editMoved.tap()
         app.buttons["Skip"].tap()
         let restoreAddedAfterFreeze = app.buttons["Restore Flat Dumbbell Press"].firstMatch
         scrollToElement(restoreAddedAfterFreeze, in: app)
         restoreAddedAfterFreeze.tap()
         XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
-        let editRestored = app.buttons["Edit Flat Dumbbell Press"].firstMatch
+        let editRestored = app.descendants(matching: .any)["Edit Flat Dumbbell Press"].firstMatch
         scrollToElement(editRestored, in: app)
         editRestored.tap()
         app.buttons["Skip"].tap()
