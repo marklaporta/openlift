@@ -54,8 +54,11 @@ struct LogWorkoutView: View {
                             newExerciseRequest = NewExerciseRequest(draftId: exerciseDraft.id)
                         }
 
-                        if exercises.first(where: { $0.id == exerciseDraft.exerciseId })?.equipment == .cable {
-                            CableResistanceProfileDraftControl(value: $exerciseDraft.resistanceProfile)
+                        if let exercise = exercises.first(where: { $0.id == exerciseDraft.exerciseId }) {
+                            CableResistanceProfileDraftControl(
+                                value: $exerciseDraft.resistanceProfile,
+                                isRequired: exercise.equipment == .cable
+                            )
                         }
 
                         ForEach($exerciseDraft.sets) { $set in
@@ -207,7 +210,7 @@ struct LogWorkoutView: View {
         .sheet(item: $historyContext) { context in
             ExerciseHistorySheet(
                 exerciseName: context.exerciseName,
-                showsResistanceProfile: exercises.first(where: { $0.id == context.exerciseId })?.equipment == .cable,
+                showsResistanceProfile: resistanceProfiles.contains { $0.exerciseId == context.exerciseId },
                 efforts: recentEfforts(exerciseId: context.exerciseId, exerciseName: context.exerciseName)
             )
         }
@@ -358,10 +361,12 @@ struct LogWorkoutView: View {
             var insertedFeedback: [AdHocExerciseFeedback] = []
             var insertedProfiles: [ExerciseResistanceProfile] = []
             for exerciseInput in cleanedExercises {
-                if exercises.first(where: { $0.id == exerciseInput.exerciseId })?.equipment == .cable {
-                    guard let value = exerciseInput.resistanceProfile, value.isComplete else {
-                        throw LogWorkoutError.resistanceProfileRequired
-                    }
+                let isCable = exercises.first(where: { $0.id == exerciseInput.exerciseId })?.equipment == .cable
+                if isCable && exerciseInput.resistanceProfile == nil {
+                    throw LogWorkoutError.resistanceProfileRequired
+                }
+                if let value = exerciseInput.resistanceProfile {
+                    guard value.isComplete else { throw LogWorkoutError.resistanceProfileRequired }
                     let profile = ExerciseResistanceProfile(
                         workoutKind: .adHoc,
                         sessionId: session.id,
@@ -445,10 +450,11 @@ struct LogWorkoutView: View {
     }
 
     private func defaultResistanceProfile(for exerciseId: UUID) -> ResistanceProfileValue? {
-        guard exercises.first(where: { $0.id == exerciseId })?.equipment == .cable else { return nil }
+        let isCable = exercises.first(where: { $0.id == exerciseId })?.equipment == .cable
         return ResistanceProfileService.lastUsedValue(
             exerciseId: exerciseId,
-            profiles: resistanceProfiles
+            profiles: resistanceProfiles,
+            allowsGlobalFallback: isCable
         )
     }
 
@@ -519,10 +525,11 @@ struct LogWorkoutView: View {
         exerciseId: UUID,
         exerciseName: String
     ) -> [ExerciseEffort] {
-        guard exercises.first(where: { $0.id == exerciseId })?.equipment == .cable else {
+        let isCable = exercises.first(where: { $0.id == exerciseId })?.equipment == .cable
+        guard let current = defaultResistanceProfile(for: exerciseId) else {
+            if isCable { return [] }
             return recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName)
         }
-        guard let current = defaultResistanceProfile(for: exerciseId) else { return [] }
         return recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName).filter { effort in
             guard let sessionId = UUID(uuidString: effort.id),
                   let profile = resistanceProfiles.first(where: {

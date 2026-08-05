@@ -96,6 +96,24 @@ final class ResistanceProfileServiceTests: XCTestCase {
                 cableExerciseIds: [substitutedCableExerciseId]
             )
         )
+        XCTAssertFalse(
+            AdaptiveDoseEvidenceService.profilesPermitComparison(
+                previousExerciseId: configuredNonCableExerciseId,
+                previousProfile: baseline,
+                currentExerciseId: configuredNonCableExerciseId,
+                currentProfile: changed,
+                cableExerciseIds: []
+            )
+        )
+        XCTAssertTrue(
+            AdaptiveDoseEvidenceService.profilesPermitComparison(
+                previousExerciseId: configuredNonCableExerciseId,
+                previousProfile: baseline,
+                currentExerciseId: configuredNonCableExerciseId,
+                currentProfile: baseline,
+                cableExerciseIds: []
+            )
+        )
     }
 
     @MainActor
@@ -379,6 +397,43 @@ final class ResistanceProfileServiceTests: XCTestCase {
             ),
             ResistanceProfileService.value(global)
         )
+        XCTAssertNil(
+            ResistanceProfileService.lastUsedValue(
+                exerciseId: UUID(),
+                profiles: [global, exact],
+                allowsGlobalFallback: false
+            )
+        )
+    }
+
+    @MainActor
+    func testNonCableProfileIsOptionalButAnExistingProfileFreezesBeforeFirstSet() throws {
+        let (context, _) = makeContext()
+        try ResistanceProfileService.freezeBeforeLock(
+            nil,
+            required: false,
+            modelContext: context
+        )
+        XCTAssertThrowsError(
+            try ResistanceProfileService.freezeBeforeLock(nil, modelContext: context)
+        ) { error in
+            XCTAssertEqual(error as? ResistanceProfileError, .profileRequiredBeforeLock)
+        }
+        let profile = try ResistanceProfileService.create(
+            workoutKind: .fixed,
+            sessionId: UUID(),
+            exerciseId: UUID(),
+            value: .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 70),
+            profiles: [],
+            modelContext: context
+        )
+        try ResistanceProfileService.freezeBeforeLock(
+            profile,
+            required: false,
+            modelContext: context,
+            now: Date(timeIntervalSince1970: 123)
+        )
+        XCTAssertEqual(profile.frozenAt, Date(timeIntervalSince1970: 123))
     }
 
     func testRepeatLastPrefersOlderExactProfileOverNewerDifferentProfile() {
@@ -454,7 +509,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         let report = HistoricalResistanceProfileMigration.AuditReport(
             schemaVersion: 1,
             generatedAt: .now,
-            expectedCandidateCount: 19,
+            expectedCandidateCount: 24,
             candidates: [],
             isExactExpectedCount: false
         )
@@ -472,8 +527,8 @@ final class ResistanceProfileServiceTests: XCTestCase {
 
     func testReviewedManifestExactlyMatchesTheDeviceAudit() {
         let manifest = HistoricalResistanceProfileMigration.reviewedManifest
-        XCTAssertEqual(manifest.count, 19)
-        XCTAssertEqual(Set(manifest.map(\.key.sessionId)).count, 10)
+        XCTAssertEqual(manifest.count, 24)
+        XCTAssertEqual(Set(manifest.map(\.key.sessionId)).count, 12)
 
         let expectedIdentityAndCounts = [
             "adaptive|08476AD8-9550-4A33-94DF-55B12E6161F2|87A21249-FE4B-4C3E-8F5B-E02944C57263|ED4C9952-8F7D-42A1-9928-8FF5265463D8|3",
@@ -494,15 +549,27 @@ final class ResistanceProfileServiceTests: XCTestCase {
             "adaptive|D21627D8-34D5-4044-990A-6B7C036E230F|87A21249-FE4B-4C3E-8F5B-E02944C57263|E5347F42-3AC1-4817-ABFE-34A858DD921B|3",
             "adaptive|D21627D8-34D5-4044-990A-6B7C036E230F|8C24C3C7-EB71-4523-BA0C-BB22B1F8CE7D|F47ABA45-6FB0-40F3-90F4-433851F29B3D|4",
             "fixed|FF0623F5-92DF-484A-857F-A4FEFC540AD9|8C24C3C7-EB71-4523-BA0C-BB22B1F8CE7D|-|3",
-            "fixed|FF0623F5-92DF-484A-857F-A4FEFC540AD9|C7CAFFE5-CBF9-44B3-94BA-DE29FD8F94E3|-|3"
+            "fixed|FF0623F5-92DF-484A-857F-A4FEFC540AD9|C7CAFFE5-CBF9-44B3-94BA-DE29FD8F94E3|-|3",
+            "adaptive|0DADB7CE-573E-477E-8838-E6D69A27ED3C|54214942-679D-4CBB-9B27-F78601897BA2|E7045F23-F2CC-4295-B2BC-AEEEC19F72B4|2",
+            "adaptive|D21627D8-34D5-4044-990A-6B7C036E230F|54214942-679D-4CBB-9B27-F78601897BA2|4AACD4E1-DB9F-4BB4-B918-E51415CE3D95|3",
+            "adaptive|08476AD8-9550-4A33-94DF-55B12E6161F2|54214942-679D-4CBB-9B27-F78601897BA2|F77E334D-C843-45C1-84AD-68762C87DA4D|3",
+            "fixed|FBE13920-FF2C-437F-8A38-C09CF1409C09|54214942-679D-4CBB-9B27-F78601897BA2|-|3",
+            "fixed|317EE106-323C-405B-A110-260870F22993|54214942-679D-4CBB-9B27-F78601897BA2|-|3"
         ]
         XCTAssertEqual(manifest.map(manifestIdentityAndCount), expectedIdentityAndCounts)
-        XCTAssertTrue(manifest.dropLast(2).allSatisfy {
+        XCTAssertTrue(manifest.prefix(17).allSatisfy {
             $0.profile == .voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
         })
-        XCTAssertTrue(manifest.suffix(2).allSatisfy {
+        XCTAssertTrue(manifest[17..<19].allSatisfy {
             $0.profile == .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
         })
+        XCTAssertTrue(manifest[19..<23].allSatisfy {
+            $0.profile == .voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
+        })
+        XCTAssertEqual(
+            manifest.last?.profile,
+            .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 70)
+        )
         XCTAssertEqual(
             manifest.map(\.exerciseName),
             [
@@ -524,7 +591,12 @@ final class ResistanceProfileServiceTests: XCTestCase {
                 "Chest Supported Cable Row",
                 "Cable Pushdown",
                 "Cable Pushdown",
-                "Cable Lateral Raise"
+                "Cable Lateral Raise",
+                "Lat Pulldown",
+                "Lat Pulldown",
+                "Lat Pulldown",
+                "Lat Pulldown",
+                "Lat Pulldown"
             ]
         )
     }
@@ -546,7 +618,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         let report = HistoricalResistanceProfileMigration.AuditReport(
             schemaVersion: 1,
             generatedAt: .now,
-            expectedCandidateCount: 19,
+            expectedCandidateCount: 24,
             candidates: candidates,
             isExactExpectedCount: true
         )
@@ -602,11 +674,12 @@ final class ResistanceProfileServiceTests: XCTestCase {
             now: appliedAt
         )
         XCTAssertEqual(first.status, .applied)
-        XCTAssertEqual(first.auditedCandidateCount, 19)
-        XCTAssertEqual(first.createdProfileCount, 19)
-        XCTAssertEqual(first.repairedSessionCount, 10)
+        XCTAssertEqual(first.auditedCandidateCount, 24)
+        XCTAssertEqual(first.createdProfileCount, 24)
+        XCTAssertEqual(first.repairedSessionCount, 12)
+        XCTAssertEqual(first.repairedSessionIds.count, 12)
         let profiles = try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
-        XCTAssertEqual(profiles.count, 19)
+        XCTAssertEqual(profiles.count, 24)
         XCTAssertTrue(profiles.allSatisfy { $0.frozenAt == appliedAt })
 
         let fixedSessions = try context.fetch(FetchDescriptor<Session>())
@@ -622,12 +695,215 @@ final class ResistanceProfileServiceTests: XCTestCase {
             now: appliedAt.addingTimeInterval(60)
         )
         XCTAssertEqual(second.status, .alreadyApplied)
-        XCTAssertEqual(second.auditedCandidateCount, 19)
+        XCTAssertEqual(second.auditedCandidateCount, 24)
         XCTAssertEqual(second.createdProfileCount, 0)
         XCTAssertEqual(second.repairedSessionCount, 0)
+        XCTAssertTrue(second.repairedSessionIds.isEmpty)
         XCTAssertTrue(fixedSessions.allSatisfy { $0.exportStatus == .success })
         XCTAssertTrue(adaptiveSessions.allSatisfy { $0.exportStatus == .success })
-        XCTAssertEqual(try context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).count, 19)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).count, 24)
+    }
+
+    @MainActor
+    func testStageTwoAddsOnlyFiveProfilesAndDirtiesOnlyTheirFiveSessions() throws {
+        let (context, _) = makeContext()
+        try insertExactAuditedHistory(into: context)
+        let originalDate = Date(timeIntervalSince1970: 1_700_000_000)
+        for item in HistoricalResistanceProfileMigration.reviewedManifest.prefix(19) {
+            let profile = ExerciseResistanceProfile(
+                workoutKind: item.key.workoutKind,
+                sessionId: item.key.sessionId,
+                exerciseId: item.key.exerciseId,
+                occurrenceId: item.key.occurrenceId,
+                resistanceSource: item.profile.resistanceSource,
+                chainType: item.profile.chainType,
+                chainPercent: item.profile.chainPercent,
+                eccentricPercent: item.profile.eccentricPercent,
+                frozenAt: originalDate,
+                createdAt: originalDate,
+                updatedAt: originalDate
+            )
+            context.insert(profile)
+        }
+        try context.save()
+
+        let appliedAt = originalDate.addingTimeInterval(100)
+        let result = try HistoricalResistanceProfileMigration.runAtStartup(
+            modelContext: context,
+            now: appliedAt
+        )
+        let expectedRepaired = Set(
+            HistoricalResistanceProfileMigration.reviewedManifest.suffix(5).map(\.key.sessionId)
+        )
+        XCTAssertEqual(result.status, .applied)
+        XCTAssertEqual(result.createdProfileCount, 5)
+        XCTAssertEqual(result.repairedSessionCount, 5)
+        XCTAssertEqual(result.repairedSessionIds, expectedRepaired)
+
+        let profiles = try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        XCTAssertEqual(profiles.count, 24)
+        let oldKeys = Set(HistoricalResistanceProfileMigration.reviewedManifest.prefix(19).map(\.key))
+        let oldProfiles = profiles.filter {
+            oldKeys.contains(
+                .init(
+                    workoutKind: $0.workoutKind,
+                    sessionId: $0.sessionId,
+                    exerciseId: $0.exerciseId,
+                    occurrenceId: $0.occurrenceId
+                )
+            )
+        }
+        XCTAssertEqual(oldProfiles.count, 19)
+        XCTAssertTrue(oldProfiles.allSatisfy {
+            $0.createdAt == originalDate
+                && $0.updatedAt == originalDate
+                && $0.frozenAt == originalDate
+        })
+        XCTAssertEqual(
+            ResistanceProfileService.lastUsedValue(
+                exerciseId: HistoricalResistanceProfileMigration.latPulldownExerciseId,
+                profiles: profiles,
+                allowsGlobalFallback: false
+            ),
+            .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 70)
+        )
+
+        let fixedSessions = try context.fetch(FetchDescriptor<Session>())
+        let adaptiveSessions = try context.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+        let pendingIds = Set(fixedSessions.filter { $0.exportStatus == .pending }.map(\.id))
+            .union(adaptiveSessions.filter { $0.exportStatus == .pending }.map(\.id))
+        XCTAssertEqual(pendingIds, expectedRepaired)
+    }
+
+    @MainActor
+    func testCompletedMarkerMakesLaterUnreviewedLatOccurrenceHarmless() throws {
+        let (context, _) = makeContext()
+        try insertExactAuditedHistory(into: context)
+        _ = try HistoricalResistanceProfileMigration.runAtStartup(modelContext: context)
+        let selectedSession = HistoricalResistanceProfileMigration.reviewedManifest
+            .first(where: { $0.key.workoutKind == .adaptive })!.key.sessionId
+        let extraOccurrence = UUID()
+        context.insert(
+            AdaptiveSetEntry(
+                adaptiveSessionId: selectedSession,
+                occurrenceId: extraOccurrence,
+                exerciseId: HistoricalResistanceProfileMigration.latPulldownExerciseId,
+                setIndex: 1,
+                weight: 90,
+                reps: 8,
+                isLocked: true
+            )
+        )
+        try context.save()
+
+        let second = try HistoricalResistanceProfileMigration.runAtStartup(modelContext: context)
+        XCTAssertEqual(second.status, .alreadyApplied)
+        XCTAssertEqual(second.createdProfileCount, 0)
+    }
+
+    func testAuditIncludesOnlyReviewedLatIdentityAndRejectsMalformedRows() {
+        let lat = Exercise(
+            id: HistoricalResistanceProfileMigration.latPulldownExerciseId,
+            name: "Lat Pulldown",
+            primaryMuscle: .back,
+            type: .compound,
+            equipment: .machine
+        )
+        let unrelated = Exercise(
+            name: "Leg Press",
+            primaryMuscle: .quads,
+            type: .compound,
+            equipment: .machine
+        )
+        let reviewedSessionId = UUID(uuidString: "FBE13920-FF2C-437F-8A38-C09CF1409C09")!
+        let reviewed = Session(
+            id: reviewedSessionId,
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            status: .completed
+        )
+        let incomplete = Session(
+            id: UUID(uuidString: "317EE106-323C-405B-A110-260870F22993")!,
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            status: .draft
+        )
+        let unreviewed = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            status: .completed
+        )
+        let rows = (1...3).map {
+            SetEntry(
+                sessionId: reviewedSessionId,
+                exerciseId: lat.id,
+                setIndex: $0,
+                weight: 90,
+                reps: 10,
+                isLocked: true
+            )
+        } + [
+            SetEntry(sessionId: reviewedSessionId, exerciseId: unrelated.id, setIndex: 1, weight: 200, reps: 10, isLocked: true),
+            SetEntry(sessionId: incomplete.id, exerciseId: lat.id, setIndex: 1, weight: 90, reps: 10, isLocked: true),
+            SetEntry(sessionId: unreviewed.id, exerciseId: lat.id, setIndex: 1, weight: 90, reps: 10, isLocked: true)
+        ]
+        let report = HistoricalResistanceProfileMigration.audit(
+            sessions: [reviewed, incomplete, unreviewed],
+            setEntries: rows,
+            adaptiveSessions: [],
+            adaptiveSetEntries: [],
+            exercises: [lat, unrelated]
+        )
+        XCTAssertEqual(report.candidates.map(\.key.exerciseId), [lat.id])
+        XCTAssertEqual(report.candidates.first?.performedSetCount, 3)
+
+        let malformed = HistoricalResistanceProfileMigration.audit(
+            sessions: [reviewed],
+            setEntries: [
+                SetEntry(sessionId: reviewedSessionId, exerciseId: lat.id, setIndex: 1, weight: 90, reps: 10, isLocked: true),
+                SetEntry(sessionId: reviewedSessionId, exerciseId: lat.id, setIndex: 3, weight: 90, reps: 10, isLocked: true),
+                SetEntry(sessionId: reviewedSessionId, exerciseId: lat.id, setIndex: 3, weight: 90, reps: 10, isLocked: true)
+            ],
+            adaptiveSessions: [],
+            adaptiveSetEntries: [],
+            exercises: [lat]
+        )
+        XCTAssertTrue(malformed.candidates.isEmpty)
+
+        let adaptiveId = UUID(uuidString: "0DADB7CE-573E-477E-8838-E6D69A27ED3C")!
+        let adaptive = AdaptiveWorkoutSession(
+            id: adaptiveId,
+            generatedPlanId: UUID(),
+            status: .completed
+        )
+        let mixedOccurrence = UUID()
+        let mixed = HistoricalResistanceProfileMigration.audit(
+            sessions: [],
+            setEntries: [],
+            adaptiveSessions: [adaptive],
+            adaptiveSetEntries: [
+                AdaptiveSetEntry(
+                    adaptiveSessionId: adaptiveId,
+                    occurrenceId: mixedOccurrence,
+                    exerciseId: lat.id,
+                    setIndex: 1,
+                    weight: 90,
+                    reps: 10,
+                    isLocked: true
+                ),
+                AdaptiveSetEntry(
+                    adaptiveSessionId: adaptiveId,
+                    occurrenceId: mixedOccurrence,
+                    exerciseId: unrelated.id,
+                    setIndex: 2,
+                    weight: 90,
+                    reps: 10,
+                    isLocked: true
+                )
+            ],
+            exercises: [lat, unrelated]
+        )
+        XCTAssertTrue(mixed.candidates.isEmpty)
     }
 
     func testFixedExportRoundTripPreservesOptionalProfileAndLegacyUnknown() throws {
@@ -641,8 +917,8 @@ final class ResistanceProfileServiceTests: XCTestCase {
             date: ISO8601DateFormatter().string(from: .now),
             exercises: [
                 .init(
-                    exercise_name: "Cable Lateral Raise",
-                    muscle: "sideDelts",
+                    exercise_name: "Lat Pulldown",
+                    muscle: "back",
                     sets: [.init(set_index: 1, weight: 5, reps: 15)],
                     resistance_profile: profile
                 )
@@ -688,7 +964,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         return HistoricalResistanceProfileMigration.AuditReport(
             schemaVersion: 1,
             generatedAt: .now,
-            expectedCandidateCount: 19,
+            expectedCandidateCount: 24,
             candidates: candidates,
             isExactExpectedCount: true
         )
@@ -705,7 +981,9 @@ final class ResistanceProfileServiceTests: XCTestCase {
                     name: item.exerciseName,
                     primaryMuscle: .sideDelts,
                     type: .isolation,
-                    equipment: .cable
+                    equipment: item.key.exerciseId == HistoricalResistanceProfileMigration.latPulldownExerciseId
+                        ? .machine
+                        : .cable
                 )
             )
         }

@@ -68,17 +68,31 @@ struct OpenLiftApp: App {
                     "OPENLIFT_VOLTRA_BACKFILL_RESULT status=\(result.status.rawValue) candidates=\(result.auditedCandidateCount) profiles=\(result.createdProfileCount) sessions=\(result.repairedSessionCount)"
                 )
                 if result.status == .applied {
-                    do {
-                        let exportCount = try SessionExportService.retryPendingCompletedSessionExports(
-                            modelContext: modelContext
-                        )
-                        print("OPENLIFT_VOLTRA_BACKFILL_EXPORT_RESULT successes=\(exportCount)")
-                    } catch {
-                        SessionExportService.scheduleBackgroundExportRetry()
-                        print(
-                            "OPENLIFT_VOLTRA_BACKFILL_EXPORT_FAILED \(error.localizedDescription)"
-                        )
+                    let adaptiveIds = Set(
+                        try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>()).map(\.id)
+                    )
+                    var successes = 0
+                    for sessionId in result.repairedSessionIds {
+                        do {
+                            if adaptiveIds.contains(sessionId) {
+                                _ = try AdaptiveExportService.retryCompletedSessionExport(
+                                    sessionId: sessionId,
+                                    modelContext: modelContext
+                                )
+                            } else {
+                                _ = try SessionExportService.retryCompletedSessionExport(
+                                    sessionId: sessionId,
+                                    modelContext: modelContext
+                                )
+                            }
+                            successes += 1
+                        } catch {
+                            print(
+                                "OPENLIFT_VOLTRA_BACKFILL_EXPORT_FAILED session=\(sessionId.uuidString) \(error.localizedDescription)"
+                            )
+                        }
                     }
+                    print("OPENLIFT_VOLTRA_BACKFILL_EXPORT_RESULT successes=\(successes)")
                 }
             } catch {
                 print("OPENLIFT_VOLTRA_BACKFILL_FAILED \(error.localizedDescription)")
