@@ -377,6 +377,124 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(coordinatedWriteCount, 1)
     }
 
+    @MainActor
+    func testTargetedFixedRetryReplacesEverySameSessionCopyWithResistanceProfile() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV12.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let exercise = Exercise(
+            name: "Lat Pulldown",
+            primaryMuscle: .back,
+            type: .compound,
+            equipment: .machine
+        )
+        let session = Session(
+            cycleInstanceId: UUID(),
+            cycleDayIndex: 0,
+            cycleNameSnapshot: "Targeted Repair",
+            dayLabelSnapshot: "Pull A",
+            finishedAt: Date(timeIntervalSince1970: 1_785_890_915),
+            status: .completed,
+            exportStatus: .pending
+        )
+        context.insert(exercise)
+        context.insert(session)
+        context.insert(SetEntry(
+            sessionId: session.id,
+            exerciseId: exercise.id,
+            setIndex: 1,
+            weight: 90,
+            reps: 11,
+            isLocked: true
+        ))
+        try context.save()
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openlift-targeted-fixed-retry-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: "iCloud.test.openlift",
+            iCloudContainerURL: root.appendingPathComponent("iCloud", isDirectory: true),
+            localDocumentsURL: root.appendingPathComponent("Local", isDirectory: true),
+            coordinatedWrite: { data, url in
+                try data.write(to: url, options: [.atomic])
+            },
+            ubiquityMetadata: { _ in
+                .init(
+                    isUbiquitousItem: true,
+                    isUploaded: true,
+                    isUploading: false,
+                    uploadingErrorDescription: nil
+                )
+            }
+        )
+
+        let first = try SessionExportService.retryCompletedSessionExport(
+            sessionId: session.id,
+            modelContext: context,
+            environment: environment
+        )
+        let iCloudCanonical = try XCTUnwrap(first.iCloudDestinationURL)
+        let localCanonical = try XCTUnwrap(first.localMirrorURL)
+        let staleData = try Data(contentsOf: localCanonical)
+        let staleURLs = [
+            localCanonical.deletingLastPathComponent()
+                .appendingPathComponent("workout-stale-fixed-local.json"),
+            iCloudCanonical.deletingLastPathComponent()
+                .appendingPathComponent("workout-stale-fixed-icloud.json")
+        ]
+        for url in staleURLs {
+            try staleData.write(to: url, options: [.atomic])
+        }
+
+        context.insert(ExerciseResistanceProfile(
+            workoutKind: .fixed,
+            sessionId: session.id,
+            exerciseId: exercise.id,
+            resistanceSource: .voltra,
+            chainType: .inverseChains,
+            chainPercent: 30,
+            eccentricPercent: 70,
+            frozenAt: .now
+        ))
+        session.exportStatus = .pending
+        try context.save()
+
+        let repaired = try SessionExportService.retryCompletedSessionExport(
+            sessionId: session.id,
+            modelContext: context,
+            environment: environment
+        )
+        XCTAssertEqual(repaired.status, .success)
+        XCTAssertEqual(session.exportStatus, .success)
+        let expectedProfile = ResistanceProfileValue.voltra(
+            chainType: .inverseChains,
+            chainPercent: 30,
+            eccentricPercent: 70
+        )
+        let allCopies = [iCloudCanonical, localCanonical] + staleURLs
+        let canonicalData = try Data(contentsOf: localCanonical)
+        for url in allCopies {
+            let data = try Data(contentsOf: url)
+            XCTAssertEqual(data, canonicalData)
+            let payload = try JSONDecoder().decode(
+                SessionExportService.ExportPayload.self,
+                from: data
+            )
+            XCTAssertEqual(payload.session_id, session.id.uuidString)
+            XCTAssertEqual(payload.exercises.first?.resistance_profile?.value, expectedProfile)
+        }
+
+        _ = try SessionExportService.retryCompletedSessionExport(
+            sessionId: session.id,
+            modelContext: context,
+            environment: environment
+        )
+        for url in allCopies {
+            XCTAssertEqual(try Data(contentsOf: url), canonicalData)
+        }
+    }
+
     func testParseExportDateAcceptsFractionalSeconds() throws {
         let parsed = try XCTUnwrap(SessionExportService.parseExportDate("2026-05-03T21:22:07.763664Z"))
         XCTAssertEqual(Int(parsed.timeIntervalSince1970), 1_777_843_327)
