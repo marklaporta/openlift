@@ -12,7 +12,7 @@ final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
         XCTAssertFalse(app.navigationBars["Log Workout"].exists)
     }
 
-    func testRotationWorkoutFinishAdvancesToNextDraft() throws {
+    func testRotationWorkoutFinishShowsRecapAndNonEditableTomorrowPreview() throws {
         let app = launchApp()
 
         XCTAssertTrue(app.tabBars.buttons["Workout"].waitForExistence(timeout: 5))
@@ -37,11 +37,13 @@ final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
         XCTAssertTrue(finishButton.waitForExistence(timeout: 5))
         finishButton.tap()
 
-        // The list intentionally preserves its scroll position after the next
-        // draft replaces the completed workout, so assert on a visible Lower A
-        // exercise instead of an off-screen section header.
-        scrollToElement(app.staticTexts["Leg Press"], in: app)
-        XCTAssertTrue(app.staticTexts["Leg Press"].waitForExistence(timeout: 10))
+        scrollToElement(app.staticTexts["fixed.completedToday"], in: app)
+        XCTAssertEqual(app.staticTexts["fixed.completedToday"].label, "Upper A complete")
+        XCTAssertTrue(app.staticTexts["fixed.completedToday.recap"].label.contains("1 completed set"))
+
+        scrollToElement(app.staticTexts["fixed.nextWorkoutPreview"], in: app)
+        XCTAssertEqual(app.staticTexts["fixed.nextWorkoutPreview"].label, "Lower A")
         XCTAssertFalse(app.buttons["fixed.submitReadiness"].exists)
+        XCTAssertFalse(app.textFields["fixed.weight.Leg Press.1"].exists)
     }
 }
