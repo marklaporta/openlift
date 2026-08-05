@@ -24,6 +24,20 @@ enum FixedCycleWorkoutError: LocalizedError, Equatable {
     }
 }
 
+struct FixedCycleCompletedSetRecap: Equatable {
+    let setIndex: Int
+    let weight: Double
+    let reps: Int
+}
+
+struct FixedCycleCompletedExerciseRecap: Identifiable, Equatable {
+    var id: UUID { exerciseId }
+
+    let exerciseId: UUID
+    let exerciseName: String
+    let sets: [FixedCycleCompletedSetRecap]
+}
+
 enum FixedCycleWorkoutService {
     static let allClear = MuscleReadinessInput(
         soreness: .none,
@@ -42,6 +56,91 @@ enum FixedCycleWorkoutService {
             components.month ?? 0,
             components.day ?? 0
         )
+    }
+
+    static func completedFixedSession(
+        on date: Date,
+        sessions: [Session],
+        calendar: Calendar = .current
+    ) -> Session? {
+        sessions
+            .filter { session in
+                guard session.status == .completed,
+                      session.dayLabelSnapshot != "Off-Schedule",
+                      let finishedAt = session.finishedAt else {
+                    return false
+                }
+                return calendar.isDate(finishedAt, inSameDayAs: date)
+            }
+            .max {
+                let left = $0.finishedAt ?? $0.createdAt
+                let right = $1.finishedAt ?? $1.createdAt
+                if left != right { return left < right }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+    }
+
+    static func shouldCreateDraft(
+        on date: Date,
+        sessions: [Session],
+        calendar: Calendar = .current
+    ) -> Bool {
+        completedFixedSession(on: date, sessions: sessions, calendar: calendar) == nil
+    }
+
+    static func completedExerciseRecaps(
+        sessionId: UUID,
+        entries: [SetEntry],
+        exercises: [Exercise],
+        snapshots: [FixedCycleExerciseSnapshot]
+    ) -> [FixedCycleCompletedExerciseRecap] {
+        let completedEntries = entries.filter {
+            $0.sessionId == sessionId && $0.isLocked && $0.reps > 0
+        }
+        let exerciseIds = Set(completedEntries.map(\.exerciseId))
+        let exerciseNames = Dictionary(
+            exercises.map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let occurrenceSnapshots = snapshots
+            .filter { $0.sessionId == sessionId && exerciseIds.contains($0.exerciseId) }
+            .sorted {
+                if $0.position != $1.position { return $0.position < $1.position }
+                return $0.exerciseName.localizedCaseInsensitiveCompare($1.exerciseName) == .orderedAscending
+            }
+        let snapshotNames = Dictionary(
+            occurrenceSnapshots.map { ($0.exerciseId, $0.exerciseName) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let snapshotPositions = Dictionary(
+            occurrenceSnapshots.map { ($0.exerciseId, $0.position) },
+            uniquingKeysWith: min
+        )
+
+        return exerciseIds.map { exerciseId in
+            FixedCycleCompletedExerciseRecap(
+                exerciseId: exerciseId,
+                exerciseName: snapshotNames[exerciseId]
+                    ?? exerciseNames[exerciseId]
+                    ?? "Exercise",
+                sets: completedEntries
+                    .filter { $0.exerciseId == exerciseId }
+                    .sorted { $0.setIndex < $1.setIndex }
+                    .map {
+                        FixedCycleCompletedSetRecap(
+                            setIndex: $0.setIndex,
+                            weight: $0.weight,
+                            reps: $0.reps
+                        )
+                    }
+            )
+        }
+        .sorted { left, right in
+            let leftPosition = snapshotPositions[left.exerciseId] ?? Int.max
+            let rightPosition = snapshotPositions[right.exerciseId] ?? Int.max
+            if leftPosition != rightPosition { return leftPosition < rightPosition }
+            return left.exerciseName.localizedCaseInsensitiveCompare(right.exerciseName) == .orderedAscending
+        }
     }
 
     static func requiredMuscles(for day: CycleDay) -> [MuscleGroup] {
@@ -436,6 +535,13 @@ struct WorkoutView: View {
         )
     }
 
+    private var completedFixedSessionToday: Session? {
+        FixedCycleWorkoutService.completedFixedSession(
+            on: .now,
+            sessions: sessions
+        )
+    }
+
     private var activeDay: CycleDay? {
         guard let cycle = activeCycle, let template = activeTemplate else { return nil }
         let orderedDays = CycleOrdering.sortedDays(template.days)
@@ -529,13 +635,13 @@ struct WorkoutView: View {
             await prepareWorkoutState()
         }
         .onReceive(dateRefresh) { now in
-            refreshLocalDate(now)
+            handleDateRefresh(now)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            refreshLocalDate(.now)
+            handleDateRefresh(.now)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
-            refreshLocalDate(.now)
+            handleDateRefresh(.now)
         }
         .alert("Validation Error", isPresented: .constant(errorMessage != nil), actions: {
             Button("OK") { errorMessage = nil }
@@ -593,7 +699,12 @@ struct WorkoutView: View {
     private var rotationWorkoutContent: some View {
         NavigationStack {
             List {
-                if let draftSession, let activeTemplate, let activeDay {
+                if let completedFixedSessionToday {
+                    fixedCompletionSummary(
+                        session: completedFixedSessionToday,
+                        nextDay: activeDay
+                    )
+                } else if let draftSession, let activeTemplate, let activeDay {
                     if latestFixedReadiness == nil {
                         fixedReadinessEntry(
                             session: draftSession,
@@ -778,11 +889,86 @@ struct WorkoutView: View {
         }
     }
 
-    private func prepareWorkoutState() async {
-        refreshLocalDate(.now)
+    @ViewBuilder
+    private func fixedCompletionSummary(
+        session: Session,
+        nextDay: CycleDay?
+    ) -> some View {
+        let recaps = FixedCycleWorkoutService.completedExerciseRecaps(
+            sessionId: session.id,
+            entries: setEntries,
+            exercises: exercises,
+            snapshots: fixedSnapshots
+        )
+        let completedSetCount = recaps.reduce(0) { $0 + $1.sets.count }
+
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("\(dayLabel(for: session)) complete")
+                    .font(.headline)
+                    .accessibilityIdentifier("fixed.completedToday")
+                Text(
+                    "\(completedSetCount) completed set\(completedSetCount == 1 ? "" : "s") across \(recaps.count) movement\(recaps.count == 1 ? "" : "s")"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("fixed.completedToday.recap")
+            }
+            .padding(.vertical, 4)
+        }
+
+        Section("Completed Today") {
+            ForEach(recaps) { recap in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(recap.exerciseName)
+                        .font(.subheadline.weight(.semibold))
+                    Text(completedSetSummary(recap.sets))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("fixed.completedToday.exercise.\(recap.exerciseId.uuidString)")
+            }
+        }
+
+        if let nextDay {
+            let names = CycleOrdering.sortedSlots(nextDay.slots).compactMap { slot in
+                exercises.first(where: { $0.id == slot.exerciseId })?.name
+            }
+            Section("Scheduled for Tomorrow") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(nextDay.label)
+                        .font(.headline)
+                        .accessibilityIdentifier("fixed.nextWorkoutPreview")
+                    Text(names.joined(separator: " · "))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private func completedSetSummary(_ sets: [FixedCycleCompletedSetRecap]) -> String {
+        sets.map { set in
+            let weight = set.weight.formatted(
+                .number.precision(.fractionLength(0...2))
+            )
+            return "\(weight) × \(set.reps)"
+        }
+        .joined(separator: " · ")
+    }
+
+    private func prepareWorkoutState(now: Date = .now) async {
+        refreshLocalDate(now)
         do {
             try bootstrapDataIfNeeded()
-            try ensureDraftSession()
+            try ensureDraftSession(now: now)
+            let currentSessions = try modelContext.fetch(FetchDescriptor<Session>())
+            guard FixedCycleWorkoutService.shouldCreateDraft(
+                on: now,
+                sessions: currentSessions
+            ) else { return }
             try ensureResistanceProfilesForDraft()
             try repairKnownMalformedStoredEntries()
         } catch {
@@ -949,12 +1135,16 @@ struct WorkoutView: View {
         )
     }
 
-    private func ensureDraftSession() throws {
+    private func ensureDraftSession(now: Date = .now) throws {
         let fetchedCycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
         let fetchedTemplates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
         let fetchedSessions = try modelContext.fetch(FetchDescriptor<Session>())
         guard let cycle = activeCycle ?? fetchedCycles.first else { return }
         guard let template = activeTemplate ?? fetchedTemplates.first(where: { $0.id == cycle.templateId }) else { return }
+        guard FixedCycleWorkoutService.shouldCreateDraft(
+            on: now,
+            sessions: fetchedSessions
+        ) else { return }
         if OpenLiftStateResolver.preferredDraftSession(sessions: fetchedSessions, activeCycle: cycle) != nil { return }
 
         try cycle.validate(template: template)
@@ -999,6 +1189,8 @@ struct WorkoutView: View {
             ) else {
                 throw FixedCycleWorkoutError.qualifyingSetRequired
             }
+            draftExportTask?.cancel()
+            draftExportTask = nil
             let dayIndex = cycle.currentDayIndex
 
             // Keep only confirmed logged sets in completed sessions/history/export.
@@ -1080,14 +1272,7 @@ struct WorkoutView: View {
             cycle.currentDayIndex = (dayIndex + 1) % max(template.days.count, 1)
             try cycle.validate(template: template)
 
-            let next = Session(cycleInstanceId: cycle.id, cycleDayIndex: cycle.currentDayIndex)
-            try next.validate()
-            modelContext.insert(next)
-
-            try addDraftEntries(for: next, cycle: cycle, template: template)
-
             try modelContext.save()
-            scheduleDraftExport()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1437,9 +1622,10 @@ struct WorkoutView: View {
         }
     }
 
-    private func refreshLocalDate(_ now: Date) {
+    @discardableResult
+    private func refreshLocalDate(_ now: Date) -> Bool {
         let current = FixedCycleWorkoutService.localDateKey(for: now)
-        guard current != observedLocalDateKey else { return }
+        guard current != observedLocalDateKey else { return false }
         observedLocalDateKey = current
         if let activeTemplate, let activeDay {
             readinessInputs = Dictionary(
@@ -1449,6 +1635,14 @@ struct WorkoutView: View {
             )
         } else {
             readinessInputs = [:]
+        }
+        return true
+    }
+
+    private func handleDateRefresh(_ now: Date) {
+        guard refreshLocalDate(now), trainingMode == .rotation else { return }
+        Task { @MainActor in
+            await prepareWorkoutState(now: now)
         }
     }
 

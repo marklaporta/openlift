@@ -104,7 +104,8 @@ The bootstrap path does this:
 6. resolve the active template and cycle
 7. create or reconcile the active cycle
 8. hydrate missing completed sessions from export files
-9. ensure a draft session exists for the current day
+9. ensure a draft session exists unless a Fixed Cycle workout was already
+   completed on the current local calendar day
 
 Important files:
 
@@ -129,8 +130,14 @@ Relevant code:
 
 Key Fixed Cycle behavior:
 
-- a draft session is created for the active cycle and current day
-- the template and pointer determine the next workout; calendar time does not
+- a draft session is created for the active cycle and current day only when no
+  Fixed Cycle workout has already been completed on that local calendar day
+- after completion, the pointer advances immediately but the Workout tab shows
+  a concise completed-work recap and a non-editable preview of tomorrow's
+  scheduled day; any older-build draft already stored for that next day remains
+  untouched but hidden
+- on the next local calendar day, the stored next draft becomes editable, or a
+  new draft is created from the advanced pointer if none exists
 - the user may inspect the workout before readiness, but all working-set mutation
   and completion remain gated until a readiness record for the current local
   date has been saved
@@ -145,8 +152,8 @@ Key Fixed Cycle behavior:
   snapshot retains the pre-edit membership so those sets remain visible and
   exportable while the future template immediately omits the removed item
 - finishing requires at least one locked working set with reps, converts the
-  draft to a completed session, exports it, advances exactly once, and creates
-  the next draft
+  draft to a completed session, exports it, and advances exactly once without
+  creating another same-day draft
 
 `WorkoutView` remains the single user-facing Workout page. Its content mutates
 with the selected mode. While Adaptive is selected, Fixed Cycle's instance,
