@@ -2044,9 +2044,7 @@ enum AdaptiveDoseEvidenceService {
         cableExerciseIds: Set<UUID>
     ) -> Bool {
         guard cableExerciseIds.contains(previousExerciseId)
-                || cableExerciseIds.contains(currentExerciseId)
-                || previousProfile != nil
-                || currentProfile != nil else { return true }
+                || cableExerciseIds.contains(currentExerciseId) else { return true }
         return ResistanceProfileComparison.compare(
             current: currentProfile,
             historical: previousProfile
@@ -2643,7 +2641,6 @@ enum AdaptivePrefillService {
                     rotationSessions: rotationSessions,
                     rotationSetEntries: rotationSetEntries,
                     resistanceRequirement: cableExerciseIds.contains(exercise.exerciseId)
-                            || currentResistanceProfiles[exercise.occurrenceId] != nil
                         ? .cable(currentResistanceProfiles[exercise.occurrenceId])
                         : .notApplicable,
                     resistanceProfiles: resistanceProfiles
@@ -2720,7 +2717,6 @@ enum AdaptivePrefillService {
                     rotationSessions: rotationSessions,
                     rotationSetEntries: rotationSetEntries,
                     resistanceRequirement: cableExerciseIds.contains(exercise.exerciseId)
-                            || currentResistanceProfiles[exercise.occurrenceId] != nil
                         ? .cable(currentResistanceProfiles[exercise.occurrenceId])
                         : .notApplicable,
                     resistanceProfiles: resistanceProfiles

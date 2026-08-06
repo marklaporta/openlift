@@ -54,11 +54,9 @@ struct LogWorkoutView: View {
                             newExerciseRequest = NewExerciseRequest(draftId: exerciseDraft.id)
                         }
 
-                        if let exercise = exercises.first(where: { $0.id == exerciseDraft.exerciseId }) {
-                            CableResistanceProfileDraftControl(
-                                value: $exerciseDraft.resistanceProfile,
-                                isRequired: exercise.equipment == .cable
-                            )
+                        if exercises.first(where: { $0.id == exerciseDraft.exerciseId })?
+                            .equipment.supportsResistanceProfile == true {
+                            CableResistanceProfileDraftControl(value: $exerciseDraft.resistanceProfile)
                         }
 
                         ForEach($exerciseDraft.sets) { $set in
@@ -210,7 +208,8 @@ struct LogWorkoutView: View {
         .sheet(item: $historyContext) { context in
             ExerciseHistorySheet(
                 exerciseName: context.exerciseName,
-                showsResistanceProfile: resistanceProfiles.contains { $0.exerciseId == context.exerciseId },
+                showsResistanceProfile: exercises.first(where: { $0.id == context.exerciseId })?
+                    .equipment.supportsResistanceProfile == true,
                 efforts: recentEfforts(exerciseId: context.exerciseId, exerciseName: context.exerciseName)
             )
         }
@@ -361,12 +360,11 @@ struct LogWorkoutView: View {
             var insertedFeedback: [AdHocExerciseFeedback] = []
             var insertedProfiles: [ExerciseResistanceProfile] = []
             for exerciseInput in cleanedExercises {
-                let isCable = exercises.first(where: { $0.id == exerciseInput.exerciseId })?.equipment == .cable
-                if isCable && exerciseInput.resistanceProfile == nil {
-                    throw LogWorkoutError.resistanceProfileRequired
-                }
-                if let value = exerciseInput.resistanceProfile {
-                    guard value.isComplete else { throw LogWorkoutError.resistanceProfileRequired }
+                if exercises.first(where: { $0.id == exerciseInput.exerciseId })?
+                    .equipment.supportsResistanceProfile == true {
+                    guard let value = exerciseInput.resistanceProfile, value.isComplete else {
+                        throw LogWorkoutError.resistanceProfileRequired
+                    }
                     let profile = ExerciseResistanceProfile(
                         workoutKind: .adHoc,
                         sessionId: session.id,
@@ -450,11 +448,11 @@ struct LogWorkoutView: View {
     }
 
     private func defaultResistanceProfile(for exerciseId: UUID) -> ResistanceProfileValue? {
-        let isCable = exercises.first(where: { $0.id == exerciseId })?.equipment == .cable
+        guard exercises.first(where: { $0.id == exerciseId })?
+            .equipment.supportsResistanceProfile == true else { return nil }
         return ResistanceProfileService.lastUsedValue(
             exerciseId: exerciseId,
-            profiles: resistanceProfiles,
-            allowsGlobalFallback: isCable
+            profiles: resistanceProfiles
         )
     }
 
@@ -525,11 +523,11 @@ struct LogWorkoutView: View {
         exerciseId: UUID,
         exerciseName: String
     ) -> [ExerciseEffort] {
-        let isCable = exercises.first(where: { $0.id == exerciseId })?.equipment == .cable
-        guard let current = defaultResistanceProfile(for: exerciseId) else {
-            if isCable { return [] }
+        guard exercises.first(where: { $0.id == exerciseId })?
+            .equipment.supportsResistanceProfile == true else {
             return recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName)
         }
+        guard let current = defaultResistanceProfile(for: exerciseId) else { return [] }
         return recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName).filter { effort in
             guard let sessionId = UUID(uuidString: effort.id),
                   let profile = resistanceProfiles.first(where: {

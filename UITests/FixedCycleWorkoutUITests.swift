@@ -12,6 +12,20 @@ final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
         XCTAssertFalse(app.navigationBars["Log Workout"].exists)
     }
 
+    func testResistanceProfilesAppearOnlyForCableMovements() throws {
+        let app = launchApp()
+
+        submitFixedReadiness(in: app)
+        XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["fixed.resistanceProfile.Flat Dumbbell Press"].exists)
+
+        let cableProfile = app.buttons[
+            "fixed.resistanceProfile.Cable Crossover Lateral Raise"
+        ]
+        scrollToElement(cableProfile, in: app)
+        XCTAssertTrue(cableProfile.exists)
+    }
+
     func testRotationWorkoutFinishShowsRecapAndNonEditableTomorrowPreview() throws {
         let app = launchApp()
 

@@ -118,6 +118,11 @@ enum BootstrapDataService {
                 exercise.type = canonical.2
                 changed = true
             }
+            if exercise.name.caseInsensitiveCompare("Lat Pulldown") == .orderedSame,
+               exercise.equipment == .machine {
+                exercise.equipment = .cable
+                changed = true
+            }
         }
         for entry in defaultExerciseCatalog where !currentNames.contains(entry.0.lowercased()) {
             let exercise = Exercise(name: entry.0, primaryMuscle: entry.1, type: entry.2, equipment: entry.3)
@@ -1347,7 +1352,7 @@ enum BootstrapDataService {
         ("Flat Cable Flye", .chest, .isolation, .cable),
         ("Incline Cable Flye", .chest, .isolation, .cable),
         ("Cable Row", .back, .compound, .cable),
-        ("Lat Pulldown", .back, .compound, .machine),
+        ("Lat Pulldown", .back, .compound, .cable),
         ("Chest Supported Row", .back, .compound, .machine),
         ("Chest-Supported Cable Row", .back, .compound, .cable),
         ("Helms Row", .back, .compound, .dumbbell),

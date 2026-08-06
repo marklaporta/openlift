@@ -921,7 +921,8 @@ struct AdaptiveWorkoutView: View {
                 throw AdaptiveWorkoutServiceError.adaptiveSessionNotFound
             }
             var currentProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
-            for snapshot in plan.complexes.flatMap(\.exercises) {
+            for snapshot in plan.complexes.flatMap(\.exercises)
+            where cableExerciseIds.contains(snapshot.exerciseId) {
                 guard let value = defaults[snapshot.occurrenceId] else { continue }
                 let created = try ResistanceProfileService.create(
                     workoutKind: .adaptive,
@@ -944,9 +945,9 @@ struct AdaptiveWorkoutView: View {
         plan: GeneratedWorkoutPlan,
         exercise: PlannedExerciseSnapshot
     ) -> [ComparableSetRow] {
-        let current = currentResistanceValue(plan: plan, exercise: exercise)
         let requirement: ResistanceProfileLookupRequirement = cableExerciseIds.contains(exercise.exerciseId)
-            || current != nil ? .cable(current) : .notApplicable
+            ? .cable(currentResistanceValue(plan: plan, exercise: exercise))
+            : .notApplicable
         return AdaptivePrefillService.rows(
             plan: plan,
             exercise: exercise,
@@ -967,11 +968,10 @@ struct AdaptiveWorkoutView: View {
         for plan: GeneratedWorkoutPlan
     ) -> [UUID: ResistanceProfileValue] {
         Dictionary(uniqueKeysWithValues: plan.complexes.flatMap(\.exercises).compactMap { snapshot in
-            let isCable = cableExerciseIds.contains(snapshot.exerciseId)
-            guard let value = ResistanceProfileService.lastUsedValue(
+            guard cableExerciseIds.contains(snapshot.exerciseId),
+                  let value = ResistanceProfileService.lastUsedValue(
                     exerciseId: snapshot.exerciseId,
-                    profiles: resistanceProfiles,
-                    allowsGlobalFallback: isCable
+                    profiles: resistanceProfiles
                   ) else { return nil }
             return (snapshot.occurrenceId, value)
         })
@@ -992,8 +992,7 @@ struct AdaptiveWorkoutView: View {
         }
         return persisted ?? ResistanceProfileService.lastUsedValue(
             exerciseId: exercise.exerciseId,
-            profiles: resistanceProfiles,
-            allowsGlobalFallback: cableExerciseIds.contains(exercise.exerciseId)
+            profiles: resistanceProfiles
         )
     }
 
@@ -1337,10 +1336,10 @@ struct AdaptiveWorkoutView: View {
                         modelContext.delete(old)
                         currentProfiles.removeAll { $0.id == old.id }
                     }
-                    if let value = ResistanceProfileService.lastUsedValue(
+                    if exercise.equipment.supportsResistanceProfile,
+                       let value = ResistanceProfileService.lastUsedValue(
                            exerciseId: exercise.id,
-                           profiles: currentProfiles,
-                           allowsGlobalFallback: exercise.equipment == .cable
+                           profiles: currentProfiles
                        ) {
                         _ = try ResistanceProfileService.create(
                             workoutKind: .adaptive,
@@ -1984,7 +1983,7 @@ private struct AdaptiveExerciseSection: View {
 
     var body: some View {
         Section {
-            if let exercise {
+            if let exercise, exercise.equipment.supportsResistanceProfile {
                 CableResistanceProfileControl(
                     workoutKind: .adaptive,
                     sessionId: sessionId,
@@ -1992,7 +1991,6 @@ private struct AdaptiveExerciseSection: View {
                     occurrenceId: occurrenceId,
                     profile: resistanceProfile,
                     profiles: resistanceProfiles,
-                    isRequired: exercise.equipment == .cable,
                     onError: onError
                 )
             }
@@ -2048,11 +2046,10 @@ private struct AdaptiveExerciseSection: View {
                     Button {
                         focusedField = nil
                         guard entry.isLocked || entry.weight != 0 || entry.reps != 0 else { return }
-                        if !entry.isLocked {
+                        if !entry.isLocked, exercise?.equipment.supportsResistanceProfile == true {
                             do {
                                 try ResistanceProfileService.freezeBeforeLock(
                                     resistanceProfile,
-                                    required: exercise?.equipment == .cable,
                                     modelContext: modelContext
                                 )
                             } catch {

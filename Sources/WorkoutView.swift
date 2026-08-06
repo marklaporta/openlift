@@ -626,7 +626,8 @@ struct WorkoutView: View {
         .sheet(item: $historyContext) { context in
             ExerciseHistorySheet(
                 exerciseName: context.exerciseName,
-                showsResistanceProfile: resistanceProfiles.contains { $0.exerciseId == context.exerciseId },
+                showsResistanceProfile: exercises.first(where: { $0.id == context.exerciseId })?
+                    .equipment.supportsResistanceProfile == true,
                 efforts: recentEfforts(exerciseId: context.exerciseId, exerciseName: context.exerciseName)
             )
         }
@@ -1471,10 +1472,10 @@ struct WorkoutView: View {
                 modelContext.delete(old)
                 currentProfiles.removeAll { $0.id == old.id }
             }
-            if let value = ResistanceProfileService.lastUsedValue(
+            if exercise.equipment.supportsResistanceProfile,
+               let value = ResistanceProfileService.lastUsedValue(
                    exerciseId: exercise.id,
-                   profiles: currentProfiles,
-                   allowsGlobalFallback: exercise.equipment == .cable
+                   profiles: currentProfiles
                ) {
                 _ = try ResistanceProfileService.create(
                     workoutKind: .fixed,
@@ -1685,7 +1686,10 @@ struct WorkoutView: View {
         exerciseId: UUID,
         sessionId: UUID?
     ) -> ResistanceProfileLookupRequirement {
-        let isCable = exercises.first(where: { $0.id == exerciseId })?.equipment == .cable
+        guard exercises.first(where: { $0.id == exerciseId })?
+            .equipment.supportsResistanceProfile == true else {
+            return .notApplicable
+        }
         let current = sessionId.flatMap { currentSessionId in
             (try? ResistanceProfileService.profile(
                 workoutKind: .fixed,
@@ -1696,18 +1700,20 @@ struct WorkoutView: View {
             )).flatMap(ResistanceProfileService.value)
         } ?? ResistanceProfileService.lastUsedValue(
             exerciseId: exerciseId,
-            profiles: resistanceProfiles,
-            allowsGlobalFallback: isCable
+            profiles: resistanceProfiles
         )
-        return isCable || current != nil ? .cable(current) : .notApplicable
+        return .cable(current)
     }
 
     @MainActor
     private func ensureResistanceProfilesForDraft() throws {
         guard let session = draftSession else { return }
         var currentProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
-        let exerciseIds = Set(setEntries.filter { $0.sessionId == session.id }.map(\.exerciseId))
-        for exerciseId in exerciseIds {
+        let cableExerciseIds = Set(setEntries.filter { $0.sessionId == session.id }.compactMap { entry in
+            exercises.first(where: { $0.id == entry.exerciseId })?
+                .equipment.supportsResistanceProfile == true ? entry.exerciseId : nil
+        })
+        for exerciseId in cableExerciseIds {
             guard try ResistanceProfileService.profile(
                 workoutKind: .fixed,
                 sessionId: session.id,
@@ -1717,8 +1723,7 @@ struct WorkoutView: View {
             ) == nil,
             let defaultValue = ResistanceProfileService.lastUsedValue(
                 exerciseId: exerciseId,
-                profiles: currentProfiles,
-                allowsGlobalFallback: exercises.first(where: { $0.id == exerciseId })?.equipment == .cable
+                profiles: currentProfiles
             ) else { continue }
             let created = try ResistanceProfileService.create(
                 workoutKind: .fixed,
@@ -1883,10 +1888,10 @@ struct WorkoutView: View {
         do {
             guard isFixedExecutionEnabled else { throw FixedCycleWorkoutError.readinessRequired }
             guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
-            if let value = ResistanceProfileService.lastUsedValue(
+            if exercise.equipment.supportsResistanceProfile,
+               let value = ResistanceProfileService.lastUsedValue(
                    exerciseId: exercise.id,
-                   profiles: resistanceProfiles,
-                   allowsGlobalFallback: exercise.equipment == .cable
+                   profiles: resistanceProfiles
                ) {
                 _ = try ResistanceProfileService.create(
                     workoutKind: .fixed,
@@ -2374,7 +2379,7 @@ private struct ExerciseSection: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if let exercise {
+            if let exercise, exercise.equipment.supportsResistanceProfile {
                 CableResistanceProfileControl(
                     workoutKind: .fixed,
                     sessionId: sessionId,
@@ -2382,9 +2387,9 @@ private struct ExerciseSection: View {
                     occurrenceId: nil,
                     profile: resistanceProfile,
                     profiles: resistanceProfiles,
-                    isRequired: exercise.equipment == .cable,
                     onError: onError
                 )
+                .accessibilityIdentifier("fixed.resistanceProfile.\(exercise.name)")
             }
             ForEach(entries) { entry in
                 HStack {
@@ -2474,11 +2479,10 @@ private struct ExerciseSection: View {
                         if !entry.isLocked && entry.weight == 0 && entry.reps == 0 {
                             return
                         }
-                        if !entry.isLocked {
+                        if !entry.isLocked, exercise?.equipment.supportsResistanceProfile == true {
                             do {
                                 try ResistanceProfileService.freezeBeforeLock(
                                     resistanceProfile,
-                                    required: exercise?.equipment == .cable,
                                     modelContext: modelContext
                                 )
                             } catch {

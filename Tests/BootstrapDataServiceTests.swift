@@ -27,6 +27,42 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(catalog.first { $0.id == reverseHyper.id }?.type, .isolation)
     }
 
+    func testEnsureExerciseCatalogMigratesOnlyMachineLatPulldownToCable() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let latPulldown = Exercise(
+            name: "Lat Pulldown",
+            primaryMuscle: .back,
+            type: .compound,
+            equipment: .machine
+        )
+        let inclinePress = Exercise(
+            name: "Incline Dumbbell Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        let customMachinePress = Exercise(
+            name: "Machine Chest Press",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        context.insert(latPulldown)
+        context.insert(inclinePress)
+        context.insert(customMachinePress)
+        try context.save()
+
+        let first = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let second = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+
+        XCTAssertEqual(first.first { $0.id == latPulldown.id }?.equipment, .cable)
+        XCTAssertEqual(second.first { $0.id == latPulldown.id }?.equipment, .cable)
+        XCTAssertEqual(second.first { $0.id == inclinePress.id }?.equipment, .dumbbell)
+        XCTAssertEqual(second.first { $0.id == customMachinePress.id }?.equipment, .dumbbell)
+    }
+
     func testPreferredPublishedCyclePrefersFB2DName() {
         let files = [
             PublishedCycleFile(
