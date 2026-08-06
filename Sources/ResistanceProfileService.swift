@@ -66,7 +66,6 @@ struct CableResistanceProfileControl: View {
     let occurrenceId: UUID?
     let profile: ExerciseResistanceProfile?
     let profiles: [ExerciseResistanceProfile]
-    let isRequired: Bool
     let isCompletedOccurrence: Bool
     let onError: (String) -> Void
 
@@ -84,7 +83,6 @@ struct CableResistanceProfileControl: View {
         occurrenceId: UUID?,
         profile: ExerciseResistanceProfile?,
         profiles: [ExerciseResistanceProfile],
-        isRequired: Bool = true,
         isCompletedOccurrence: Bool = false,
         onError: @escaping (String) -> Void
     ) {
@@ -94,15 +92,10 @@ struct CableResistanceProfileControl: View {
         self.occurrenceId = occurrenceId
         self.profile = profile
         self.profiles = profiles
-        self.isRequired = isRequired
         self.isCompletedOccurrence = isCompletedOccurrence
         self.onError = onError
         let initial = ResistanceProfileService.value(profile)
-            ?? ResistanceProfileService.lastUsedValue(
-                exerciseId: exerciseId,
-                profiles: profiles,
-                allowsGlobalFallback: isRequired
-            )
+            ?? ResistanceProfileService.lastUsedValue(exerciseId: exerciseId, profiles: profiles)
             ?? .weightStack
         _source = State(initialValue: initial.resistanceSource)
         _chainType = State(initialValue: initial.chainType ?? .inverseChains)
@@ -115,14 +108,13 @@ struct CableResistanceProfileControl: View {
             isEditing = true
         } label: {
             Label(
-                ResistanceProfileService.value(profile)?.displayName
-                    ?? (isRequired ? "Set Cable Resistance" : "Add Resistance Profile"),
+                ResistanceProfileService.value(profile)?.displayName ?? "Set Cable Resistance",
                 systemImage: profile == nil ? "questionmark.circle" : "cable.connector"
             )
             .font(.caption)
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(profile == nil && isRequired ? .orange : .secondary)
+        .foregroundStyle(profile == nil ? .orange : .secondary)
         .sheet(isPresented: $isEditing) {
             NavigationStack {
                 Form {
@@ -157,7 +149,7 @@ struct CableResistanceProfileControl: View {
                         }
                     }
                 }
-                .navigationTitle("Resistance Profile")
+                .navigationTitle("Cable Resistance")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { isEditing = false }
@@ -237,7 +229,6 @@ struct CableResistanceProfileControl: View {
 
 struct CableResistanceProfileDraftControl: View {
     @Binding var value: ResistanceProfileValue?
-    let isRequired: Bool
     @State private var isEditing = false
     @State private var source: ResistanceSource = .weightStack
     @State private var chainType: VOLTRAChainType = .inverseChains
@@ -255,12 +246,12 @@ struct CableResistanceProfileDraftControl: View {
             isEditing = true
         } label: {
             Label(
-                value?.displayName ?? (isRequired ? "Set Cable Resistance" : "Add Resistance Profile"),
+                value?.displayName ?? "Set Cable Resistance",
                 systemImage: value == nil ? "questionmark.circle" : "cable.connector"
             )
             .font(.caption)
         }
-        .foregroundStyle(value == nil && isRequired ? .orange : .secondary)
+        .foregroundStyle(value == nil ? .orange : .secondary)
         .sheet(isPresented: $isEditing) {
             NavigationStack {
                 Form {
@@ -282,7 +273,7 @@ struct CableResistanceProfileDraftControl: View {
                     }
                     Text(draftValue.displayName).foregroundStyle(.secondary)
                 }
-                .navigationTitle("Resistance Profile")
+                .navigationTitle("Cable Resistance")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { isEditing = false }
@@ -338,7 +329,7 @@ enum ResistanceProfileError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .incomplete:
-            return "Choose a complete resistance profile."
+            return "Choose a complete cable resistance profile."
         case .invalidOccurrenceIdentity:
             return "The resistance profile does not identify one performed exercise occurrence."
         case .duplicateOccurrence:
@@ -388,18 +379,16 @@ enum ResistanceProfileService {
         return matches.first
     }
 
-    /// Exercise-specific history always wins. Callers may opt into the global
-    /// fallback for cable movements; non-cable movements must never inherit an
-    /// unrelated movement's profile.
+    /// Exercise-specific history wins. The global cable fallback intentionally
+    /// carries Mark's usually-stable VOLTRA setting across movements while
+    /// still making a per-occurrence copy that can later be corrected.
     static func lastUsedValue(
         exerciseId: UUID,
-        profiles: [ExerciseResistanceProfile],
-        allowsGlobalFallback: Bool = true
+        profiles: [ExerciseResistanceProfile]
     ) -> ResistanceProfileValue? {
         let complete = profiles.filter { value($0) != nil }
         let preferred = complete.filter { $0.exerciseId == exerciseId }
-        let candidates = preferred.isEmpty && allowsGlobalFallback ? complete : preferred
-        return value(candidates.max {
+        return value((preferred.isEmpty ? complete : preferred).max {
             if $0.updatedAt != $1.updatedAt { return $0.updatedAt < $1.updatedAt }
             return $0.id.uuidString < $1.id.uuidString
         })
@@ -530,12 +519,10 @@ enum ResistanceProfileService {
     @MainActor
     static func freezeBeforeLock(
         _ profile: ExerciseResistanceProfile?,
-        required: Bool = true,
         modelContext: ModelContext,
         now: Date = .now
     ) throws {
         guard let profile, value(profile) != nil else {
-            if !required { return }
             throw ResistanceProfileError.profileRequiredBeforeLock
         }
         if profile.frozenAt == nil {

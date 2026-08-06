@@ -473,7 +473,8 @@ private struct AdaptiveSessionDetailView: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(actualExercise?.name ?? snapshot.exerciseName)
                                     .font(.headline)
-                                if let actualExercise {
+                                if let actualExercise,
+                                   actualExercise.equipment.supportsResistanceProfile {
                                     let profile = resistanceProfile(
                                         session: session,
                                         snapshot: snapshot
@@ -485,7 +486,6 @@ private struct AdaptiveSessionDetailView: View {
                                         occurrenceId: snapshot.occurrenceId,
                                         profile: profile,
                                         profiles: resistanceProfiles,
-                                        isRequired: actualExercise.equipment == .cable,
                                         isCompletedOccurrence: true,
                                         onError: { profileError = $0 }
                                     )
@@ -715,19 +715,20 @@ private struct SessionDetailView: View {
 
             ForEach(groupedExercises, id: \.exercise.id) { group in
                 Section(group.exercise.name) {
-                    let profile = resistanceProfileModel(for: group.exercise.id)
-                    CableResistanceProfileControl(
-                        workoutKind: profile?.workoutKind
-                            ?? (session.dayLabelSnapshot == "Off-Schedule" ? .adHoc : .fixed),
-                        sessionId: session.id,
-                        exerciseId: group.exercise.id,
-                        occurrenceId: nil,
-                        profile: profile,
-                        profiles: resistanceProfiles,
-                        isRequired: group.exercise.equipment == .cable,
-                        isCompletedOccurrence: true,
-                        onError: { exportError = $0 }
-                    )
+                    if group.exercise.equipment.supportsResistanceProfile {
+                        let profile = resistanceProfileModel(for: group.exercise.id)
+                        CableResistanceProfileControl(
+                            workoutKind: profile?.workoutKind
+                                ?? (session.dayLabelSnapshot == "Off-Schedule" ? .adHoc : .fixed),
+                            sessionId: session.id,
+                            exerciseId: group.exercise.id,
+                            occurrenceId: nil,
+                            profile: profile,
+                            profiles: resistanceProfiles,
+                            isCompletedOccurrence: true,
+                            onError: { exportError = $0 }
+                        )
+                    }
                     ForEach(group.sets) { set in
                         HStack {
                             Text("Set \(set.setIndex)")

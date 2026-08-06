@@ -3,6 +3,14 @@ import XCTest
 @testable import OpenLift
 
 final class ResistanceProfileServiceTests: XCTestCase {
+    func testResistanceProfilesAreEligibleOnlyForCableEquipment() {
+        XCTAssertTrue(EquipmentType.cable.supportsResistanceProfile)
+        XCTAssertFalse(EquipmentType.dumbbell.supportsResistanceProfile)
+        XCTAssertFalse(EquipmentType.machine.supportsResistanceProfile)
+        XCTAssertFalse(EquipmentType.barbell.supportsResistanceProfile)
+        XCTAssertFalse(EquipmentType.bodyweight.supportsResistanceProfile)
+    }
+
     func testVOLTRAValueNormalizesNoneAndLabelsRawSettings() {
         let value = ResistanceProfileValue.voltra(
             chainType: .none,
@@ -96,7 +104,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
                 cableExerciseIds: [substitutedCableExerciseId]
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             AdaptiveDoseEvidenceService.profilesPermitComparison(
                 previousExerciseId: configuredNonCableExerciseId,
                 previousProfile: baseline,
@@ -397,23 +405,11 @@ final class ResistanceProfileServiceTests: XCTestCase {
             ),
             ResistanceProfileService.value(global)
         )
-        XCTAssertNil(
-            ResistanceProfileService.lastUsedValue(
-                exerciseId: UUID(),
-                profiles: [global, exact],
-                allowsGlobalFallback: false
-            )
-        )
     }
 
     @MainActor
-    func testNonCableProfileIsOptionalButAnExistingProfileFreezesBeforeFirstSet() throws {
+    func testCableProfileIsRequiredAndFreezesBeforeFirstSet() throws {
         let (context, _) = makeContext()
-        try ResistanceProfileService.freezeBeforeLock(
-            nil,
-            required: false,
-            modelContext: context
-        )
         XCTAssertThrowsError(
             try ResistanceProfileService.freezeBeforeLock(nil, modelContext: context)
         ) { error in
@@ -429,7 +425,6 @@ final class ResistanceProfileServiceTests: XCTestCase {
         )
         try ResistanceProfileService.freezeBeforeLock(
             profile,
-            required: false,
             modelContext: context,
             now: Date(timeIntervalSince1970: 123)
         )
@@ -762,8 +757,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         XCTAssertEqual(
             ResistanceProfileService.lastUsedValue(
                 exerciseId: HistoricalResistanceProfileMigration.latPulldownExerciseId,
-                profiles: profiles,
-                allowsGlobalFallback: false
+                profiles: profiles
             ),
             .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 70)
         )

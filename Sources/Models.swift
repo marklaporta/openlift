@@ -46,6 +46,10 @@ enum EquipmentType: String, Codable, CaseIterable {
     case dumbbell
     case cable
     case bodyweight
+
+    var supportsResistanceProfile: Bool {
+        self == .cable
+    }
 }
 
 enum ResistanceSource: String, Codable, CaseIterable, Hashable {

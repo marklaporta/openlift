@@ -63,6 +63,10 @@ Design intent:
 conventional stack and VOLTRA remain one `cable` exercise. The parallel
 `ExerciseResistanceProfile` identifies one performed occurrence: Fixed/ad-hoc
 use session + exercise, while Adaptive also uses its durable occurrence ID.
+Profile controls and comparison gates are cable-only; dumbbell, barbell,
+machine, and bodyweight movements never offer a VOLTRA profile. The canonical
+Lat Pulldown is cable equipment, and catalog bootstrap narrowly upgrades the
+legacy machine-classified Lat Pulldown row without rewriting other equipment.
 
 Canonical settings are `weightStack`, or `voltra` with exactly one of `none`,
 `chains`, `inverseChains` plus raw chain/eccentric percentages. Effective load
