@@ -243,6 +243,17 @@ enum SessionExportService {
         if (try? hasPendingCompletedSessionExports(modelContext: modelContext)) == true {
             scheduleBackgroundExportRetry()
         }
+        if let configuration = DirectExportService.Configuration.resolve(),
+           let environment = DirectExportService.Environment.live() {
+            let summary = await DirectExportService.retryPending(
+                configuration: configuration,
+                environment: environment
+            )
+            if summary.pendingCount > 0 {
+                let delay = max(60, summary.nextAttemptAt?.timeIntervalSinceNow ?? 60)
+                scheduleBackgroundExportRetry(after: delay)
+            }
+        }
     }
 
     static func scheduleBackgroundExportRetry(after interval: TimeInterval = 15 * 60) {
@@ -700,6 +711,7 @@ enum SessionExportService {
         )
 
         let data = try JSONEncoder.pretty.encode(payload)
+        DirectExportService.enqueueAndSchedule(payload: data, sessionId: session.id)
         try replaceExistingWorkoutExportCopies(
             data: data,
             sessionId: session.id,
@@ -1713,6 +1725,7 @@ enum AdaptiveExportService {
             resistanceProfiles: resistanceProfiles
         )
         let data = try encode(payload)
+        DirectExportService.enqueueAndSchedule(payload: data, sessionId: session.id)
         try SessionExportService.replaceExistingWorkoutExportCopies(
             data: data,
             sessionId: session.id,

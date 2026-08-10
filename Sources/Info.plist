@@ -24,6 +24,10 @@
 	<false/>
 	<key>OpenLiftICloudContainerIdentifier</key>
 	<string>$(OPENLIFT_ICLOUD_CONTAINER)</string>
+	<key>OpenLiftDirectExportEndpoint</key>
+	<string>$(OPENLIFT_DIRECT_EXPORT_ENDPOINT)</string>
+	<key>OpenLiftDirectExportBearerToken</key>
+	<string>$(OPENLIFT_DIRECT_EXPORT_BEARER_TOKEN)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.mark.openlift.export-retry</string>
