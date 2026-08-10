@@ -8,6 +8,13 @@ import Foundation
 enum DirectExportService {
     static let endpointInfoKey = "OpenLiftDirectExportEndpoint"
     static let tokenInfoKey = "OpenLiftDirectExportBearerToken"
+    static let backfillCompletionKey = "openlift.directExport.localWorkoutBackfill.v1"
+    static let maxBackfillFiles = 250
+    static let maxBackfillFileBytes = 5 * 1_024 * 1_024
+
+    private struct SessionIdentityEnvelope: Decodable {
+        let session_id: String
+    }
 
     struct Configuration: Equatable {
         let endpoint: URL
@@ -160,11 +167,84 @@ enum DirectExportService {
     /// Used at app launch/foreground alongside the existing iCloud retry path.
     static func retryPendingInBackground() {
         guard let configuration = Configuration.resolve(),
-              let environment = Environment.live() else { return }
-        Task {
+              let environment = Environment.live(),
+              let localDocumentsURL = FileManager.default.urls(
+                for: .documentDirectory,
+                in: .userDomainMask
+              ).first else { return }
+        Task.detached(priority: .utility) {
+            _ = try? backfillLocalWorkoutExports(
+                configuration: configuration,
+                localDocumentsURL: localDocumentsURL,
+                queueDirectory: environment.queueDirectory,
+                defaults: .standard,
+                now: environment.now()
+            )
             let summary = await retryPending(configuration: configuration, environment: environment)
             scheduleNextRetryIfNeeded(summary)
         }
+    }
+
+    /// One-time, capped migration of existing completed workout exports into
+    /// the direct-delivery queue. Only the app's local Documents mirror is read;
+    /// nested draft/readiness directories and iCloud are deliberately outside
+    /// this backfill path.
+    @discardableResult
+    static func backfillLocalWorkoutExports(
+        configuration: Configuration?,
+        localDocumentsURL: URL,
+        queueDirectory: URL,
+        defaults: UserDefaults,
+        completionKey: String = backfillCompletionKey,
+        limit: Int = maxBackfillFiles,
+        maxFileBytes: Int = maxBackfillFileBytes,
+        now: Date = .now
+    ) throws -> Int {
+        guard let configuration, !defaults.bool(forKey: completionKey) else { return 0 }
+        let exportDirectory = localDocumentsURL
+            .appendingPathComponent("OpenLift", isDirectory: true)
+            .appendingPathComponent("exports", isDirectory: true)
+        let candidates: [URL]
+        do {
+            candidates = try FileManager.default.contentsOfDirectory(
+                at: exportDirectory,
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            defaults.set(true, forKey: completionKey)
+            return 0
+        }
+        let boundedCandidates = candidates
+            .filter {
+                $0.pathExtension.lowercased() == "json"
+                    && $0.lastPathComponent.hasPrefix("workout-")
+            }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+            .prefix(max(0, limit))
+
+        var enqueuedCount = 0
+        for file in boundedCandidates {
+            let values = try file.resourceValues(forKeys: [.fileSizeKey])
+            guard let fileSize = values.fileSize,
+                  fileSize <= max(0, maxFileBytes) else {
+                continue
+            }
+            let data = try Data(contentsOf: file, options: [.mappedIfSafe])
+            guard let sessionId = completedWorkoutSessionId(data: data) else {
+                continue
+            }
+            try enqueue(
+                payload: data,
+                sessionId: sessionId,
+                configuration: configuration,
+                queueDirectory: queueDirectory,
+                now: now
+            )
+            enqueuedCount += 1
+        }
+        defaults.set(true, forKey: completionKey)
+        return enqueuedCount
     }
 
     @discardableResult
@@ -239,6 +319,13 @@ enum DirectExportService {
     static func retryDelay(afterAttempt attemptCount: Int) -> TimeInterval {
         let exponent = min(max(attemptCount - 1, 0), 9)
         return min(60 * pow(2, Double(exponent)), 6 * 60 * 60)
+    }
+
+    private static func completedWorkoutSessionId(data: Data) -> UUID? {
+        guard let identity = try? JSONDecoder().decode(SessionIdentityEnvelope.self, from: data) else {
+            return nil
+        }
+        return UUID(uuidString: identity.session_id)
     }
 
     private static func recordFailure(
