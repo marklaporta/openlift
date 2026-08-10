@@ -136,6 +136,19 @@ away, at app launch/foreground, and during the existing background export-retry
 opportunities. iOS background scheduling is opportunistic, so launch/foreground
 remains the guaranteed retry trigger.
 
+The first enabled launch/foreground also performs a one-time local-history
+backfill after the normal SwiftData export retry. It scans only the immediate
+`Documents/OpenLift/exports` directory inside the app container for
+`workout-*.json`; it never reads iCloud and does not descend into `drafts/` or
+`readiness/`. The scan is capped at the newest 250 files and 5 MiB per file. Each file must
+contain a valid UUID `session_id`; the exact original bytes are queued under
+that identity. Re-enqueuing an identical payload preserves any existing retry
+backoff. The completion marker is written only after the bounded scan finishes,
+so a queue-write failure retries the scan on a later foreground without
+affecting launch, workout completion, or History. Pending SwiftData sessions are
+serialized first through the current exporter; this local mirror backfill then
+covers older sessions already marked successfully exported.
+
 ## Recovery Behavior
 
 The app can rebuild missing completed sessions from export files during bootstrap. That is why export files matter even though SwiftData is the primary store.
