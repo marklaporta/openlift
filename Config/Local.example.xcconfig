@@ -5,3 +5,9 @@ OPENLIFT_TEST_BUNDLE_ID = com.yourname.openlift.tests
 OPENLIFT_ICLOUD_CONTAINER = iCloud.com.yourname.openlift
 OPENLIFT_KVSTORE_ID = com.yourname.openlift
 OPENLIFT_DEVELOPMENT_TEAM = YOURTEAMID
+
+// Optional direct delivery of completed workout JSON. xcconfig treats // as a
+// comment, so $()/ is used to preserve the second slash in https://.
+OPENLIFT_DIRECT_EXPORT_ENDPOINT = https:/$()/your-private-host/openlift-export
+// Optional when the receiver already authenticates clients through the tailnet.
+OPENLIFT_DIRECT_EXPORT_BEARER_TOKEN =

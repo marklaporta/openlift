@@ -103,6 +103,39 @@ The app intentionally writes to both when possible. The local Documents mirror k
 
 Completed workouts only count as successfully exported after the iCloud Documents mirror is written and read back. If that mirror is unavailable, SwiftData remains the source of truth, the local Documents copy remains a rescue copy, and OpenLift retries failed/pending completed-session exports when the app opens, returns to foreground, or receives a background app-refresh slot.
 
+## Optional Direct Export
+
+OpenLift can also deliver the exact completed-workout JSON directly to a private
+HTTPS receiver. This is an additive, best-effort transport: it does not replace
+SwiftData, the local Documents copy, or the iCloud mirror, and a queue or network
+failure never blocks workout completion or History.
+
+Direct export is disabled by default. Enable it only in the gitignored
+`Config/Local.xcconfig`:
+
+```xcconfig
+// $()/ preserves the second slash because xcconfig treats // as a comment.
+OPENLIFT_DIRECT_EXPORT_ENDPOINT = https:/$()/private-host/openlift-export
+// Optional when the tailnet/receiver already authenticates the device.
+OPENLIFT_DIRECT_EXPORT_BEARER_TOKEN =
+```
+
+`OPENLIFT_DIRECT_EXPORT_ENDPOINT` must resolve to an HTTPS URL; omitting it
+keeps the feature off. The bearer token is optional. When present, OpenLift
+sends it as `Authorization: Bearer …`; when absent, no Authorization header is
+added. Keep both real values out of tracked configuration.
+
+After Fixed, ad hoc, or Adaptive completed-session JSON serializes, OpenLift
+idempotently queues it by `session_id` under Application Support. The token is
+never stored with the queued payload and neither token nor payload is logged.
+Delivery uses `POST`, `Content-Type: application/json`, and the session UUID as
+`Idempotency-Key`. Only a 2xx response removes an entry. Transport errors and
+all other HTTP responses retain it with attempt metadata and exponential retry
+backoff bounded between one minute and six hours. Delivery is attempted right
+away, at app launch/foreground, and during the existing background export-retry
+opportunities. iOS background scheduling is opportunistic, so launch/foreground
+remains the guaranteed retry trigger.
+
 ## Recovery Behavior
 
 The app can rebuild missing completed sessions from export files during bootstrap. That is why export files matter even though SwiftData is the primary store.

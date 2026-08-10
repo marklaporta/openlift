@@ -81,6 +81,7 @@ struct RootTabView: View {
         } catch {
             SessionExportService.scheduleBackgroundExportRetry()
         }
+        DirectExportService.retryPendingInBackground()
         StoreBackupService.mirrorStoreIfNeeded(modelContext: modelContext)
     }
 
