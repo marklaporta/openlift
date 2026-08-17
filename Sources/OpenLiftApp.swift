@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import BackgroundTasks
 
 @main
 struct OpenLiftApp: App {
@@ -134,6 +135,33 @@ struct OpenLiftApp: App {
         startup.container
     }
 
+    init() {
+        guard !AppRuntime.isUITesting else { return }
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: SessionExportService.backgroundRefreshIdentifier,
+            using: nil
+        ) { task in
+            guard let refreshTask = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            let operation = Task {
+                let startup = Self.startup
+                guard startup.issue == nil else {
+                    refreshTask.setTaskCompleted(success: false)
+                    return
+                }
+                await SessionExportService.runBackgroundExportRetry(
+                    modelContainer: startup.container
+                )
+                refreshTask.setTaskCompleted(success: !Task.isCancelled)
+            }
+            refreshTask.expirationHandler = {
+                operation.cancel()
+            }
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             if let issue = Self.startup.issue {
@@ -143,12 +171,6 @@ struct OpenLiftApp: App {
             }
         }
         .modelContainer(Self.sharedModelContainer)
-        .backgroundTask(.appRefresh(SessionExportService.backgroundRefreshIdentifier)) {
-            let startup = await Self.startup
-            if startup.issue == nil {
-                await SessionExportService.runBackgroundExportRetry(modelContainer: startup.container)
-            }
-        }
     }
 }
 

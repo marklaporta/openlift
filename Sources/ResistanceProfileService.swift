@@ -56,6 +56,20 @@ struct ResistanceProfileValue: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+/// Immutable UI-facing representation of a SwiftData resistance profile.
+/// Views may retain this value across swaps and deletions without retaining an
+/// invalidated `ExerciseResistanceProfile` model object.
+struct ResistanceProfileSnapshot: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let workoutKind: ResistanceProfileWorkoutKind
+    let sessionId: UUID
+    let exerciseId: UUID
+    let occurrenceId: UUID?
+    let value: ResistanceProfileValue?
+    let frozenAt: Date?
+    let updatedAt: Date
+}
+
 struct CableResistanceProfileControl: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -64,8 +78,8 @@ struct CableResistanceProfileControl: View {
     let sessionId: UUID
     let exerciseId: UUID
     let occurrenceId: UUID?
-    let profile: ExerciseResistanceProfile?
-    let profiles: [ExerciseResistanceProfile]
+    let profile: ResistanceProfileSnapshot?
+    let profiles: [ResistanceProfileSnapshot]
     let isCompletedOccurrence: Bool
     let onError: (String) -> Void
 
@@ -81,8 +95,8 @@ struct CableResistanceProfileControl: View {
         sessionId: UUID,
         exerciseId: UUID,
         occurrenceId: UUID?,
-        profile: ExerciseResistanceProfile?,
-        profiles: [ExerciseResistanceProfile],
+        profile: ResistanceProfileSnapshot?,
+        profiles: [ResistanceProfileSnapshot],
         isCompletedOccurrence: Bool = false,
         onError: @escaping (String) -> Void
     ) {
@@ -94,7 +108,7 @@ struct CableResistanceProfileControl: View {
         self.profiles = profiles
         self.isCompletedOccurrence = isCompletedOccurrence
         self.onError = onError
-        let initial = ResistanceProfileService.value(profile)
+        let initial = profile?.value
             ?? ResistanceProfileService.lastUsedValue(exerciseId: exerciseId, profiles: profiles)
             ?? .weightStack
         _source = State(initialValue: initial.resistanceSource)
@@ -108,7 +122,7 @@ struct CableResistanceProfileControl: View {
             isEditing = true
         } label: {
             Label(
-                ResistanceProfileService.value(profile)?.displayName ?? "Set Cable Resistance",
+                profile?.value?.displayName ?? "Set Cable Resistance",
                 systemImage: profile == nil ? "questionmark.circle" : "cable.connector"
             )
             .font(.caption)
@@ -157,7 +171,7 @@ struct CableResistanceProfileControl: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
                             if (profile?.frozenAt != nil
-                                && ResistanceProfileService.value(profile) != draftValue)
+                                && profile?.value != draftValue)
                                 || (profile == nil && isCompletedOccurrence) {
                                 pendingFrozenSave = true
                             } else {
@@ -188,14 +202,17 @@ struct CableResistanceProfileControl: View {
 
     private func save(confirmed: Bool) {
         do {
-            if let profile {
+            if let profileId = profile?.id {
                 try ResistanceProfileService.update(
-                    profile,
+                    profileId: profileId,
                     to: draftValue,
                     confirmedOccurrenceWideCorrection: confirmed,
                     modelContext: modelContext
                 )
             } else {
+                let currentProfiles = try modelContext.fetch(
+                    FetchDescriptor<ExerciseResistanceProfile>()
+                )
                 if isCompletedOccurrence {
                     _ = try ResistanceProfileService.createPerformedOccurrence(
                         workoutKind: workoutKind,
@@ -203,7 +220,7 @@ struct CableResistanceProfileControl: View {
                         exerciseId: exerciseId,
                         occurrenceId: occurrenceId,
                         value: draftValue,
-                        profiles: profiles,
+                        profiles: currentProfiles,
                         confirmedOccurrenceWideCorrection: confirmed,
                         modelContext: modelContext
                     )
@@ -214,7 +231,7 @@ struct CableResistanceProfileControl: View {
                         exerciseId: exerciseId,
                         occurrenceId: occurrenceId,
                         value: draftValue,
-                        profiles: profiles,
+                        profiles: currentProfiles,
                         modelContext: modelContext
                     )
                     try modelContext.save()
@@ -325,6 +342,7 @@ enum ResistanceProfileError: LocalizedError, Equatable {
     case auditCountMismatch(expected: Int, actual: Int)
     case manifestMismatch
     case conflictingExistingProfile
+    case profileNoLongerExists
 
     var errorDescription: String? {
         switch self {
@@ -346,11 +364,32 @@ enum ResistanceProfileError: LocalizedError, Equatable {
             return "The historical manifest does not exactly match the audited occurrence keys and set counts."
         case .conflictingExistingProfile:
             return "An audited occurrence already has a different resistance profile."
+        case .profileNoLongerExists:
+            return "This resistance profile changed or was removed. Reopen the exercise and try again."
         }
     }
 }
 
 enum ResistanceProfileService {
+    static func snapshot(_ profile: ExerciseResistanceProfile) -> ResistanceProfileSnapshot {
+        ResistanceProfileSnapshot(
+            id: profile.id,
+            workoutKind: profile.workoutKind,
+            sessionId: profile.sessionId,
+            exerciseId: profile.exerciseId,
+            occurrenceId: profile.occurrenceId,
+            value: value(profile),
+            frozenAt: profile.frozenAt,
+            updatedAt: profile.updatedAt
+        )
+    }
+
+    static func snapshots(
+        _ profiles: [ExerciseResistanceProfile]
+    ) -> [ResistanceProfileSnapshot] {
+        profiles.map(snapshot)
+    }
+
     static func value(_ profile: ExerciseResistanceProfile?) -> ResistanceProfileValue? {
         guard let profile else { return nil }
         let value = ResistanceProfileValue(
@@ -392,6 +431,18 @@ enum ResistanceProfileService {
             if $0.updatedAt != $1.updatedAt { return $0.updatedAt < $1.updatedAt }
             return $0.id.uuidString < $1.id.uuidString
         })
+    }
+
+    static func lastUsedValue(
+        exerciseId: UUID,
+        profiles: [ResistanceProfileSnapshot]
+    ) -> ResistanceProfileValue? {
+        let complete = profiles.filter { $0.value != nil }
+        let preferred = complete.filter { $0.exerciseId == exerciseId }
+        return (preferred.isEmpty ? complete : preferred).max {
+            if $0.updatedAt != $1.updatedAt { return $0.updatedAt < $1.updatedAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }?.value
     }
 
     @MainActor
@@ -516,6 +567,30 @@ enum ResistanceProfileService {
         }
     }
 
+    /// UI mutation boundary. Refetches by stable ID so a view never sends a
+    /// retained SwiftData object that may have been invalidated by a swap or
+    /// deletion while the edit sheet was open.
+    @MainActor
+    static func update(
+        profileId: UUID,
+        to value: ResistanceProfileValue,
+        confirmedOccurrenceWideCorrection: Bool,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        guard let profile = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+            .first(where: { $0.id == profileId }) else {
+            throw ResistanceProfileError.profileNoLongerExists
+        }
+        try update(
+            profile,
+            to: value,
+            confirmedOccurrenceWideCorrection: confirmedOccurrenceWideCorrection,
+            modelContext: modelContext,
+            now: now
+        )
+    }
+
     @MainActor
     static func freezeBeforeLock(
         _ profile: ExerciseResistanceProfile?,
@@ -530,6 +605,22 @@ enum ResistanceProfileService {
             profile.updatedAt = now
             try modelContext.save()
         }
+    }
+
+    /// UI mutation boundary equivalent of `freezeBeforeLock`, using only the
+    /// stable ID retained by the view.
+    @MainActor
+    static func freezeBeforeLock(
+        profileId: UUID?,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        guard let profileId,
+              let profile = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+                .first(where: { $0.id == profileId }) else {
+            throw ResistanceProfileError.profileRequiredBeforeLock
+        }
+        try freezeBeforeLock(profile, modelContext: modelContext, now: now)
     }
 
     @MainActor
