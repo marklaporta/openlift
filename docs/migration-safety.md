@@ -94,6 +94,20 @@ files are not changed. Re-running the two arguments validates the marker and
 repaired state without adding or changing sets, while still allowing a pending
 export retry to finish.
 
+## August 16 Pull A completion-date repair
+
+TestFlight builds after the reviewed August 17 late submission run a narrow,
+idempotent startup repair for Fixed Cycle session
+`46A246F9-1B51-47D7-BCC0-C754ECBD9C59`. The phone's direct export and iCloud
+mirror established the exact template, cycle, session, 12 locked sets, and
+already-advanced Push A pointer before implementation. The repair requires that
+entire manifest and the original August 17 completion timestamp, then changes
+only `finishedAt` to the last captured August 16 set timestamp, marks that one
+session export pending, and writes a durable marker. Startup re-exports only the
+target session. Any pointer, session, or set drift fails closed; unrelated
+stores silently skip the absent target. The repair never moves the cycle
+pointer, changes a set, or manufactures a draft.
+
 ## Startup failure contract
 
 The app attempts to open the persistent store once. If SwiftData rejects the

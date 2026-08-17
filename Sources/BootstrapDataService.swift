@@ -2,6 +2,34 @@ import Foundation
 import SwiftData
 
 enum BootstrapDataService {
+    enum August16PullACompletionRepairError: LocalizedError, Equatable {
+        case targetSessionNotFound
+        case pushAStateMissing
+        case unexpectedSessionState
+        case unexpectedExistingSets
+        case completedRepairStateMissing
+
+        var errorDescription: String? {
+            switch self {
+            case .targetSessionNotFound:
+                return "The completed August 16 Pull A session was not found."
+            case .pushAStateMissing:
+                return "The marked Push/Pull A/B cycle is not currently advanced to Push A. Refusing to alter workout history."
+            case .unexpectedSessionState:
+                return "The target Pull A session does not match the reviewed completion state. Refusing to alter it."
+            case .unexpectedExistingSets:
+                return "The target Pull A set rows do not match the reviewed 12-set manifest. Refusing to alter workout history."
+            case .completedRepairStateMissing:
+                return "The August 16 completion-date repair is marked complete, but its exact repaired state is missing."
+            }
+        }
+    }
+
+    struct August16PullACompletionRepairResult: Equatable {
+        let sessionId: UUID
+        let didApply: Bool
+    }
+
     enum July27AdaptiveInclineCurlRepairError: LocalizedError, Equatable {
         case backupConfirmationRequired
         case pushAStateMissing
@@ -871,6 +899,157 @@ enum BootstrapDataService {
         UUID(uuidString: "08476AD8-9550-4A33-94DF-55B12E6161F2")!
     static let july27AdaptiveInclineCurlExerciseId =
         UUID(uuidString: "96C071BF-05E2-467C-8357-CFE375C5C162")!
+    static let august16PullACompletionRepairMarkerKey =
+        "repair-2026-08-16-pull-a-completion-date-v1"
+    static let august16PullASessionId =
+        UUID(uuidString: "46A246F9-1B51-47D7-BCC0-C754ECBD9C59")!
+    static let august16PullACycleId =
+        UUID(uuidString: "D5E65036-2701-4320-A02E-1AF0C5865E9A")!
+    static let august16PullATemplateId =
+        UUID(uuidString: "A7B6B453-39EF-42BF-B798-5FED3224F1E1")!
+    static let august16PullAOriginalCompletion = Date(timeIntervalSince1970: 1_786_982_773)
+    static let august16PullARepairedCompletion = Date(timeIntervalSince1970: 1_786_908_126)
+
+    private struct August16PullASetManifestItem: Hashable {
+        let exerciseId: UUID
+        let setIndex: Int
+        let weight: Double
+        let reps: Int
+    }
+
+    /// One-time, fail-closed repair for Pull A work performed on August 16 but
+    /// submitted the following morning. The direct and iCloud export supplied
+    /// the exact session, cycle, exercise, and set manifest used below.
+    ///
+    /// Completion had already advanced the cycle to Push A. This operation
+    /// changes only the completed session timestamp, marks that session for a
+    /// fresh export, and records an idempotence marker. It never moves a cycle
+    /// pointer, creates a draft, or changes a set row.
+    @discardableResult
+    static func repairAugust16PullACompletionDate(
+        modelContext: ModelContext
+    ) throws -> August16PullACompletionRepairResult {
+        do {
+            return try repairAugust16PullACompletionDateTransaction(modelContext: modelContext)
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    private static func repairAugust16PullACompletionDateTransaction(
+        modelContext: ModelContext
+    ) throws -> August16PullACompletionRepairResult {
+        let preferences = try modelContext.fetch(FetchDescriptor<TrainingPreference>())
+        let sessions = try modelContext.fetch(FetchDescriptor<Session>())
+        let entries = try modelContext.fetch(FetchDescriptor<SetEntry>())
+        let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let cycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+
+        guard let session = sessions.first(where: { $0.id == august16PullASessionId }) else {
+            throw August16PullACompletionRepairError.targetSessionNotFound
+        }
+        guard TrainingModeService.resolvedMode(preferences: preferences) == .rotation,
+              preferences.contains(where: {
+                  $0.key == pushPullRolloutMarkerKey
+                      && $0.modeRawValue == august16PullATemplateId.uuidString
+              }),
+              let template = templates.first(where: { $0.id == august16PullATemplateId }),
+              let cycle = cycles.first(where: {
+                  $0.id == august16PullACycleId
+                      && $0.templateId == august16PullATemplateId
+              }) else {
+            throw August16PullACompletionRepairError.pushAStateMissing
+        }
+        let days = CycleOrdering.sortedDays(template.days)
+        guard days.indices.contains(cycle.currentDayIndex),
+              days[cycle.currentDayIndex].label.caseInsensitiveCompare("Push A") == .orderedSame else {
+            throw August16PullACompletionRepairError.pushAStateMissing
+        }
+
+        let markerExists = preferences.contains(where: {
+            $0.key == august16PullACompletionRepairMarkerKey
+                && $0.modeRawValue == august16PullASessionId.uuidString
+        })
+        if markerExists {
+            guard hasExactAugust16PullASessionState(
+                session,
+                expectedCompletion: august16PullARepairedCompletion
+            ), hasExactAugust16PullASetManifest(entries, sessionId: session.id) else {
+                throw August16PullACompletionRepairError.completedRepairStateMissing
+            }
+            return August16PullACompletionRepairResult(sessionId: session.id, didApply: false)
+        }
+
+        guard hasExactAugust16PullASessionState(
+            session,
+            expectedCompletion: august16PullAOriginalCompletion
+        ) else {
+            throw August16PullACompletionRepairError.unexpectedSessionState
+        }
+        guard hasExactAugust16PullASetManifest(entries, sessionId: session.id) else {
+            throw August16PullACompletionRepairError.unexpectedExistingSets
+        }
+
+        session.finishedAt = august16PullARepairedCompletion
+        session.exportStatus = .pending
+        modelContext.insert(
+            TrainingPreference(
+                key: august16PullACompletionRepairMarkerKey,
+                modeRawValue: session.id.uuidString
+            )
+        )
+        try modelContext.save()
+        return August16PullACompletionRepairResult(sessionId: session.id, didApply: true)
+    }
+
+    private static func hasExactAugust16PullASessionState(
+        _ session: Session,
+        expectedCompletion: Date
+    ) -> Bool {
+        guard session.cycleInstanceId == august16PullACycleId,
+              session.cycleDayIndex == 0,
+              session.cycleNameSnapshot == pushPullABTemplateName,
+              session.dayLabelSnapshot == "Pull A",
+              session.status == .completed,
+              let finishedAt = session.finishedAt else { return false }
+        return abs(finishedAt.timeIntervalSince(expectedCompletion)) < 2
+    }
+
+    private static func hasExactAugust16PullASetManifest(
+        _ entries: [SetEntry],
+        sessionId: UUID
+    ) -> Bool {
+        let actual: Set<August16PullASetManifestItem> = Set(
+            entries.filter { $0.sessionId == sessionId }.compactMap { entry in
+                guard entry.isLocked else { return nil }
+                return August16PullASetManifestItem(
+                    exerciseId: entry.exerciseId,
+                    setIndex: entry.setIndex,
+                    weight: entry.weight,
+                    reps: entry.reps
+                )
+            }
+        )
+        let targetEntries = entries.filter { $0.sessionId == sessionId }
+        return targetEntries.count == august16PullASetManifest.count
+            && actual == august16PullASetManifest
+    }
+
+    private static let august16PullASetManifest: Set<August16PullASetManifestItem> = [
+        .init(exerciseId: UUID(uuidString: "54214942-679D-4CBB-9B27-F78601897BA2")!, setIndex: 1, weight: 95, reps: 14),
+        .init(exerciseId: UUID(uuidString: "54214942-679D-4CBB-9B27-F78601897BA2")!, setIndex: 2, weight: 95, reps: 11),
+        .init(exerciseId: UUID(uuidString: "921ADA85-9DED-412E-B74B-DF4CB6661284")!, setIndex: 1, weight: 35, reps: 16),
+        .init(exerciseId: UUID(uuidString: "921ADA85-9DED-412E-B74B-DF4CB6661284")!, setIndex: 2, weight: 35, reps: 13),
+        .init(exerciseId: UUID(uuidString: "E27608C0-2EFD-436C-A01E-BAF327F44055")!, setIndex: 1, weight: 28, reps: 16),
+        .init(exerciseId: UUID(uuidString: "E27608C0-2EFD-436C-A01E-BAF327F44055")!, setIndex: 2, weight: 28, reps: 11),
+        .init(exerciseId: UUID(uuidString: "E27608C0-2EFD-436C-A01E-BAF327F44055")!, setIndex: 3, weight: 28, reps: 10),
+        .init(exerciseId: UUID(uuidString: "55B44E05-2ADC-4680-AB4B-FA10592ECF49")!, setIndex: 1, weight: 135, reps: 12),
+        .init(exerciseId: UUID(uuidString: "55B44E05-2ADC-4680-AB4B-FA10592ECF49")!, setIndex: 2, weight: 135, reps: 12),
+        .init(exerciseId: UUID(uuidString: "2A193B06-CABA-44D1-8E19-29675FC6D7E5")!, setIndex: 1, weight: 30, reps: 6),
+        .init(exerciseId: UUID(uuidString: "2A193B06-CABA-44D1-8E19-29675FC6D7E5")!, setIndex: 2, weight: 25, reps: 7),
+        .init(exerciseId: UUID(uuidString: "2A193B06-CABA-44D1-8E19-29675FC6D7E5")!, setIndex: 3, weight: 20, reps: 8),
+    ]
 
     /// Explicit, backup-gated repair for the completed July 27 Adaptive
     /// workout archived during the Push/Pull rollout.
