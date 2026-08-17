@@ -171,6 +171,119 @@ final class ResistanceProfileServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testSnapshotRemainsReadableAfterSwapDeletesBackingProfile() throws {
+        let (context, _) = makeContext()
+        let sessionId = UUID()
+        let oldExerciseId = UUID()
+        let profile = try ResistanceProfileService.create(
+            workoutKind: .fixed,
+            sessionId: sessionId,
+            exerciseId: oldExerciseId,
+            value: .voltra(
+                chainType: .inverseChains,
+                chainPercent: 25,
+                eccentricPercent: 25
+            ),
+            profiles: [],
+            modelContext: context
+        )
+        try context.save()
+        let snapshot = ResistanceProfileService.snapshot(profile)
+        let profileId = snapshot.id
+
+        context.delete(profile)
+        try context.save()
+
+        XCTAssertEqual(snapshot.id, profileId)
+        XCTAssertEqual(snapshot.exerciseId, oldExerciseId)
+        XCTAssertEqual(
+            snapshot.value,
+            .voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
+        )
+    }
+
+    @MainActor
+    func testStaleSwapSnapshotCannotMutateReplacementProfile() throws {
+        let (context, _) = makeContext()
+        let sessionId = UUID()
+        let occurrenceId = UUID()
+        let oldProfile = try ResistanceProfileService.create(
+            workoutKind: .adaptive,
+            sessionId: sessionId,
+            exerciseId: UUID(),
+            occurrenceId: occurrenceId,
+            value: .weightStack,
+            profiles: [],
+            modelContext: context
+        )
+        try context.save()
+        let staleSnapshot = ResistanceProfileService.snapshot(oldProfile)
+        context.delete(oldProfile)
+        try context.save()
+
+        let replacementValue = ResistanceProfileValue.voltra(
+            chainType: .inverseChains,
+            chainPercent: 70,
+            eccentricPercent: 30
+        )
+        let replacement = try ResistanceProfileService.create(
+            workoutKind: .adaptive,
+            sessionId: sessionId,
+            exerciseId: UUID(),
+            occurrenceId: occurrenceId,
+            value: replacementValue,
+            profiles: [],
+            modelContext: context
+        )
+        try context.save()
+
+        XCTAssertThrowsError(
+            try ResistanceProfileService.update(
+                profileId: staleSnapshot.id,
+                to: .weightStack,
+                confirmedOccurrenceWideCorrection: false,
+                modelContext: context
+            )
+        ) { error in
+            XCTAssertEqual(error as? ResistanceProfileError, .profileNoLongerExists)
+        }
+        XCTAssertEqual(ResistanceProfileService.value(replacement), replacementValue)
+    }
+
+    @MainActor
+    func testStableProfileIdRefetchesLiveModelAtMutationBoundary() throws {
+        let (context, _) = makeContext()
+        let profile = try ResistanceProfileService.create(
+            workoutKind: .fixed,
+            sessionId: UUID(),
+            exerciseId: UUID(),
+            value: .weightStack,
+            profiles: [],
+            modelContext: context
+        )
+        try context.save()
+        let snapshot = ResistanceProfileService.snapshot(profile)
+        let changed = ResistanceProfileValue.voltra(
+            chainType: .inverseChains,
+            chainPercent: 25,
+            eccentricPercent: 15
+        )
+
+        try ResistanceProfileService.update(
+            profileId: snapshot.id,
+            to: changed,
+            confirmedOccurrenceWideCorrection: false,
+            modelContext: context
+        )
+
+        let stored = try XCTUnwrap(
+            context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+                .first(where: { $0.id == snapshot.id })
+        )
+        XCTAssertEqual(ResistanceProfileService.value(stored), changed)
+    }
+
+    @MainActor
     func testPerformedProfileCreationRequiresConfirmationFreezesAndMarksExportPending() throws {
         let (context, _) = makeContext()
         let session = Session(

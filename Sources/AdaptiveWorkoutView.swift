@@ -414,8 +414,12 @@ struct AdaptiveWorkoutView: View {
                                 title: effectiveExercise?.name ?? snapshot.exerciseName,
                                 exercise: effectiveExercise,
                                 entries: entries,
-                                resistanceProfile: resistanceProfile,
-                                resistanceProfiles: resistanceProfiles,
+                                resistanceProfile: resistanceProfile.map(
+                                    ResistanceProfileService.snapshot
+                                ),
+                                resistanceProfiles: ResistanceProfileService.snapshots(
+                                    resistanceProfiles
+                                ),
                                 sessionId: session.id,
                                 occurrenceId: snapshot.occurrenceId,
                                 canMoveEarlier: canMoveMovement(snapshot, in: plan, direction: .earlier),
@@ -1956,8 +1960,8 @@ private struct AdaptiveExerciseSection: View {
     let title: String
     let exercise: Exercise?
     let entries: [AdaptiveSetEntry]
-    let resistanceProfile: ExerciseResistanceProfile?
-    let resistanceProfiles: [ExerciseResistanceProfile]
+    let resistanceProfile: ResistanceProfileSnapshot?
+    let resistanceProfiles: [ResistanceProfileSnapshot]
     let sessionId: UUID
     let occurrenceId: UUID
     let canMoveEarlier: Bool
@@ -2049,7 +2053,7 @@ private struct AdaptiveExerciseSection: View {
                         if !entry.isLocked, exercise?.equipment.supportsResistanceProfile == true {
                             do {
                                 try ResistanceProfileService.freezeBeforeLock(
-                                    resistanceProfile,
+                                    profileId: resistanceProfile?.id,
                                     modelContext: modelContext
                                 )
                             } catch {

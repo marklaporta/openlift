@@ -484,8 +484,10 @@ private struct AdaptiveSessionDetailView: View {
                                         sessionId: session.id,
                                         exerciseId: actualExerciseId,
                                         occurrenceId: snapshot.occurrenceId,
-                                        profile: profile,
-                                        profiles: resistanceProfiles,
+                                        profile: profile.map(ResistanceProfileService.snapshot),
+                                        profiles: ResistanceProfileService.snapshots(
+                                            resistanceProfiles
+                                        ),
                                         isCompletedOccurrence: true,
                                         onError: { profileError = $0 }
                                     )
@@ -723,8 +725,8 @@ private struct SessionDetailView: View {
                             sessionId: session.id,
                             exerciseId: group.exercise.id,
                             occurrenceId: nil,
-                            profile: profile,
-                            profiles: resistanceProfiles,
+                            profile: profile.map(ResistanceProfileService.snapshot),
+                            profiles: ResistanceProfileService.snapshots(resistanceProfiles),
                             isCompletedOccurrence: true,
                             onError: { exportError = $0 }
                         )

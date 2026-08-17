@@ -750,8 +750,12 @@ struct WorkoutView: View {
                                 entries: entries(for: resolved.exerciseId, sessionId: draftSession.id),
                                 isExecutionEnabled: isFixedExecutionEnabled,
                                 prefillSource: source.map(prefillSourceText),
-                                resistanceProfile: resistanceProfile,
-                                resistanceProfiles: resistanceProfiles,
+                                resistanceProfile: resistanceProfile.map(
+                                    ResistanceProfileService.snapshot
+                                ),
+                                resistanceProfiles: ResistanceProfileService.snapshots(
+                                    resistanceProfiles
+                                ),
                                 sessionId: draftSession.id,
                                 onAddSet: { addSet(for: resolved.exerciseId, sessionId: draftSession.id) },
                                 onRemoveSet: { removeSet(for: resolved.exerciseId, sessionId: draftSession.id) },
@@ -2349,8 +2353,8 @@ private struct ExerciseSection: View {
     let entries: [SetEntry]
     let isExecutionEnabled: Bool
     let prefillSource: String?
-    let resistanceProfile: ExerciseResistanceProfile?
-    let resistanceProfiles: [ExerciseResistanceProfile]
+    let resistanceProfile: ResistanceProfileSnapshot?
+    let resistanceProfiles: [ResistanceProfileSnapshot]
     let sessionId: UUID
     let onAddSet: () -> Void
     let onRemoveSet: () -> Void
@@ -2482,7 +2486,7 @@ private struct ExerciseSection: View {
                         if !entry.isLocked, exercise?.equipment.supportsResistanceProfile == true {
                             do {
                                 try ResistanceProfileService.freezeBeforeLock(
-                                    resistanceProfile,
+                                    profileId: resistanceProfile?.id,
                                     modelContext: modelContext
                                 )
                             } catch {
