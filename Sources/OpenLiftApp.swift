@@ -61,6 +61,30 @@ struct OpenLiftApp: App {
         if startup.issue == nil, !AppRuntime.isUITesting {
             let modelContext = ModelContext(startup.container)
             do {
+                let result = try BootstrapDataService.repairAugust16PullACompletionDate(
+                    modelContext: modelContext
+                )
+                if result.didApply {
+                    let exportOutcome = try SessionExportService.retryCompletedSessionExport(
+                        sessionId: result.sessionId,
+                        modelContext: modelContext
+                    )
+                    print(
+                        "OPENLIFT_AUGUST_16_PULL_A_DATE_REPAIR_RESULT applied=true session=\(result.sessionId) export=\(exportOutcome.status.rawValue) file=\(exportOutcome.filename)"
+                    )
+                }
+            } catch BootstrapDataService.August16PullACompletionRepairError.targetSessionNotFound {
+                // Expected for clean installs and stores that predate this
+                // exact reviewed session. This build is safe for every tester.
+            } catch {
+                print(
+                    "OPENLIFT_AUGUST_16_PULL_A_DATE_REPAIR_FAILED \(error.localizedDescription)"
+                )
+            }
+        }
+        if startup.issue == nil, !AppRuntime.isUITesting {
+            let modelContext = ModelContext(startup.container)
+            do {
                 let result = try HistoricalResistanceProfileMigration.runAtStartup(
                     modelContext: modelContext
                 )
