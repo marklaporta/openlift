@@ -352,6 +352,19 @@ enum OpenLiftSchemaV12: VersionedSchema {
     ]
 }
 
+/// Adds cycle-owned versioned cluster pointers, frozen draft contexts, and
+/// immutable progression occurrences as parallel entities. No V1-V12 shape
+/// changes and migration never guesses an identity for legacy history.
+enum OpenLiftSchemaV13: VersionedSchema {
+    static let versionIdentifier = Schema.Version(13, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV12.models + [
+        FixedCycleClusterPointer.self,
+        FixedCycleSessionContext.self,
+        FixedCycleProgressionOccurrence.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
@@ -365,7 +378,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV9.self,
         OpenLiftSchemaV10.self,
         OpenLiftSchemaV11.self,
-        OpenLiftSchemaV12.self
+        OpenLiftSchemaV12.self,
+        OpenLiftSchemaV13.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -412,6 +426,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV11.self,
             toVersion: OpenLiftSchemaV12.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV12.self,
+            toVersion: OpenLiftSchemaV13.self
         )
     ]
 }

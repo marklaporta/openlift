@@ -2398,6 +2398,7 @@ enum ExerciseEffortSourceKind: String, Equatable {
 
 enum ExerciseEffortMatchKind: String, Equatable {
     case sameCycleDay
+    case sameProgressionIdentity
     case globalLatest
 }
 
@@ -2414,6 +2415,13 @@ struct ExerciseEffortLookupResult: Equatable {
 
     var isComparable: Bool {
         profileComparison == .exact
+    }
+
+    /// Stable progression identity outranks profile mismatch. Clustered Fixed
+    /// Cycle uses this for the explicit same-key-any-profile fallback while
+    /// legacy and global callers retain exact-profile-only prefill behavior.
+    var isProgressionPrefillEligible: Bool {
+        matchKind == .sameProgressionIdentity || isComparable
     }
 }
 
@@ -2435,9 +2443,60 @@ enum ExerciseEffortLookupService {
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
         rotationSetEntries: [SetEntry],
+        progressionKey: String? = nil,
+        progressionOccurrences: [FixedCycleProgressionOccurrence] = [],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
         resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> ExerciseEffortLookupResult? {
+        if let progressionKey {
+            let identityBySession = Dictionary(
+                progressionOccurrences.compactMap { occurrence -> (UUID, FixedCycleProgressionSnapshot)? in
+                    guard let snapshot = occurrence.exerciseSnapshots.first(where: {
+                        $0.progressionKey == progressionKey
+                            && $0.exerciseId == exerciseId
+                            && $0.completionStatus == .performed
+                    }) else { return nil }
+                    return (occurrence.sessionId, snapshot)
+                },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let sameIdentity = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
+                guard session.id != excludingSessionId,
+                      let snapshot = identityBySession[session.id],
+                      session.status == .completed,
+                      session.dayLabelSnapshot != "Off-Schedule" else {
+                    return nil
+                }
+                return rotationResult(
+                    session: session,
+                    exerciseId: exerciseId,
+                    matchKind: .sameProgressionIdentity,
+                    entries: rotationSetEntries,
+                    resistanceRequirement: resistanceRequirement,
+                    resistanceProfiles: resistanceProfiles,
+                    historicalProfileOverride: snapshot.resistanceProfile,
+                    usesHistoricalProfileOverride: true
+                )
+            }
+            if let result = preferred(sameIdentity) {
+                return result
+            }
+            // Legacy sessions deliberately have no progression occurrence.
+            // A fresh key retains the old global exercise/profile fallback
+            // without guessing which new structural identity owned old work.
+            return globalEffort(
+                exerciseId: exerciseId,
+                excludingSessionId: excludingSessionId,
+                excludingPlanId: nil,
+                adaptiveSessions: adaptiveSessions,
+                adaptiveSetEntries: adaptiveSetEntries,
+                rotationSessions: rotationSessions,
+                rotationSetEntries: rotationSetEntries,
+                excludingRotationSessionIds: Set(progressionOccurrences.map(\.sessionId)),
+                resistanceRequirement: resistanceRequirement,
+                resistanceProfiles: resistanceProfiles
+            )
+        }
         let sameDay = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
             guard session.id != excludingSessionId,
                   session.status == .completed,
@@ -2479,6 +2538,7 @@ enum ExerciseEffortLookupService {
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
         rotationSetEntries: [SetEntry],
+        excludingRotationSessionIds: Set<UUID> = [],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
         resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> ExerciseEffortLookupResult? {
@@ -2525,7 +2585,8 @@ enum ExerciseEffortLookupService {
         }
 
         let rotation = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
-            guard session.id != excludingSessionId else { return nil }
+            guard session.id != excludingSessionId,
+                  !excludingRotationSessionIds.contains(session.id) else { return nil }
             return rotationResult(
                 session: session,
                 exerciseId: exerciseId,
@@ -2544,7 +2605,9 @@ enum ExerciseEffortLookupService {
         matchKind: ExerciseEffortMatchKind,
         entries: [SetEntry],
         resistanceRequirement: ResistanceProfileLookupRequirement,
-        resistanceProfiles: [ExerciseResistanceProfile]
+        resistanceProfiles: [ExerciseResistanceProfile],
+        historicalProfileOverride: ResistanceProfileValue? = nil,
+        usesHistoricalProfileOverride: Bool = false
     ) -> ExerciseEffortLookupResult? {
         guard session.status == .completed else { return nil }
         let rows = entries
@@ -2567,13 +2630,14 @@ enum ExerciseEffortLookupService {
         let kind: ResistanceProfileWorkoutKind = session.dayLabelSnapshot == "Off-Schedule"
             ? .adHoc
             : .fixed
-        let profile = (try? ResistanceProfileService.profile(
+        let storedProfile = (try? ResistanceProfileService.profile(
             workoutKind: kind,
             sessionId: session.id,
             exerciseId: exerciseId,
             occurrenceId: nil,
             in: resistanceProfiles
         )).flatMap(ResistanceProfileService.value)
+        let profile = usesHistoricalProfileOverride ? historicalProfileOverride : storedProfile
         return ExerciseEffortLookupResult(
             sessionId: session.id,
             completedAt: session.finishedAt ?? session.createdAt,

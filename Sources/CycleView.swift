@@ -13,6 +13,9 @@ struct CycleView: View {
     @Query private var activeCycles: [ActiveCycleInstance]
     @Query private var sessions: [Session]
     @Query private var setEntries: [SetEntry]
+    @Query private var clusterPointers: [FixedCycleClusterPointer]
+    @Query private var fixedCycleSessionContexts: [FixedCycleSessionContext]
+    @Query private var progressionOccurrences: [FixedCycleProgressionOccurrence]
     @Query private var trainingPreferences: [TrainingPreference]
     @Query private var adaptivePrograms: [AdaptiveProgram]
     @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
@@ -117,11 +120,13 @@ struct CycleView: View {
                                     editingTemplate = template
                                 }
                                 .buttonStyle(.bordered)
+                                .disabled(FixedCycleClusterProgramService.isProgramTemplate(template))
 
                                 Button("Clone") {
                                     pendingMutation = .clone(templateId: template.id, name: template.name)
                                 }
                                 .buttonStyle(.bordered)
+                                .disabled(FixedCycleClusterProgramService.isProgramTemplate(template))
 
                                 Button("Activate") {
                                     pendingMutation = .activate(templateId: template.id, name: template.name)
@@ -349,7 +354,15 @@ struct CycleView: View {
             let currentExercises = try ensureExerciseCatalog()
 
             let draft = try PublishedCycleService.parseTemplate(at: published.url, exercises: currentExercises)
+            guard draft.name.caseInsensitiveCompare(
+                FixedCycleClusterProgramService.templateName
+            ) != .orderedSame else {
+                throw BootstrapDataService.ClusteredProgramRolloutError.existingTemplateConflict
+            }
             if let existing = templates.first(where: { $0.name.caseInsensitiveCompare(draft.name) == .orderedSame }) {
+                guard !FixedCycleClusterProgramService.isProgramTemplate(existing) else {
+                    throw BootstrapDataService.ClusteredProgramRolloutError.existingTemplateConflict
+                }
                 if !activateAfterImport, existing.id == activeTemplate?.id {
                     errorMessage = "This cycle is active. Use Import + Activate to replace it."
                     return
@@ -386,16 +399,40 @@ struct CycleView: View {
 
     private func activate(template: CycleTemplate) {
         do {
+            if template.name.caseInsensitiveCompare(
+                FixedCycleClusterProgramService.templateName
+            ) == .orderedSame,
+               !FixedCycleClusterProgramService.isProgramTemplate(template) {
+                throw BootstrapDataService.ClusteredProgramRolloutError.existingTemplateConflict
+            }
             // Ensure the next Workout load uses this template immediately.
             let draftSessions = sessions.filter { $0.status == .draft }
+            let draftIDs = Set(draftSessions.map(\.id))
+            guard !progressionOccurrences.contains(where: {
+                draftIDs.contains($0.sessionId)
+            }) else {
+                throw FixedCycleWorkoutError.completedClusterDraftCannotBeDiscarded
+            }
+            let cleanup = FixedCycleClusterProgramService.activationCleanupPlan(
+                existingCycles: activeCycles,
+                pointers: clusterPointers,
+                contexts: fixedCycleSessionContexts,
+                sessions: sessions
+            )
             for draft in draftSessions {
                 for entry in setEntries where entry.sessionId == draft.id {
                     modelContext.delete(entry)
                 }
                 modelContext.delete(draft)
             }
+            for context in fixedCycleSessionContexts where cleanup.contextIDs.contains(context.id) {
+                modelContext.delete(context)
+            }
 
             // Keep exactly one active cycle instance to avoid stale pointer selection.
+            for pointer in clusterPointers where cleanup.pointerIDs.contains(pointer.id) {
+                modelContext.delete(pointer)
+            }
             for existing in activeCycles {
                 modelContext.delete(existing)
             }
@@ -404,6 +441,14 @@ struct CycleView: View {
             let cycle = ActiveCycleInstance(templateId: template.id, currentDayIndex: 0, rotationIndices: rotationIndices)
             try cycle.validate(template: template)
             modelContext.insert(cycle)
+            if FixedCycleClusterProgramService.isProgramTemplate(template) {
+                for pointer in FixedCycleClusterProgramService.makeRotationStates(
+                    cycleInstanceId: cycle.id,
+                    templateId: template.id
+                ) {
+                    modelContext.insert(pointer)
+                }
+            }
             try modelContext.save()
             UserDefaults.standard.set(template.id.uuidString, forKey: "openlift.lastActivatedTemplateId")
             UserDefaults.standard.set(template.name, forKey: "openlift.lastActivatedTemplateName")

@@ -87,6 +87,8 @@ enum SessionExportService {
         let fixedReadiness = try modelContext.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
         let fixedOverrides = try modelContext.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>())
         let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
+        let clusterOccurrences = try modelContext.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>())
+        let clusterRotationStates = try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
         let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
 
         for session in retryableSessions {
@@ -95,31 +97,18 @@ enum SessionExportService {
                 activeCycles: activeCycles,
                 templates: templates
             )
-            let fixedTemplate = activeCycles
-                .first(where: { $0.id == session.cycleInstanceId })
-                .flatMap { cycle in templates.first(where: { $0.id == cycle.templateId }) }
-                ?? templates.first(where: {
-                    $0.name.caseInsensitiveCompare(session.cycleNameSnapshot ?? "") == .orderedSame
-                })
-            let fixedMetadata: FixedCycleMetadata?
-            if session.dayLabelSnapshot != "Off-Schedule",
-               let template = fixedTemplate {
-                let days = CycleOrdering.sortedDays(template.days)
-                fixedMetadata = days.indices.contains(session.cycleDayIndex)
-                    ? fixedCycleMetadata(
-                        session: session,
-                        template: template,
-                        day: days[session.cycleDayIndex],
-                        exercises: exercises,
-                        setEntries: setEntries,
-                        readiness: fixedReadiness,
-                        overrides: fixedOverrides,
-                        snapshots: fixedSnapshots
-                    )
-                    : nil
-            } else {
-                fixedMetadata = nil
-            }
+            let fixedMetadata = resolvedFixedCycleMetadata(
+                session: session,
+                activeCycles: activeCycles,
+                templates: templates,
+                exercises: exercises,
+                setEntries: setEntries,
+                readiness: fixedReadiness,
+                overrides: fixedOverrides,
+                snapshots: fixedSnapshots,
+                clusterOccurrences: clusterOccurrences,
+                clusterRotationStates: clusterRotationStates
+            )
             do {
                 _ = try exportAndTrack(
                     session: session,
@@ -176,36 +165,26 @@ enum SessionExportService {
         let fixedReadiness = try modelContext.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
         let fixedOverrides = try modelContext.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>())
         let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
+        let clusterOccurrences = try modelContext.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>())
+        let clusterRotationStates = try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
         let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
         let cycleName = exportCycleName(
             for: session,
             activeCycles: activeCycles,
             templates: templates
         )
-        let fixedTemplate = activeCycles
-            .first(where: { $0.id == session.cycleInstanceId })
-            .flatMap { cycle in templates.first(where: { $0.id == cycle.templateId }) }
-            ?? templates.first(where: {
-                $0.name.caseInsensitiveCompare(session.cycleNameSnapshot ?? "") == .orderedSame
-            })
-        let fixedMetadata: FixedCycleMetadata?
-        if session.dayLabelSnapshot != "Off-Schedule", let fixedTemplate {
-            let days = CycleOrdering.sortedDays(fixedTemplate.days)
-            fixedMetadata = days.indices.contains(session.cycleDayIndex)
-                ? fixedCycleMetadata(
-                    session: session,
-                    template: fixedTemplate,
-                    day: days[session.cycleDayIndex],
-                    exercises: exercises,
-                    setEntries: setEntries,
-                    readiness: fixedReadiness,
-                    overrides: fixedOverrides,
-                    snapshots: fixedSnapshots
-                )
-                : nil
-        } else {
-            fixedMetadata = nil
-        }
+        let fixedMetadata = resolvedFixedCycleMetadata(
+            session: session,
+            activeCycles: activeCycles,
+            templates: templates,
+            exercises: exercises,
+            setEntries: setEntries,
+            readiness: fixedReadiness,
+            overrides: fixedOverrides,
+            snapshots: fixedSnapshots,
+            clusterOccurrences: clusterOccurrences,
+            clusterRotationStates: clusterRotationStates
+        )
         return try exportAndTrack(
             session: session,
             cycleName: cycleName,
@@ -345,6 +324,7 @@ enum SessionExportService {
         let muscle: String
         let status: String
         let skip_reason: String?
+        let progression_key: String?
     }
 
     struct FixedSkipPayload: Codable, Equatable, Sendable {
@@ -357,6 +337,37 @@ enum SessionExportService {
         let created_at: String
     }
 
+    struct ClusterExerciseOccurrencePayload: Codable, Equatable, Sendable {
+        let position: Int
+        let exercise_id: String
+        let exercise_name: String
+        let muscle: String
+        let prescribed_set_count: Int
+        let progression_key: String
+        let resistance_profile: ResistanceProfilePayload?
+        let completion_status: String
+    }
+
+    struct ClusterOccurrencePayload: Codable, Equatable, Sendable {
+        let occurrence_id: String
+        let program_version_id: String
+        let cluster_id: String
+        let position_index: Int
+        let template_day_position: Int?
+        let day_label: String?
+        let completed_at: String
+        let exercises: [ClusterExerciseOccurrencePayload]
+    }
+
+    struct FixedCycleClusterPointerPayload: Codable, Equatable, Sendable {
+        let program_version_id: String
+        let cluster_id: String
+        let position_index: Int
+        let updated_at: String
+        let last_completed_occurrence_id: String?
+        let is_derived: Bool
+    }
+
     struct FixedCycleMetadata: Codable, Equatable, Sendable {
         let schema_version: Int
         let template_id: String
@@ -365,6 +376,12 @@ enum SessionExportService {
         let ordered_exercises: [FixedOccurrencePayload]
         let readiness: [FixedReadinessPayload]
         let skips: [FixedSkipPayload]
+        let program_identifier: String?
+        let program_version: Int?
+        let cluster_key: String?
+        let absolute_cluster_step: Int?
+        let cluster_occurrences: [ClusterOccurrencePayload]?
+        let cluster_rotation_states: [FixedCycleClusterPointerPayload]?
     }
 
     struct ExportPayload: Codable {
@@ -497,7 +514,9 @@ enum SessionExportService {
         setEntries: [SetEntry],
         readiness: [FixedCycleReadinessObservation],
         overrides: [FixedCycleOccurrenceOverride],
-        snapshots: [FixedCycleExerciseSnapshot] = []
+        snapshots: [FixedCycleExerciseSnapshot] = [],
+        clusterOccurrences: [FixedCycleProgressionOccurrence] = [],
+        clusterRotationStates: [FixedCycleClusterPointer] = []
     ) -> FixedCycleMetadata {
         let exerciseById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
         let sessionOverrides = overrides.filter { $0.sessionId == session.id }
@@ -517,6 +536,15 @@ enum SessionExportService {
             }
         )
         let sessionSnapshots = snapshots.filter { $0.sessionId == session.id }
+        let sessionClusterOccurrences = clusterOccurrences
+            .filter { $0.sessionId == session.id }
+            .sorted {
+                let left = FixedCycleClusterProgramService.Cluster(rawValue: $0.clusterID)
+                    .flatMap { FixedCycleClusterProgramService.Cluster.allCases.firstIndex(of: $0) } ?? Int.max
+                let right = FixedCycleClusterProgramService.Cluster(rawValue: $1.clusterID)
+                    .flatMap { FixedCycleClusterProgramService.Cluster.allCases.firstIndex(of: $0) } ?? Int.max
+                return left == right ? $0.completedAt < $1.completedAt : left < right
+            }
         let sortedSnapshots = sessionSnapshots.sorted {
             if $0.position != $1.position { return $0.position < $1.position }
             return $0.id.uuidString < $1.id.uuidString
@@ -538,7 +566,8 @@ enum SessionExportService {
                 exercise_name: snapshot.exerciseName,
                 muscle: snapshot.muscle.rawValue,
                 status: status,
-                skip_reason: snapshot.skipReason ?? reason
+                skip_reason: snapshot.skipReason ?? reason,
+                progression_key: nil
             )
         }
         let payloadForSlot: (CycleSlot) -> FixedOccurrencePayload? = { slot in
@@ -558,11 +587,28 @@ enum SessionExportService {
                 status: reason != nil || skippedMuscles.contains(slot.muscle)
                     ? "skipped"
                     : (completed ? "completed" : "zero_set"),
-                skip_reason: reason
+                skip_reason: reason,
+                progression_key: nil
             )
         }
         let ordered: [FixedOccurrencePayload]
-        if !sessionSnapshots.isEmpty
+        if !sessionClusterOccurrences.isEmpty {
+            ordered = sessionClusterOccurrences.enumerated().flatMap { clusterIndex, occurrence in
+                occurrence.exerciseSnapshots
+                    .filter { $0.completionStatus == .performed }
+                    .map { snapshot in
+                        FixedOccurrencePayload(
+                            position: clusterIndex * 10 + snapshot.position,
+                            exercise_id: snapshot.exerciseId.uuidString,
+                            exercise_name: snapshot.exerciseName,
+                            muscle: snapshot.muscle.rawValue,
+                            status: "completed",
+                            skip_reason: nil,
+                            progression_key: snapshot.progressionKey
+                        )
+                    }
+            }
+        } else if !sessionSnapshots.isEmpty
             && !sessionSnapshots.contains(where: { $0.statusRawValue == "planned" }) {
             // A completed occurrence owns an immutable final snapshot. Export
             // retries must not consult a template that may have changed later.
@@ -591,11 +637,63 @@ enum SessionExportService {
             ordered = CycleOrdering.sortedSlots(day.slots).compactMap(payloadForSlot)
         }
         let iso = ISO8601DateFormatter()
+        let clusterPayloads = sessionClusterOccurrences.map { occurrence in
+            ClusterOccurrencePayload(
+                occurrence_id: occurrence.id.uuidString,
+                program_version_id: occurrence.programVersionID,
+                cluster_id: occurrence.clusterID,
+                position_index: occurrence.positionIndex,
+                template_day_position: occurrence.templateDayPosition,
+                day_label: occurrence.dayLabel,
+                completed_at: iso.string(from: occurrence.completedAt),
+                exercises: occurrence.exerciseSnapshots
+                    .filter { $0.completionStatus == .performed }
+                    .map { snapshot in
+                        ClusterExerciseOccurrencePayload(
+                            position: snapshot.position,
+                            exercise_id: snapshot.exerciseId.uuidString,
+                            exercise_name: snapshot.exerciseName,
+                            muscle: snapshot.muscle.rawValue,
+                            prescribed_set_count: snapshot.prescribedSetCount,
+                            progression_key: snapshot.progressionKey,
+                            resistance_profile: snapshot.resistanceProfile.map(ResistanceProfilePayload.init),
+                            completion_status: snapshot.completionStatus.rawValue
+                        )
+                    }
+            )
+        }
+        let occurrenceProgramVersionID = sessionClusterOccurrences.first?.programVersionID
+        let statePayloads = clusterRotationStates
+            .filter {
+                $0.cycleInstanceId == session.cycleInstanceId
+                    && $0.programVersionID == (
+                    occurrenceProgramVersionID
+                        ?? FixedCycleClusterProgramService.programVersionID
+                )
+            }
+            .sorted { $0.clusterID < $1.clusterID }
+            .map { state in
+                FixedCycleClusterPointerPayload(
+                    program_version_id: state.programVersionID,
+                    cluster_id: state.clusterID,
+                    position_index: state.positionIndex,
+                    updated_at: iso.string(from: state.updatedAt),
+                    last_completed_occurrence_id: state.lastCompletedOccurrenceID?.uuidString,
+                    is_derived: state.isDerived
+                )
+            }
+        // A completed occurrence is the authoritative structural signal. This
+        // keeps retries stable if the live template is later renamed, edited,
+        // or replaced by a newer program version.
+        let isClustered = !sessionClusterOccurrences.isEmpty
+            || FixedCycleClusterProgramService.isProgramTemplate(template)
+        let programVersion = occurrenceProgramVersionID.flatMap(clusteredProgramVersion)
         return FixedCycleMetadata(
-            schema_version: 3,
-            template_id: template.id.uuidString,
-            cycle_instance_id: session.cycleInstanceId.uuidString,
-            day_label: day.label,
+            schema_version: isClustered ? 4 : 3,
+            template_id: (sessionClusterOccurrences.first?.templateId ?? template.id).uuidString,
+            cycle_instance_id: (sessionClusterOccurrences.first?.cycleInstanceId
+                ?? session.cycleInstanceId).uuidString,
+            day_label: isClustered ? (session.dayLabelSnapshot ?? "Clustered Workout") : day.label,
             ordered_exercises: ordered,
             readiness: readiness
                 .filter { $0.sessionId == session.id }
@@ -636,8 +734,96 @@ enum SessionExportService {
                     reason: $0.reasonCode,
                     created_at: iso.string(from: $0.createdAt)
                 )
-            }
+            },
+            program_identifier: isClustered
+                ? (programVersion?.identifier
+                    ?? FixedCycleClusterProgramService.programIdentifier)
+                : nil,
+            program_version: isClustered
+                ? (programVersion?.version
+                    ?? FixedCycleClusterProgramService.structureVersion)
+                : nil,
+            cluster_key: nil,
+            absolute_cluster_step: nil,
+            cluster_occurrences: isClustered ? clusterPayloads : nil,
+            cluster_rotation_states: isClustered ? statePayloads : nil
         )
+    }
+
+    /// Resolves export metadata without re-deriving a completed clustered
+    /// workout from a mutable template. The ActiveCycleInstance supplies the
+    /// original template UUID; the occurrence supplies every workout detail.
+    static func resolvedFixedCycleMetadata(
+        session: Session,
+        activeCycles: [ActiveCycleInstance],
+        templates: [CycleTemplate],
+        exercises: [Exercise],
+        setEntries: [SetEntry],
+        readiness: [FixedCycleReadinessObservation],
+        overrides: [FixedCycleOccurrenceOverride],
+        snapshots: [FixedCycleExerciseSnapshot],
+        clusterOccurrences: [FixedCycleProgressionOccurrence],
+        clusterRotationStates: [FixedCycleClusterPointer]
+    ) -> FixedCycleMetadata? {
+        guard session.dayLabelSnapshot != "Off-Schedule" else { return nil }
+        let cycle = activeCycles.first { $0.id == session.cycleInstanceId }
+        let template = cycle.flatMap { activeCycle in
+            templates.first { $0.id == activeCycle.templateId }
+        } ?? templates.first {
+            $0.name.caseInsensitiveCompare(session.cycleNameSnapshot ?? "") == .orderedSame
+        }
+        let sessionOccurrences = clusterOccurrences.filter { $0.sessionId == session.id }
+        if !sessionOccurrences.isEmpty {
+            guard let frozenOccurrence = sessionOccurrences.sorted(by: {
+                $0.clusterID < $1.clusterID
+            }).first else { return nil }
+            let templateID = frozenOccurrence.templateId
+            let frozenTemplate = CycleTemplate(
+                id: templateID,
+                name: FixedCycleClusterProgramService.templateName,
+                days: []
+            )
+            let frozenDay = CycleDay(
+                label: frozenOccurrence.dayLabel,
+                slots: [],
+                position: frozenOccurrence.templateDayPosition
+            )
+            return fixedCycleMetadata(
+                session: session,
+                template: frozenTemplate,
+                day: frozenDay,
+                exercises: exercises,
+                setEntries: setEntries,
+                readiness: readiness,
+                overrides: overrides,
+                snapshots: snapshots,
+                clusterOccurrences: sessionOccurrences,
+                clusterRotationStates: clusterRotationStates
+            )
+        }
+        guard let template else { return nil }
+        let days = CycleOrdering.sortedDays(template.days)
+        guard days.indices.contains(session.cycleDayIndex) else { return nil }
+        return fixedCycleMetadata(
+            session: session,
+            template: template,
+            day: days[session.cycleDayIndex],
+            exercises: exercises,
+            setEntries: setEntries,
+            readiness: readiness,
+            overrides: overrides,
+            snapshots: snapshots,
+            clusterOccurrences: [],
+            clusterRotationStates: clusterRotationStates
+        )
+    }
+
+    private static func clusteredProgramVersion(
+        _ programVersionID: String
+    ) -> (identifier: String, version: Int)? {
+        guard let marker = programVersionID.range(of: ".v", options: .backwards),
+              let version = Int(programVersionID[marker.upperBound...]) else { return nil }
+        return (String(programVersionID[..<marker.lowerBound]), version)
     }
 
     @discardableResult

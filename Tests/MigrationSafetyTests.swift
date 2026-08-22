@@ -5,7 +5,7 @@ import SwiftData
 import XCTest
 @testable import OpenLift
 
-private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV12
+private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV13
 
 @Model
 private final class UnsupportedMigrationMarker {
@@ -54,10 +54,10 @@ final class MigrationSafetyTests: XCTestCase {
             ObjectIdentifier(FixedCycleReadinessResponse.self)
         ])
 
-        // V11's live readiness models are byte-for-byte unchanged in V12; V12
-        // adds only a parallel resistance-profile entity. The changed-type
-        // guard therefore applies through V10, not the immediately prior head.
-        for schema in OpenLiftSchemaMigrationPlan.schemas.dropLast(2) {
+        // V11's live readiness models are byte-for-byte unchanged in V12 and
+        // V13; both later versions add only parallel entities. The changed-
+        // type guard therefore applies through V10.
+        for schema in OpenLiftSchemaMigrationPlan.schemas.dropLast(3) {
             for model in schema.models {
                 XCTAssertFalse(
                     changedLiveModelIdentifiers.contains(ObjectIdentifier(model)),
@@ -149,6 +149,94 @@ final class MigrationSafetyTests: XCTestCase {
             0,
             "Legacy cable work must remain unknown after the lightweight migration."
         )
+    }
+
+    func testV12StoreMigratesToV13WithoutChangingHistoryOrInventingClusterState() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let storeURL = fixture.working.appendingPathComponent("default.store")
+        let exerciseID = UUID()
+        let sessionID = UUID()
+
+        autoreleasepool {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV12.self)
+            let container = try! ModelContainer(
+                for: schema,
+                configurations: [
+                    ModelConfiguration(
+                        "V12Fixture",
+                        schema: schema,
+                        url: storeURL,
+                        cloudKitDatabase: .none
+                    )
+                ]
+            )
+            let context = ModelContext(container)
+            context.insert(
+                Exercise(
+                    id: exerciseID,
+                    name: "Legacy Cable Curl",
+                    primaryMuscle: .biceps,
+                    type: .isolation,
+                    equipment: .cable
+                )
+            )
+            context.insert(
+                Session(
+                    id: sessionID,
+                    cycleInstanceId: UUID(),
+                    cycleDayIndex: 2,
+                    finishedAt: Date(timeIntervalSince1970: 123),
+                    status: .completed
+                )
+            )
+            context.insert(
+                SetEntry(
+                    sessionId: sessionID,
+                    exerciseId: exerciseID,
+                    setIndex: 1,
+                    weight: 25,
+                    reps: 12,
+                    isLocked: true
+                )
+            )
+            context.insert(
+                ExerciseResistanceProfile(
+                    workoutKind: .fixed,
+                    sessionId: sessionID,
+                    exerciseId: exerciseID,
+                    resistanceSource: .voltra,
+                    chainType: .inverseChains,
+                    chainPercent: 70,
+                    eccentricPercent: 30
+                )
+            )
+            try! context.save()
+        }
+
+        let schema = Schema(versionedSchema: OpenLiftSchemaV13.self)
+        let startup = OpenLiftModelContainerFactory.makePersistent(
+            schema: schema,
+            migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configuration: ModelConfiguration(
+                "V13Readback",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+        )
+
+        XCTAssertNil(startup.issue)
+        let context = ModelContext(startup.container)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).map(\.id), [sessionID])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<SetEntry>()).first?.weight, 25)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).first?.chainPercent,
+            70
+        )
+        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleSessionContext>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>()).isEmpty)
     }
 
     func testV9StoreMigratesToV10WithExistingSetCompletionTimestampsNil() throws {

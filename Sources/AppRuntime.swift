@@ -11,6 +11,9 @@ enum AppRuntime {
     static let shouldPreparePushPullRollout = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_PREPARE_PUSH_PULL_ROLLOUT"
     )
+    static let shouldPrepareClusteredProgramRollout = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT"
+    )
     static let archivedPushPullDraftsAreConfirmed = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_ARCHIVED_PUSH_PULL_DRAFTS_CONFIRMED"
     )

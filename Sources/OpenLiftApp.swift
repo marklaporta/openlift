@@ -4,7 +4,7 @@ import BackgroundTasks
 
 @main
 struct OpenLiftApp: App {
-    private static let schema = Schema(versionedSchema: OpenLiftSchemaV12.self)
+    private static let schema = Schema(versionedSchema: OpenLiftSchemaV13.self)
 
     private static let startup: OpenLiftContainerStartup = {
         AppRuntime.prepareForUITesting()
@@ -37,6 +37,19 @@ struct OpenLiftApp: App {
                 )
             } catch {
                 print("OPENLIFT_PUSH_PULL_ROLLOUT_FAILED \(error.localizedDescription)")
+            }
+        }
+        if startup.issue == nil, AppRuntime.shouldPrepareClusteredProgramRollout {
+            let modelContext = ModelContext(startup.container)
+            do {
+                let result = try BootstrapDataService.prepareClusteredProgramRollout(
+                    modelContext: modelContext
+                )
+                print(
+                    "OPENLIFT_CLUSTERED_PROGRAM_ROLLOUT_RESULT applied=\(result.didApply) template=\(result.templateId) cycle=\(result.cycleId)"
+                )
+            } catch {
+                print("OPENLIFT_CLUSTERED_PROGRAM_ROLLOUT_FAILED \(error.localizedDescription)")
             }
         }
         if startup.issue == nil, AppRuntime.shouldRepairJuly27AdaptiveInclineCurl {
