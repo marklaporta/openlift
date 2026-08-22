@@ -257,9 +257,9 @@ enum FixedCycleWorkoutService {
         }
     }
 
-    /// Pressing Finish is the intentional whole-cluster completion action.
-    /// A versioned clustered session may therefore complete even when every
-    /// prescribed row was skipped; drafts never call the advancement path.
+    /// Each cluster's explicit completion action may record all prescribed
+    /// rows as skipped. Finishing the workout requires at least one completed
+    /// cluster, and merely opening a draft never advances rotation state.
     static func canIntentionallyComplete(
         sessionId: UUID,
         entries: [SetEntry],
@@ -273,7 +273,7 @@ enum FixedCycleWorkoutService {
 
     static func completedClusterExerciseIds(
         sessionId: UUID,
-        occurrences: [FixedCycleProgressionOccurrence]
+        occurrences: [ClusterOccurrenceRecord]
     ) -> Set<UUID> {
         Set(
             occurrences
@@ -282,6 +282,24 @@ enum FixedCycleWorkoutService {
                 .filter { $0.completionStatus == .performed }
                 .map(\.exerciseId)
         )
+    }
+
+    static func retainedCompletedClusterEntries(
+        sessionId: UUID,
+        entries: [SetEntry],
+        occurrences: [ClusterOccurrenceRecord],
+        uncompletedClusterExerciseIds: Set<UUID> = []
+    ) -> [SetEntry] {
+        let completedExerciseIds = completedClusterExerciseIds(
+            sessionId: sessionId,
+            occurrences: occurrences
+        ).subtracting(uncompletedClusterExerciseIds)
+        return entries.filter {
+            $0.sessionId == sessionId
+                && $0.isLocked
+                && $0.reps > 0
+                && completedExerciseIds.contains($0.exerciseId)
+        }
     }
 
     static func draftSetCount(
@@ -342,7 +360,7 @@ enum FixedCycleWorkoutService {
         rotationSessions: [Session],
         rotationSetEntries: [SetEntry],
         progressionKey: String? = nil,
-        progressionOccurrences: [FixedCycleProgressionOccurrence] = [],
+        progressionOccurrences: [ClusterOccurrenceRecord] = [],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
         resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> ExerciseEffortLookupResult? {
@@ -531,9 +549,8 @@ struct WorkoutView: View {
     @Query private var fixedReadiness: [FixedCycleReadinessObservation]
     @Query private var fixedOverrides: [FixedCycleOccurrenceOverride]
     @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
-    @Query private var clusterRotationStates: [FixedCycleClusterPointer]
-    @Query private var fixedCycleSessionContexts: [FixedCycleSessionContext]
-    @Query private var clusterOccurrences: [FixedCycleProgressionOccurrence]
+    @Query private var clusterRotationStates: [ClusterRotationState]
+    @Query private var clusterOccurrences: [ClusterOccurrenceRecord]
     @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     @State private var errorMessage: String?
@@ -1255,7 +1272,7 @@ struct WorkoutView: View {
            ),
            cycle.templateId != template.id {
             try deleteDraftSessions(from: currentSessions, forCycleId: cycle.id)
-            for pointer in try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
+            for pointer in try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
             where pointer.cycleInstanceId == cycle.id {
                 modelContext.delete(pointer)
             }
@@ -1355,7 +1372,7 @@ struct WorkoutView: View {
         let fetchedCycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
         let fetchedTemplates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
         let fetchedSessions = try modelContext.fetch(FetchDescriptor<Session>())
-        let fetchedPointers = try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
+        let fetchedPointers = try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
         guard let cycle = activeCycle ?? fetchedCycles.first else { return }
         guard let template = activeTemplate ?? fetchedTemplates.first(where: { $0.id == cycle.templateId }) else { return }
         guard FixedCycleWorkoutService.shouldCreateDraft(
@@ -1384,13 +1401,6 @@ struct WorkoutView: View {
         modelContext.insert(session)
         if isClustered {
             for selection in selections {
-                modelContext.insert(
-                    try FixedCycleClusterProgramService.makeSessionContext(
-                        session: session,
-                        selection: selection,
-                        exercises: exercises
-                    )
-                )
                 try addDraftEntries(
                     for: session,
                     day: selection.day,
@@ -1423,9 +1433,6 @@ struct WorkoutView: View {
         for override in slotOverrides where draftIds.contains(override.sessionId) {
             modelContext.delete(override)
         }
-        for context in fixedCycleSessionContexts where draftIds.contains(context.sessionId) {
-            modelContext.delete(context)
-        }
         for draft in sessions where draftIds.contains(draft.id) {
             modelContext.delete(draft)
         }
@@ -1444,18 +1451,9 @@ struct WorkoutView: View {
                 cluster: selection.cluster,
                 occurrences: clusterOccurrences
             ) == nil else { return }
-            guard let context = fixedCycleSessionContexts.first(where: {
-                $0.sessionId == session.id
-                    && $0.clusterID == selection.cluster.rawValue
-                    && $0.absoluteStep == selection.absoluteStep
-            }) else {
-                throw FixedCycleClusterProgramService.ProgramError.invalidClusterContext
-            }
-
             let occurrence = try FixedCycleClusterProgramService.makeOccurrence(
                 session: session,
                 selection: selection,
-                context: context,
                 exercises: exercises,
                 entries: setEntries,
                 resistanceProfiles: resistanceProfiles
@@ -1502,21 +1500,33 @@ struct WorkoutView: View {
 
             // Keep only confirmed logged sets in completed sessions/history/export.
             let sessionEntries = setEntries.filter { $0.sessionId == session.id }
-            let completedClusterExerciseIds = isClustered
-                ? FixedCycleWorkoutService.completedClusterExerciseIds(
-                    sessionId: session.id,
-                    occurrences: clusterOccurrences
+            let retainedSessionEntries: [SetEntry]
+            if isClustered {
+                let completedClusterIDs = Set(clusterOccurrences.compactMap { occurrence in
+                    occurrence.sessionId == session.id ? occurrence.clusterID : nil
+                })
+                let uncompletedExerciseIDs = Set(
+                    try FixedCycleClusterProgramService.selections(
+                        template: template,
+                        cycleInstanceId: cycle.id,
+                        states: clusterRotationStates
+                    )
+                    .filter { !completedClusterIDs.contains($0.cluster.rawValue) }
+                    .flatMap { $0.day.slots.map(\.exerciseId) }
                 )
-                : nil
-            let retainedSessionEntries = sessionEntries.filter {
-                $0.reps > 0
-                    && $0.isLocked
-                    && (completedClusterExerciseIds?.contains($0.exerciseId) != false)
+                retainedSessionEntries = FixedCycleWorkoutService.retainedCompletedClusterEntries(
+                    sessionId: session.id,
+                    entries: sessionEntries,
+                    occurrences: clusterOccurrences,
+                    uncompletedClusterExerciseIds: uncompletedExerciseIDs
+                )
+            } else {
+                retainedSessionEntries = sessionEntries.filter {
+                    $0.reps > 0 && $0.isLocked
+                }
             }
-            for entry in sessionEntries where
-                entry.reps <= 0
-                    || !entry.isLocked
-                    || (completedClusterExerciseIds?.contains(entry.exerciseId) == false) {
+            let retainedEntryIDs = Set(retainedSessionEntries.map(\.id))
+            for entry in sessionEntries where !retainedEntryIDs.contains(entry.id) {
                 modelContext.delete(entry)
             }
             for override in slotOverrides where override.sessionId == session.id {
@@ -1543,7 +1553,7 @@ struct WorkoutView: View {
                 .fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
             let fixedMetadata: SessionExportService.FixedCycleMetadata?
             if isClustered,
-               let frozenContext = fixedCycleSessionContexts
+               let frozenOccurrence = clusterOccurrences
                 .filter({ $0.sessionId == session.id })
                 .sorted(by: { $0.clusterID < $1.clusterID })
                 .first {
@@ -1551,9 +1561,9 @@ struct WorkoutView: View {
                     session: session,
                     template: template,
                     day: CycleDay(
-                        label: frozenContext.dayLabel,
+                        label: frozenOccurrence.dayLabel,
                         slots: [],
-                        position: frozenContext.templateDayPosition
+                        position: frozenOccurrence.templateDayPosition
                     ),
                     exercises: exercises,
                     setEntries: retainedSessionEntries,
@@ -1640,7 +1650,8 @@ struct WorkoutView: View {
         exerciseId: UUID,
         setIndex: Int,
         preferredSessionId: UUID? = nil,
-        effort: ExerciseEffortLookupResult? = nil
+        effort: ExerciseEffortLookupResult? = nil,
+        allowGlobalFallback: Bool = true
     ) -> (weight: Double, reps: Int) {
         if let preferredSessionId {
             if let exact = setEntries.first(where: {
@@ -1662,7 +1673,8 @@ struct WorkoutView: View {
             return (row.weight, row.reps)
         }
 
-        if let global = ExerciseEffortLookupService.globalEffort(
+        if allowGlobalFallback,
+           let global = ExerciseEffortLookupService.globalEffort(
             exerciseId: exerciseId,
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
@@ -1704,7 +1716,11 @@ struct WorkoutView: View {
                 let prefills = prefillValues(
                     exerciseId: slot.exerciseId,
                     setIndex: setIndex,
-                    effort: effort
+                    effort: effort,
+                    // A keyed lookup already performed its isolated legacy
+                    // fallback. Retrying globally here would reintroduce
+                    // sessions owned by another progression identity.
+                    allowGlobalFallback: progressionKey == nil
                 )
                 let entry = SetEntry(
                     sessionId: session.id,
@@ -2092,20 +2108,22 @@ struct WorkoutView: View {
                 occurrenceId: nil,
                 in: currentProfiles
             ) == nil else { continue }
-            let programDefault = activeTemplate.flatMap {
+            let exercise = exercises.first(where: { $0.id == exerciseId })
+            let defaultValue = activeTemplate.flatMap {
                 FixedCycleClusterProgramService.isProgramTemplate($0)
-                    ? exercises.first(where: { $0.id == exerciseId }).flatMap {
-                        FixedCycleClusterProgramService.defaultResistanceProfile(
-                            forExerciseNamed: $0.name
+                    ? exercise.flatMap {
+                        FixedCycleClusterProgramService.initialResistanceProfile(
+                            forExerciseNamed: $0.name,
+                            exerciseId: $0.id,
+                            existingProfiles: currentProfiles
                         )
                     }
                     : nil
-            }
-            guard let defaultValue = programDefault
-                    ?? ResistanceProfileService.lastUsedValue(
-                        exerciseId: exerciseId,
-                        profiles: currentProfiles
-                    ) else { continue }
+            } ?? ResistanceProfileService.lastUsedValue(
+                exerciseId: exerciseId,
+                profiles: currentProfiles
+            )
+            guard let defaultValue else { continue }
             let created = try ResistanceProfileService.create(
                 workoutKind: .fixed,
                 sessionId: session.id,

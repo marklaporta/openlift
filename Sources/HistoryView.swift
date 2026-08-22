@@ -646,8 +646,8 @@ private struct SessionDetailView: View {
     @Query private var fixedReadiness: [FixedCycleReadinessObservation]
     @Query private var fixedOverrides: [FixedCycleOccurrenceOverride]
     @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
-    @Query private var clusterOccurrences: [FixedCycleProgressionOccurrence]
-    @Query private var clusterRotationStates: [FixedCycleClusterPointer]
+    @Query private var clusterOccurrences: [ClusterOccurrenceRecord]
+    @Query private var clusterRotationStates: [ClusterRotationState]
     @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     let session: Session

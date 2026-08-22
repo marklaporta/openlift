@@ -10,7 +10,7 @@ final class ClusteredProgramTests: XCTestCase {
     }
 
     private func program() throws -> (
-        [Exercise], CycleTemplate, ActiveCycleInstance, [FixedCycleClusterPointer]
+        [Exercise], CycleTemplate, ActiveCycleInstance, [ClusterRotationState]
     ) {
         let container = OpenLiftModelContainerFactory.makeInMemory(
             schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
@@ -56,7 +56,7 @@ final class ClusteredProgramTests: XCTestCase {
                 slotPosition: 0
             ),
             resistance_profile: nil,
-            completion_status: FixedCycleProgressionStatus.performed.rawValue
+            completion_status: ClusterExerciseCompletionStatus.performed.rawValue
         )
         let occurrence = SessionExportService.ClusterOccurrencePayload(
             occurrence_id: occurrenceID.uuidString,
@@ -68,7 +68,7 @@ final class ClusteredProgramTests: XCTestCase {
             completed_at: ISO8601DateFormatter().string(from: date),
             exercises: [snapshot]
         )
-        let pointer = SessionExportService.FixedCycleClusterPointerPayload(
+        let pointer = SessionExportService.ClusterRotationStatePayload(
             program_version_id: FixedCycleClusterProgramService.programVersionID,
             cluster_id: cluster.rawValue,
             position_index: pointerCount,
@@ -120,7 +120,7 @@ final class ClusteredProgramTests: XCTestCase {
             [
                 ["Incline Dumbbell Press", "Lat Pulldown"],
                 ["Flat Dumbbell Press", "Lat Prayer"],
-                ["Incline Dumbbell Press-Flye", "Chest Supported Row"],
+                ["Incline Press-Flye", "Chest Supported Row"],
                 ["Belt Squat", "Overhead Cable Extension", "Incline Curl"],
                 ["Stiff-Leg Deadlift", "Cable Pushdown", "Dumbbell Preacher Curl"],
                 ["Sumo Belt Squat", "Dumbbell Skullcrusher", "Bayesian Curl"],
@@ -132,15 +132,53 @@ final class ClusteredProgramTests: XCTestCase {
                 ["Super ROM Dumbbell Lateral Raise", "Stair Calves"],
                 ["Cable Lateral Raise", "Bench-Supported Cable Wrist Extension (Pronated)"],
                 ["Super ROM Dumbbell Lateral Raise", "Stair Calves"],
-                ["Cable Lateral Raise", "Captains of Crush"]
+                ["Cable Lateral Raise", "Captain of Crush"]
             ]
         )
         XCTAssertTrue(template.days.flatMap(\.slots).allSatisfy { $0.defaultSetCount == 3 })
+        let approvedDefault = ResistanceProfileValue.voltra(
+            chainType: .inverseChains,
+            chainPercent: 70,
+            eccentricPercent: 30
+        )
+        XCTAssertEqual(
+            FixedCycleClusterProgramService.defaultResistanceProfile(
+                forExerciseNamed: "Bench-Supported Cable Wrist Curl (Supinated)"
+            ),
+            approvedDefault
+        )
         XCTAssertEqual(
             FixedCycleClusterProgramService.defaultResistanceProfile(
                 forExerciseNamed: "Bench-Supported Cable Wrist Extension (Pronated)"
             ),
-            .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
+            approvedDefault
+        )
+        XCTAssertNil(
+            FixedCycleClusterProgramService.defaultResistanceProfile(
+                forExerciseNamed: "Cable Lateral Raise"
+            )
+        )
+
+        let wristExtension = try XCTUnwrap(
+            exercises.first { $0.name == "Bench-Supported Cable Wrist Extension (Pronated)" }
+        )
+        let otherCable = ExerciseResistanceProfile(
+            workoutKind: .fixed,
+            sessionId: UUID(),
+            exerciseId: UUID(),
+            resistanceSource: .voltra,
+            chainType: .inverseChains,
+            chainPercent: 25,
+            eccentricPercent: 25
+        )
+        XCTAssertEqual(
+            FixedCycleClusterProgramService.initialResistanceProfile(
+                forExerciseNamed: wristExtension.name,
+                exerciseId: wristExtension.id,
+                existingProfiles: [otherCable]
+            ),
+            approvedDefault,
+            "The approved new-movement default must win over unrelated cable history"
         )
     }
 
@@ -179,6 +217,24 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertEqual(states.map(\.positionIndex), [0, 1, 0])
     }
 
+    func testEveryWorkoutSelectsAllThreeCurrentClustersWithoutUsingCurrentDayIndex() throws {
+        let (_, template, cycle, states) = try program()
+        cycle.currentDayIndex = 14
+        states.first { $0.clusterID == "cluster-1" }?.positionIndex = 2
+        states.first { $0.clusterID == "cluster-2" }?.positionIndex = 4
+        states.first { $0.clusterID == "cluster-3" }?.positionIndex = 5
+
+        let selections = try FixedCycleClusterProgramService.selections(
+            template: template,
+            cycleInstanceId: cycle.id,
+            states: states
+        )
+
+        XCTAssertEqual(selections.map(\.cluster), [.cluster1, .cluster2, .cluster3])
+        XCTAssertEqual(selections.map(\.absoluteStep), [2, 4, 5])
+        XCTAssertEqual(selections.map(\.day.position), [2, 7, 14])
+    }
+
     func testCompletedClusterEvidenceRetainsOnlyPerformedExerciseRows() throws {
         let (exercises, template, cycle, states) = try program()
         let selection = try FixedCycleClusterProgramService.selection(
@@ -189,20 +245,34 @@ final class ClusteredProgramTests: XCTestCase {
         )
         let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
         let performedExercise = try XCTUnwrap(selection.day.slots.first?.exerciseId)
+        let uncompletedSelection = try FixedCycleClusterProgramService.selection(
+            cluster: .cluster3,
+            template: template,
+            cycleInstanceId: cycle.id,
+            states: states
+        )
+        let uncompletedExercise = try XCTUnwrap(uncompletedSelection.day.slots.first?.exerciseId)
+        let performedEntry = SetEntry(
+            sessionId: session.id,
+            exerciseId: performedExercise,
+            setIndex: 1,
+            weight: 100,
+            reps: 10,
+            isLocked: true
+        )
+        let strayUncompletedEntry = SetEntry(
+            sessionId: session.id,
+            exerciseId: uncompletedExercise,
+            setIndex: 1,
+            weight: 25,
+            reps: 12,
+            isLocked: true
+        )
         let occurrence = try FixedCycleClusterProgramService.makeOccurrence(
             session: session,
             selection: selection,
             exercises: exercises,
-            entries: [
-                SetEntry(
-                    sessionId: session.id,
-                    exerciseId: performedExercise,
-                    setIndex: 1,
-                    weight: 100,
-                    reps: 10,
-                    isLocked: true
-                )
-            ],
+            entries: [performedEntry, strayUncompletedEntry],
             resistanceProfiles: []
         )
 
@@ -212,6 +282,34 @@ final class ClusteredProgramTests: XCTestCase {
                 occurrences: [occurrence]
             ),
             [performedExercise]
+        )
+        XCTAssertEqual(
+            FixedCycleWorkoutService.retainedCompletedClusterEntries(
+                sessionId: session.id,
+                entries: [performedEntry, strayUncompletedEntry],
+                occurrences: [occurrence],
+                uncompletedClusterExerciseIds: Set(uncompletedSelection.day.slots.map(\.exerciseId))
+            ).map(\.id),
+            [performedEntry.id]
+        )
+
+        let metadata = SessionExportService.fixedCycleMetadata(
+            session: session,
+            template: template,
+            day: selection.day,
+            exercises: exercises,
+            setEntries: [performedEntry, strayUncompletedEntry],
+            readiness: [],
+            overrides: [],
+            clusterOccurrences: [occurrence],
+            clusterRotationStates: states
+        )
+        XCTAssertEqual(
+            SessionExportService.exportableSetEntries(
+                [performedEntry, strayUncompletedEntry],
+                fixedCycleMetadata: metadata
+            ).map(\.id),
+            [performedEntry.id]
         )
     }
 
@@ -287,6 +385,42 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertFalse(catalog.contains { $0.name == "Captains of Crush" })
     }
 
+    func testCatalogDoesNotDuplicateEstablishedNamesAfterPartialPatchSeeding() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(
+            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+        )
+        let context = ModelContext(container)
+        let partialPatchFlye = Exercise(
+            name: "Incline Dumbbell Press-Flye",
+            primaryMuscle: .chest,
+            type: .compound,
+            equipment: .dumbbell
+        )
+        let partialPatchGripper = Exercise(
+            name: "Captains of Crush",
+            primaryMuscle: .forearms,
+            type: .isolation,
+            equipment: .bodyweight
+        )
+        context.insert(partialPatchFlye)
+        context.insert(partialPatchGripper)
+        try context.save()
+
+        let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let template = try FixedCycleClusterProgramService.makeTemplate(exercises: catalog)
+
+        XCTAssertFalse(catalog.contains { $0.name == "Incline Press-Flye" })
+        XCTAssertFalse(catalog.contains { $0.name == "Captain of Crush" })
+        XCTAssertEqual(
+            template.days.first { $0.position == 2 }?.slots.first?.exerciseId,
+            partialPatchFlye.id
+        )
+        XCTAssertEqual(
+            template.days.first { $0.position == 14 }?.slots.last?.exerciseId,
+            partialPatchGripper.id
+        )
+    }
+
     func testResolvingDraftSelectionsDoesNotAdvanceAnyPointer() throws {
         let (_, template, cycle, states) = try program()
         _ = try FixedCycleClusterProgramService.selections(
@@ -349,12 +483,12 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertTrue(key(.cluster2, 0, 0).contains(".v1."))
         let cycleID = UUID()
         XCTAssertNotEqual(
-            FixedCycleClusterPointer.key(
+            ClusterRotationState.key(
                 cycleInstanceId: cycleID,
                 programVersionID: "program.v1",
                 clusterID: "cluster-1"
             ),
-            FixedCycleClusterPointer.key(
+            ClusterRotationState.key(
                 cycleInstanceId: cycleID,
                 programVersionID: "program.v2",
                 clusterID: "cluster-1"
@@ -370,12 +504,12 @@ final class ClusteredProgramTests: XCTestCase {
             cycleInstanceId: cycle.id,
             states: states.map {
                 $0.clusterID == FixedCycleClusterProgramService.Cluster.cluster3.rawValue
-                    ? FixedCycleClusterPointer(
+                    ? ClusterRotationState(
                         cycleInstanceId: cycle.id,
                         templateId: template.id,
                         programVersionID: $0.programVersionID,
                         clusterID: $0.clusterID,
-                        completedCount: 3
+                        positionIndex: 3
                     )
                     : $0
             }
@@ -432,6 +566,26 @@ final class ClusteredProgramTests: XCTestCase {
             resistanceProfiles: []
         )
         XCTAssertNil(skippedOccurrence.exerciseSnapshots.last?.resistanceProfile)
+
+        let unprofiledSession = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
+        let unprofiledEntry = SetEntry(
+            sessionId: unprofiledSession.id,
+            exerciseId: wrist.exerciseId,
+            setIndex: 1,
+            weight: 20,
+            reps: 12,
+            isLocked: true
+        )
+        let unprofiledOccurrence = try FixedCycleClusterProgramService.makeOccurrence(
+            session: unprofiledSession,
+            selection: selection,
+            exercises: exercises,
+            entries: [unprofiledEntry],
+            resistanceProfiles: []
+        )
+        let unprofiledSnapshot = try XCTUnwrap(unprofiledOccurrence.exerciseSnapshots.last)
+        XCTAssertEqual(unprofiledSnapshot.completionStatus, .performed)
+        XCTAssertNil(unprofiledSnapshot.resistanceProfile)
     }
 
     func testPrefillPrioritizesExactKeyAndProfileThenSameKeyAnyProfileThenGlobal() throws {
@@ -471,8 +625,8 @@ final class ClusteredProgramTests: XCTestCase {
                 isLocked: true
             )
         }
-        func occurrence(_ session: Session, _ profile: ResistanceProfileValue) throws -> FixedCycleProgressionOccurrence {
-            try FixedCycleProgressionOccurrence(
+        func occurrence(_ session: Session, _ profile: ResistanceProfileValue) throws -> ClusterOccurrenceRecord {
+            try ClusterOccurrenceRecord(
                 sessionId: session.id,
                 cycleInstanceId: cycleID,
                 templateId: templateID,
@@ -482,7 +636,7 @@ final class ClusteredProgramTests: XCTestCase {
                 templateDayPosition: 3,
                 dayLabel: "Cluster 2 · A",
                 exerciseSnapshots: [
-                    FixedCycleProgressionSnapshot(
+                    ClusterExerciseProgressionSnapshot(
                         position: 2,
                         exerciseId: exerciseID,
                         exerciseName: "Curl",
@@ -495,7 +649,7 @@ final class ClusteredProgramTests: XCTestCase {
                 ]
             )
         }
-        let otherKeyOccurrence = try FixedCycleProgressionOccurrence(
+        let otherKeyOccurrence = try ClusterOccurrenceRecord(
             sessionId: otherKey.id,
             cycleInstanceId: cycleID,
             templateId: templateID,
@@ -505,7 +659,7 @@ final class ClusteredProgramTests: XCTestCase {
             templateDayPosition: 4,
             dayLabel: "Cluster 2 · B",
             exerciseSnapshots: [
-                FixedCycleProgressionSnapshot(
+                ClusterExerciseProgressionSnapshot(
                     position: 2,
                     exerciseId: exerciseID,
                     exerciseName: "Curl",
@@ -572,6 +726,114 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertEqual(globalFallback?.matchKind, .globalLatest)
     }
 
+    func testFreshProgressionKeyFallbackExcludesEveryVersionedSession() throws {
+        let exerciseID = UUID()
+        let cycleID = UUID()
+        let templateID = UUID()
+        let legacy = Session(
+            cycleInstanceId: cycleID,
+            cycleDayIndex: 0,
+            finishedAt: Date(timeIntervalSince1970: 100),
+            status: .completed
+        )
+        let beltSquatC = Session(
+            cycleInstanceId: cycleID,
+            cycleDayIndex: 2,
+            finishedAt: Date(timeIntervalSince1970: 300),
+            status: .completed
+        )
+        let versionedAdaptiveID = UUID()
+        let versionedAdaptive = AdaptiveWorkoutSession(
+            id: versionedAdaptiveID,
+            generatedPlanId: UUID(),
+            finishedAt: Date(timeIntervalSince1970: 400),
+            status: .completed
+        )
+
+        func occurrence(
+            sessionId: UUID,
+            key: String,
+            clusterID: String
+        ) throws -> ClusterOccurrenceRecord {
+            try ClusterOccurrenceRecord(
+                sessionId: sessionId,
+                cycleInstanceId: cycleID,
+                templateId: templateID,
+                programVersionID: "program.v1",
+                clusterID: clusterID,
+                positionIndex: 0,
+                templateDayPosition: 0,
+                dayLabel: "Versioned Belt Squat",
+                exerciseSnapshots: [
+                    ClusterExerciseProgressionSnapshot(
+                        position: 0,
+                        exerciseId: exerciseID,
+                        exerciseName: "Belt Squat",
+                        muscle: .quads,
+                        prescribedSetCount: 3,
+                        progressionKey: key,
+                        resistanceProfile: nil,
+                        completionStatus: .performed
+                    )
+                ]
+            )
+        }
+
+        let result = ExerciseEffortLookupService.fixedCycleEffort(
+            exerciseId: exerciseID,
+            cycleInstanceId: cycleID,
+            cycleDayIndex: 0,
+            adaptiveSessions: [versionedAdaptive],
+            adaptiveSetEntries: [
+                AdaptiveSetEntry(
+                    adaptiveSessionId: versionedAdaptive.id,
+                    occurrenceId: UUID(),
+                    exerciseId: exerciseID,
+                    setIndex: 1,
+                    weight: 400,
+                    reps: 10,
+                    isLocked: true
+                )
+            ],
+            rotationSessions: [legacy, beltSquatC],
+            rotationSetEntries: [
+                SetEntry(
+                    sessionId: legacy.id,
+                    exerciseId: exerciseID,
+                    setIndex: 1,
+                    weight: 100,
+                    reps: 10,
+                    isLocked: true
+                ),
+                SetEntry(
+                    sessionId: beltSquatC.id,
+                    exerciseId: exerciseID,
+                    setIndex: 1,
+                    weight: 300,
+                    reps: 10,
+                    isLocked: true
+                )
+            ],
+            progressionKey: "program.v1.cluster-1.quads.a",
+            progressionOccurrences: [
+                try occurrence(
+                    sessionId: beltSquatC.id,
+                    key: "program.v1.cluster-1.quads.c",
+                    clusterID: "cluster-1"
+                ),
+                try occurrence(
+                    sessionId: versionedAdaptiveID,
+                    key: "program.v1.cluster-1.quads.d",
+                    clusterID: "cluster-2"
+                )
+            ]
+        )
+
+        XCTAssertEqual(result?.sessionId, legacy.id)
+        XCTAssertEqual(result?.rows.first?.weight, 100)
+        XCTAssertEqual(result?.matchKind, .globalLatest)
+    }
+
     func testClusterMetadataRoundTripsOccurrenceAndExplicitPointers() throws {
         let schema = Schema(versionedSchema: OpenLiftSchemaV13.self)
         let sourceContainer = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
@@ -631,7 +893,12 @@ final class ClusteredProgramTests: XCTestCase {
         )
         XCTAssertEqual(metadata.schema_version, 4)
         XCTAssertEqual(metadata.ordered_exercises.map(\.exercise_id), [first.exerciseId.uuidString])
-        XCTAssertEqual(metadata.cluster_occurrences?.first?.exercises.count, 1)
+        XCTAssertEqual(metadata.cluster_occurrences?.first?.exercises.count, 2)
+        XCTAssertEqual(
+            metadata.cluster_occurrences?.first?.exercises.map(\.completion_status),
+            [ClusterExerciseCompletionStatus.performed.rawValue,
+             ClusterExerciseCompletionStatus.skipped.rawValue]
+        )
         XCTAssertEqual(metadata.cluster_occurrences?.first?.exercises.first?.progression_key,
                        occurrence.exerciseSnapshots.first?.progressionKey)
 
@@ -667,8 +934,8 @@ final class ClusteredProgramTests: XCTestCase {
             modelContext: destinationContext
         )
 
-        let hydrated = try destinationContext.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>())
-        let hydratedStates = try destinationContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
+        let hydrated = try destinationContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        let hydratedStates = try destinationContext.fetch(FetchDescriptor<ClusterRotationState>())
         XCTAssertEqual(hydrated.count, 1)
         XCTAssertEqual(hydrated.first?.exerciseSnapshots.first?.progressionKey,
                        occurrence.exerciseSnapshots.first?.progressionKey)
@@ -687,7 +954,7 @@ final class ClusteredProgramTests: XCTestCase {
             finishedAt: Date(timeIntervalSince1970: 800),
             status: .completed
         )
-        let occurrence = try FixedCycleProgressionOccurrence(
+        let occurrence = try ClusterOccurrenceRecord(
             sessionId: session.id,
             cycleInstanceId: cycle.id,
             templateId: templateID,
@@ -697,7 +964,7 @@ final class ClusteredProgramTests: XCTestCase {
             templateDayPosition: 6,
             dayLabel: "Cluster 2 · D",
             exerciseSnapshots: [
-                FixedCycleProgressionSnapshot(
+                ClusterExerciseProgressionSnapshot(
                     position: 1,
                     exerciseId: UUID(),
                     exerciseName: "Frozen Arm A",
@@ -713,14 +980,14 @@ final class ClusteredProgramTests: XCTestCase {
                 )
             ]
         )
-        let currentState = FixedCycleClusterPointer(
+        let currentState = ClusterRotationState(
             cycleInstanceId: cycle.id,
             templateId: templateID,
             programVersionID: FixedCycleClusterProgramService.programVersionID,
             clusterID: FixedCycleClusterProgramService.Cluster.cluster2.rawValue,
             positionIndex: 4
         )
-        let futureState = FixedCycleClusterPointer(
+        let futureState = ClusterRotationState(
             cycleInstanceId: cycle.id,
             templateId: templateID,
             programVersionID: "openlift.clustered-hypertrophy.v2",
@@ -802,13 +1069,13 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertNotNil(try context.fetch(FetchDescriptor<Session>()).first { $0.id == legacySession.id })
         XCTAssertNotNil(try context.fetch(FetchDescriptor<SetEntry>()).first { $0.id == legacyEntry.id })
         XCTAssertEqual(
-            try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).map(\.positionIndex),
+            try context.fetch(FetchDescriptor<ClusterRotationState>()).map(\.positionIndex),
             [0, 0, 0]
         )
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).isEmpty)
     }
 
-    func testExplicitRolloutAdoptsCompleteExportRecoveredPointersWithoutRewinding() throws {
+    func testExportRecoveryThenRolloutAdoptsPointersWithoutRewinding() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
             schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
         )
@@ -818,24 +1085,57 @@ final class ClusteredProgramTests: XCTestCase {
         let cycle = ActiveCycleInstance(templateId: template.id)
         context.insert(template)
         context.insert(cycle)
-        for (state, position) in zip(
-            FixedCycleClusterProgramService.makeRotationStates(
-                cycleInstanceId: cycle.id,
-                templateId: template.id
-            ),
-            [2, 4, 5]
-        ) {
-            state.positionIndex = position
-            context.insert(state)
-        }
         try context.save()
+
+        let exercisesByID = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
+        let recoveredPositions: [FixedCycleClusterProgramService.Cluster: Int] = [
+            .cluster1: 2,
+            .cluster2: 4,
+            .cluster3: 5
+        ]
+        var exports: [SessionExportService.ExportPayload] = []
+        var timestamp: TimeInterval = 2_000
+        for cluster in FixedCycleClusterProgramService.Cluster.allCases {
+            for absoluteStep in 0..<recoveredPositions[cluster, default: 0] {
+                let effectiveStep = absoluteStep % cluster.rotationLength
+                let dayPosition = cluster.templateBasePosition + effectiveStep
+                let day = try XCTUnwrap(template.days.first { $0.position == dayPosition })
+                let slot = try XCTUnwrap(day.slots.first { $0.position == 0 })
+                let exercise = try XCTUnwrap(exercisesByID[slot.exerciseId])
+                timestamp += 1
+                exports.append(
+                    clusteredExport(
+                        template: template,
+                        cycle: cycle,
+                        exercise: exercise,
+                        cluster: cluster,
+                        absoluteStep: absoluteStep,
+                        pointerCount: absoluteStep + 1,
+                        date: Date(timeIntervalSince1970: timestamp)
+                    )
+                )
+            }
+        }
+
+        _ = try BootstrapDataService.reconcileWorkoutExports(
+            exports,
+            cycle: cycle,
+            modelContext: context
+        )
+        let recovered = try context.fetch(FetchDescriptor<ClusterRotationState>())
+            .sorted { $0.clusterID < $1.clusterID }
+        XCTAssertEqual(recovered.map(\.positionIndex), [2, 4, 5])
+        XCTAssertFalse(try context.fetch(FetchDescriptor<TrainingPreference>()).contains {
+            $0.key == BootstrapDataService.clusteredProgramRolloutMarkerKey
+        })
 
         let result = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
 
         XCTAssertTrue(result.didApply)
+        XCTAssertEqual(result.templateId, template.id)
         XCTAssertEqual(result.cycleId, cycle.id)
         XCTAssertEqual(
-            try context.fetch(FetchDescriptor<FixedCycleClusterPointer>())
+            try context.fetch(FetchDescriptor<ClusterRotationState>())
                 .sorted { $0.clusterID < $1.clusterID }
                 .map(\.positionIndex),
             [2, 4, 5]
@@ -845,7 +1145,7 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertFalse(retry.didApply)
         XCTAssertEqual(result.templateId, retry.templateId)
         XCTAssertEqual(
-            try context.fetch(FetchDescriptor<FixedCycleClusterPointer>())
+            try context.fetch(FetchDescriptor<ClusterRotationState>())
                 .sorted { $0.clusterID < $1.clusterID }
                 .map(\.positionIndex),
             [2, 4, 5]
@@ -864,13 +1164,40 @@ final class ClusteredProgramTests: XCTestCase {
         )
     }
 
+    func testExplicitRolloutRejectsUnknownRecoveredPointerState() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(
+            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+        )
+        let context = ModelContext(container)
+        context.insert(
+            ClusterRotationState(
+                cycleInstanceId: UUID(),
+                templateId: UUID(),
+                programVersionID: "openlift.clustered-hypertrophy.v999",
+                clusterID: "unknown-cluster",
+                positionIndex: 1,
+                isDerived: true
+            )
+        )
+        try context.save()
+
+        XCTAssertThrowsError(
+            try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
+        ) { error in
+            XCTAssertEqual(
+                error as? BootstrapDataService.ClusteredProgramRolloutError,
+                .existingRotationStateConflict
+            )
+        }
+    }
+
     func testExplicitRolloutRejectsPartialRecoveredPointerState() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
             schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
         )
         let context = ModelContext(container)
         context.insert(
-            FixedCycleClusterPointer(
+            ClusterRotationState(
                 cycleInstanceId: UUID(),
                 templateId: UUID(),
                 programVersionID: FixedCycleClusterProgramService.programVersionID,
@@ -931,7 +1258,7 @@ final class ClusteredProgramTests: XCTestCase {
         )
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CycleTemplate>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Exercise>()), 0)
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterRotationState>()).isEmpty)
         XCTAssertFalse(try context.fetch(FetchDescriptor<TrainingPreference>()).contains {
             $0.key == BootstrapDataService.clusteredProgramRolloutMarkerKey
         })
@@ -973,7 +1300,7 @@ final class ClusteredProgramTests: XCTestCase {
             try context.fetch(FetchDescriptor<SetEntry>()).filter { $0.sessionId == session.id }.isEmpty
         )
         XCTAssertEqual(
-            try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).count,
+            try context.fetch(FetchDescriptor<ClusterRotationState>()).count,
             FixedCycleClusterProgramService.Cluster.allCases.count
         )
         XCTAssertTrue(try context.fetch(FetchDescriptor<TrainingPreference>()).contains {
@@ -1008,7 +1335,7 @@ final class ClusteredProgramTests: XCTestCase {
         let recoveredTemplateID = UUID()
         for cluster in FixedCycleClusterProgramService.Cluster.allCases {
             context.insert(
-                FixedCycleClusterPointer(
+                ClusterRotationState(
                     cycleInstanceId: recoveredCycleID,
                     templateId: recoveredTemplateID,
                     programVersionID: FixedCycleClusterProgramService.programVersionID,
@@ -1080,7 +1407,7 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertNotNil(try context.fetch(FetchDescriptor<SetEntry>()).first { $0.id == entry.id })
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CycleTemplate>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Exercise>()), 0)
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterRotationState>()).isEmpty)
     }
 
     func testClusteredRolloutBackupConfirmationDoesNotAuthorizeAdaptiveDraftRetirement() throws {
@@ -1122,7 +1449,7 @@ final class ClusteredProgramTests: XCTestCase {
             try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).first { $0.id == entry.id }
         )
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Exercise>()), 0)
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterRotationState>()).isEmpty)
     }
 
     func testClusteredRolloutRejectsDraftWithCompletedAllSkippedCluster() throws {
@@ -1133,7 +1460,7 @@ final class ClusteredProgramTests: XCTestCase {
         let template = CycleTemplate(name: "Legacy", days: [])
         let cycle = ActiveCycleInstance(templateId: template.id)
         let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
-        let occurrence = try FixedCycleProgressionOccurrence(
+        let occurrence = try ClusterOccurrenceRecord(
             sessionId: session.id,
             cycleInstanceId: cycle.id,
             templateId: template.id,
@@ -1143,7 +1470,7 @@ final class ClusteredProgramTests: XCTestCase {
             templateDayPosition: 0,
             dayLabel: "Cluster 1 · A",
             exerciseSnapshots: [
-                FixedCycleProgressionSnapshot(
+                ClusterExerciseProgressionSnapshot(
                     position: 0,
                     exerciseId: UUID(),
                     exerciseName: "Skipped",
@@ -1170,7 +1497,7 @@ final class ClusteredProgramTests: XCTestCase {
             )
         }
         XCTAssertNotNil(
-            try context.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>()).first {
+            try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).first {
                 $0.id == occurrence.id
             }
         )
@@ -1204,7 +1531,7 @@ final class ClusteredProgramTests: XCTestCase {
                 .first { $0.id == conflicting.id }?.days.first?.label,
             "Not the locked program"
         )
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterRotationState>()).isEmpty)
         XCTAssertFalse(try context.fetch(FetchDescriptor<TrainingPreference>()).contains {
             $0.key == BootstrapDataService.clusteredProgramRolloutMarkerKey
         })
@@ -1225,49 +1552,14 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertFalse(FixedCycleClusterProgramService.isProgramTemplate(template))
     }
 
-    func testActivationCleanupReplacesCyclePointersButPreservesCompletedContexts() throws {
-        let (exercises, template, cycle, pointers) = try program()
-        let completed = Session(
-            cycleInstanceId: cycle.id,
-            cycleDayIndex: 0,
-            finishedAt: .now,
-            status: .completed
-        )
-        let draft = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
-        let selection = try FixedCycleClusterProgramService.selection(
-            cluster: .cluster1,
-            template: template,
-            cycleInstanceId: cycle.id,
-            states: pointers
-        )
-        let completedContext = try FixedCycleClusterProgramService.makeSessionContext(
-            session: completed,
-            selection: selection,
-            exercises: exercises
-        )
-        let draftContext = try FixedCycleClusterProgramService.makeSessionContext(
-            session: draft,
-            selection: selection,
-            exercises: exercises
-        )
-        let orphanSession = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
-        let orphanContext = try FixedCycleClusterProgramService.makeSessionContext(
-            session: orphanSession,
-            selection: selection,
-            exercises: exercises
-        )
-
+    func testActivationCleanupReplacesOnlyCycleOwnedRotationStates() throws {
+        let (_, template, cycle, states) = try program()
         let cleanup = FixedCycleClusterProgramService.activationCleanupPlan(
             existingCycles: [cycle],
-            pointers: pointers,
-            contexts: [completedContext, draftContext, orphanContext],
-            sessions: [completed, draft]
+            states: states
         )
 
-        XCTAssertEqual(cleanup.pointerIDs, Set(pointers.map(\.id)))
-        XCTAssertFalse(cleanup.contextIDs.contains(completedContext.id))
-        XCTAssertTrue(cleanup.contextIDs.contains(draftContext.id))
-        XCTAssertTrue(cleanup.contextIDs.contains(orphanContext.id))
+        XCTAssertEqual(cleanup.pointerIDs, Set(states.map(\.id)))
 
         let replacementCycle = ActiveCycleInstance(templateId: template.id)
         let replacements = FixedCycleClusterProgramService.makeRotationStates(
@@ -1276,7 +1568,7 @@ final class ClusteredProgramTests: XCTestCase {
         )
         XCTAssertEqual(replacements.count, 3)
         XCTAssertTrue(replacements.allSatisfy {
-            $0.cycleInstanceId == replacementCycle.id && $0.completedCount == 0
+            $0.cycleInstanceId == replacementCycle.id && $0.positionIndex == 0
         })
     }
 
@@ -1292,7 +1584,7 @@ final class ClusteredProgramTests: XCTestCase {
             cycleInstanceId: cycle.id,
             templateId: template.id
         )
-        pointers.first { $0.clusterID == "cluster-1" }?.completedCount = 5
+        pointers.first { $0.clusterID == "cluster-1" }?.positionIndex = 5
         context.insert(template)
         context.insert(cycle)
         pointers.forEach(context.insert)
@@ -1313,11 +1605,11 @@ final class ClusteredProgramTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            try context.fetch(FetchDescriptor<FixedCycleClusterPointer>())
-                .first { $0.clusterID == "cluster-1" }?.completedCount,
+            try context.fetch(FetchDescriptor<ClusterRotationState>())
+                .first { $0.clusterID == "cluster-1" }?.positionIndex,
             5
         )
-        XCTAssertEqual(try context.fetch(FetchDescriptor<FixedCycleSessionContext>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).count, 1)
     }
 
     func testV4HydrationRejectsOccurrenceGapsAndConflicts() throws {
@@ -1443,8 +1735,7 @@ final class ClusteredProgramTests: XCTestCase {
             modelContext: context
         )
 
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleSessionContext>()).isEmpty)
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterRotationState>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).isEmpty)
     }
 }

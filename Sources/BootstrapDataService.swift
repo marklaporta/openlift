@@ -217,12 +217,12 @@ enum BootstrapDataService {
 
     private static func satisfiesCatalogAlias(_ exercise: Exercise, for defaultName: String) -> Bool {
         switch defaultName {
-        case "Incline Dumbbell Press-Flye":
-            return exercise.name.caseInsensitiveCompare("Incline Press-Flye") == .orderedSame
+        case "Incline Press-Flye":
+            return exercise.name.caseInsensitiveCompare("Incline Dumbbell Press-Flye") == .orderedSame
                 && exercise.primaryMuscle == .chest
                 && exercise.equipment == .dumbbell
-        case "Captains of Crush":
-            return exercise.name.caseInsensitiveCompare("Captain of Crush") == .orderedSame
+        case "Captain of Crush":
+            return exercise.name.caseInsensitiveCompare("Captains of Crush") == .orderedSame
                 && exercise.primaryMuscle == .forearms
         default:
             return false
@@ -471,13 +471,13 @@ enum BootstrapDataService {
             }
         )
         var clusterOccurrenceIDs = Set(
-            try modelContext.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>()).map(\.id)
+            try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).map(\.id)
         )
-        var fixedContextKeys = Set(
-            try modelContext.fetch(FetchDescriptor<FixedCycleSessionContext>()).map(\.key)
+        var clusterOccurrenceKeys = Set(
+            try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).map(\.key)
         )
         var rotationStatesByKey = Dictionary(
-            uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>()).map {
+            uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<ClusterRotationState>()).map {
                 ($0.key, $0)
             }
         )
@@ -645,7 +645,7 @@ enum BootstrapDataService {
                     guard statePayload.position_index >= 0,
                           !statePayload.program_version_id.isEmpty,
                           !statePayload.cluster_id.isEmpty else { continue }
-                    let key = FixedCycleClusterPointer.key(
+                    let key = ClusterRotationState.key(
                         cycleInstanceId: session.cycleInstanceId,
                         programVersionID: statePayload.program_version_id,
                         clusterID: statePayload.cluster_id
@@ -665,12 +665,12 @@ enum BootstrapDataService {
                             existing.isDerived = false
                         }
                     } else {
-                        let state = FixedCycleClusterPointer(
+                        let state = ClusterRotationState(
                             cycleInstanceId: session.cycleInstanceId,
                             templateId: destinationCycle.templateId,
                             programVersionID: statePayload.program_version_id,
                             clusterID: statePayload.cluster_id,
-                            completedCount: statePayload.position_index,
+                            positionIndex: statePayload.position_index,
                             updatedAt: exportedUpdatedAt,
                             lastCompletedOccurrenceID: statePayload.last_completed_occurrence_id.flatMap(UUID.init(uuidString:)),
                             isDerived: statePayload.is_derived
@@ -685,10 +685,15 @@ enum BootstrapDataService {
                         && metadata.program_identifier == FixedCycleClusterProgramService.programIdentifier
                         && metadata.program_version == FixedCycleClusterProgramService.structureVersion {
                     guard let occurrenceID = UUID(uuidString: occurrencePayload.occurrence_id),
-                          clusterOccurrenceIDs.insert(occurrenceID).inserted,
+                          !clusterOccurrenceIDs.contains(occurrenceID),
                           occurrencePayload.position_index >= 0 else { continue }
+                    let occurrenceKey = ClusterOccurrenceRecord.key(
+                        sessionId: session.id,
+                        clusterID: occurrencePayload.cluster_id
+                    )
+                    guard !clusterOccurrenceKeys.contains(occurrenceKey) else { continue }
                     let occurrenceSnapshots = occurrencePayload.exercises.compactMap {
-                        payload -> FixedCycleProgressionSnapshot? in
+                        payload -> ClusterExerciseProgressionSnapshot? in
                         guard let exportedID = UUID(uuidString: payload.exercise_id),
                               let exercise = resolveImportedExercise(
                                   id: exportedID,
@@ -697,9 +702,9 @@ enum BootstrapDataService {
                                   byName: exercisesByName
                               ),
                               let muscle = MuscleGroup(rawValue: payload.muscle),
-                              let status = FixedCycleProgressionStatus(rawValue: payload.completion_status),
+                              let status = ClusterExerciseCompletionStatus(rawValue: payload.completion_status),
                               !payload.progression_key.isEmpty else { return nil }
-                        return FixedCycleProgressionSnapshot(
+                        return ClusterExerciseProgressionSnapshot(
                             position: payload.position,
                             exerciseId: exercise.id,
                             exerciseName: payload.exercise_name,
@@ -711,7 +716,7 @@ enum BootstrapDataService {
                         )
                     }
                     guard occurrenceSnapshots.count == occurrencePayload.exercises.count,
-                          let occurrence = try? FixedCycleProgressionOccurrence(
+                          let occurrence = try? ClusterOccurrenceRecord(
                               id: occurrenceID,
                               sessionId: session.id,
                               cycleInstanceId: session.cycleInstanceId,
@@ -730,29 +735,11 @@ enum BootstrapDataService {
                               completedAt: SessionExportService.parseExportDate(occurrencePayload.completed_at) ?? finishedAt,
                               exerciseSnapshots: occurrenceSnapshots
                           ) else {
-                        clusterOccurrenceIDs.remove(occurrenceID)
                         continue
                     }
                     modelContext.insert(occurrence)
-                    let contextKey = FixedCycleSessionContext.key(
-                        sessionId: session.id,
-                        clusterID: occurrence.clusterID
-                    )
-                    if fixedContextKeys.insert(contextKey).inserted,
-                       let frozenContext = try? FixedCycleSessionContext(
-                           sessionId: session.id,
-                           cycleInstanceId: occurrence.cycleInstanceId,
-                           templateId: occurrence.templateId,
-                           programVersionID: occurrence.programVersionID,
-                           clusterID: occurrence.clusterID,
-                           absoluteStep: occurrence.absoluteStep,
-                           templateDayPosition: occurrence.templateDayPosition,
-                           dayLabel: occurrence.dayLabel,
-                           exerciseSnapshots: occurrence.exerciseSnapshots,
-                           createdAt: occurrence.completedAt
-                       ) {
-                        modelContext.insert(frozenContext)
-                    }
+                    clusterOccurrenceIDs.insert(occurrenceID)
+                    clusterOccurrenceKeys.insert(occurrenceKey)
                 }
                 for payload in metadata.readiness {
                     guard let id = UUID(uuidString: payload.observation_id),
@@ -836,14 +823,14 @@ enum BootstrapDataService {
             }
         }
 
-        let recoveredOccurrences = try modelContext.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>())
+        let recoveredOccurrences = try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
             .filter { $0.programVersionID == FixedCycleClusterProgramService.programVersionID }
         for (cycleID, cycleOccurrences) in Dictionary(
             grouping: recoveredOccurrences,
             by: \.cycleInstanceId
         ) {
             for cluster in FixedCycleClusterProgramService.Cluster.allCases {
-                let key = FixedCycleClusterPointer.key(
+                let key = ClusterRotationState.key(
                     cycleInstanceId: cycleID,
                     programVersionID: FixedCycleClusterProgramService.programVersionID,
                     clusterID: cluster.rawValue
@@ -894,12 +881,12 @@ enum BootstrapDataService {
                     }
                     continue
                 }
-                let derived = FixedCycleClusterPointer(
+                let derived = ClusterRotationState(
                     cycleInstanceId: cycleID,
                     templateId: latest.templateId,
                     programVersionID: FixedCycleClusterProgramService.programVersionID,
                     clusterID: cluster.rawValue,
-                    completedCount: recoveredCount,
+                    positionIndex: recoveredCount,
                     updatedAt: latest.completedAt,
                     lastCompletedOccurrenceID: latest.id,
                     isDerived: true
@@ -1571,7 +1558,7 @@ enum BootstrapDataService {
             let preferences = try modelContext.fetch(FetchDescriptor<TrainingPreference>())
             let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
             let cycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
-            let states = try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
+            let states = try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
             if let marker = preferences.first(where: { $0.key == clusteredProgramRolloutMarkerKey }) {
                 let identifiers = marker.modeRawValue.split(separator: "|", omittingEmptySubsequences: false)
                 guard identifiers.count == 2,
@@ -1595,27 +1582,40 @@ enum BootstrapDataService {
                     didApply: false
                 )
             }
-            let recoveredProgramStates = states.filter {
-                $0.programVersionID == FixedCycleClusterProgramService.programVersionID
-            }
             let expectedClusterIDs = Set(
                 FixedCycleClusterProgramService.Cluster.allCases.map(\.rawValue)
             )
-            let recoveredGroups = Dictionary(
-                grouping: recoveredProgramStates,
-                by: \.cycleInstanceId
-            )
-            guard recoveredProgramStates.isEmpty
-                    || (recoveredGroups.count == 1
-                        && Set(recoveredProgramStates.map(\.clusterID)) == expectedClusterIDs
-                        && Set(recoveredProgramStates.map(\.templateId)).count == 1) else {
-                throw ClusteredProgramRolloutError.existingRotationStateConflict
+            let recoveredProgramStates: [ClusterRotationState]
+            if states.isEmpty {
+                recoveredProgramStates = []
+            } else {
+                guard states.count == expectedClusterIDs.count,
+                      states.allSatisfy({
+                          $0.programVersionID
+                              == FixedCycleClusterProgramService.programVersionID
+                              && $0.positionIndex >= 0
+                      }),
+                      Set(states.map(\.clusterID)) == expectedClusterIDs,
+                      Set(states.map(\.cycleInstanceId)).count == 1,
+                      Set(states.map(\.templateId)).count == 1,
+                      let recovered = states.first,
+                      let recoveredTemplate = templates.first(where: {
+                          $0.id == recovered.templateId
+                              && FixedCycleClusterProgramService.isProgramTemplate($0)
+                      }),
+                      cycles.contains(where: {
+                          $0.id == recovered.cycleInstanceId
+                              && $0.templateId == recoveredTemplate.id
+                      }) else {
+                    throw ClusteredProgramRolloutError.existingRotationStateConflict
+                }
+                recoveredProgramStates = states
             }
 
             let sessions = try modelContext.fetch(FetchDescriptor<Session>())
             let entries = try modelContext.fetch(FetchDescriptor<SetEntry>())
             let clusterOccurrences = try modelContext.fetch(
-                FetchDescriptor<FixedCycleProgressionOccurrence>()
+                FetchDescriptor<ClusterOccurrenceRecord>()
             )
             for draft in sessions where draft.status == .draft {
                 let draftEntries = entries.filter { $0.sessionId == draft.id }
@@ -1997,7 +1997,7 @@ enum BootstrapDataService {
         ("Cable Fly", .chest, .isolation, .cable),
         ("Flat Cable Flye", .chest, .isolation, .cable),
         ("Incline Cable Flye", .chest, .isolation, .cable),
-        ("Incline Dumbbell Press-Flye", .chest, .compound, .dumbbell),
+        ("Incline Press-Flye", .chest, .compound, .dumbbell),
         ("Cable Row", .back, .compound, .cable),
         ("Lat Pulldown", .back, .compound, .cable),
         ("Chest Supported Row", .back, .compound, .machine),
@@ -2044,7 +2044,7 @@ enum BootstrapDataService {
         ("Reverse Curl", .forearms, .isolation, .barbell),
         ("Bench-Supported Cable Wrist Curl (Supinated)", .forearms, .isolation, .cable),
         ("Bench-Supported Cable Wrist Extension (Pronated)", .forearms, .isolation, .cable),
-        ("Captains of Crush", .forearms, .isolation, .bodyweight),
+        ("Captain of Crush", .forearms, .isolation, .bodyweight),
         ("Hip Thrust", .glutes, .compound, .barbell),
         ("Standing Calf Raise", .calves, .isolation, .machine),
         ("Stair Calves", .calves, .isolation, .bodyweight)
@@ -2111,7 +2111,6 @@ enum FixedCycleClusterProgramService {
 
     struct ActivationCleanupPlan: Equatable {
         let pointerIDs: Set<UUID>
-        let contextIDs: Set<UUID>
     }
 
     static let programIdentifier = "openlift.clustered-hypertrophy"
@@ -2122,28 +2121,27 @@ enum FixedCycleClusterProgramService {
 
     static func activationCleanupPlan(
         existingCycles: [ActiveCycleInstance],
-        pointers: [FixedCycleClusterPointer],
-        contexts: [FixedCycleSessionContext],
-        sessions: [Session]
+        states: [ClusterRotationState]
     ) -> ActivationCleanupPlan {
         let removedCycleIDs = Set(existingCycles.map(\.id))
-        let knownSessionIDs = Set(sessions.map(\.id))
-        let draftSessionIDs = Set(sessions.filter { $0.status == .draft }.map(\.id))
         return ActivationCleanupPlan(
-            pointerIDs: Set(pointers.compactMap {
+            pointerIDs: Set(states.compactMap {
                 removedCycleIDs.contains($0.cycleInstanceId) ? $0.id : nil
-            }),
-            contextIDs: Set(contexts.compactMap {
-                draftSessionIDs.contains($0.sessionId)
-                    || !knownSessionIDs.contains($0.sessionId) ? $0.id : nil
             })
         )
     }
 
+    /// New cable movements introduced by this version have no prior profile
+    /// to carry forward. Give those lanes the explicitly approved VOLTRA
+    /// starting point instead of inheriting an unrelated cable movement.
     static func defaultResistanceProfile(
         forExerciseNamed exerciseName: String
     ) -> ResistanceProfileValue? {
-        guard exerciseName == "Bench-Supported Cable Wrist Extension (Pronated)" else {
+        let newlyIntroducedVOLTRAMovements: Set<String> = [
+            "Bench-Supported Cable Wrist Curl (Supinated)",
+            "Bench-Supported Cable Wrist Extension (Pronated)"
+        ]
+        guard newlyIntroducedVOLTRAMovements.contains(exerciseName) else {
             return nil
         }
         return .voltra(
@@ -2151,6 +2149,18 @@ enum FixedCycleClusterProgramService {
             chainPercent: 70,
             eccentricPercent: 30
         )
+    }
+
+    static func initialResistanceProfile(
+        forExerciseNamed exerciseName: String,
+        exerciseId: UUID,
+        existingProfiles: [ExerciseResistanceProfile]
+    ) -> ResistanceProfileValue? {
+        defaultResistanceProfile(forExerciseNamed: exerciseName)
+            ?? ResistanceProfileService.lastUsedValue(
+                exerciseId: exerciseId,
+                profiles: existingProfiles
+            )
     }
 
     static func isProgramTemplate(_ template: CycleTemplate?) -> Bool {
@@ -2300,14 +2310,14 @@ enum FixedCycleClusterProgramService {
     static func makeRotationStates(
         cycleInstanceId: UUID,
         templateId: UUID
-    ) -> [FixedCycleClusterPointer] {
+    ) -> [ClusterRotationState] {
         Cluster.allCases.map {
-            FixedCycleClusterPointer(
+            ClusterRotationState(
                 cycleInstanceId: cycleInstanceId,
                 templateId: templateId,
                 programVersionID: programVersionID,
                 clusterID: $0.rawValue,
-                completedCount: 0
+                positionIndex: 0
             )
         }
     }
@@ -2315,7 +2325,7 @@ enum FixedCycleClusterProgramService {
     static func selections(
         template: CycleTemplate,
         cycleInstanceId: UUID,
-        states: [FixedCycleClusterPointer]
+        states: [ClusterRotationState]
     ) throws -> [Selection] {
         guard isProgramTemplate(template) else { return [] }
         return try Cluster.allCases.map {
@@ -2332,7 +2342,7 @@ enum FixedCycleClusterProgramService {
         cluster: Cluster,
         template: CycleTemplate,
         cycleInstanceId: UUID,
-        states: [FixedCycleClusterPointer]
+        states: [ClusterRotationState]
     ) throws -> Selection {
         guard isProgramTemplate(template),
               let state = states.first(where: {
@@ -2357,17 +2367,37 @@ enum FixedCycleClusterProgramService {
         )
     }
 
-    static func makeSessionContext(
+    static func makeOccurrence(
         session: Session,
         selection: Selection,
-        exercises: [Exercise]
-    ) throws -> FixedCycleSessionContext {
+        exercises: [Exercise],
+        entries: [SetEntry],
+        resistanceProfiles: [ExerciseResistanceProfile],
+        completedAt: Date = .now
+    ) throws -> ClusterOccurrenceRecord {
+        guard session.cycleInstanceId == selection.cycleInstanceId,
+              selection.absoluteStep >= 0 else {
+            throw ProgramError.invalidClusterContext
+        }
         let byID = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
         let snapshots = try CycleOrdering.sortedSlots(selection.day.slots).map { slot in
             guard let exercise = byID[slot.exerciseId] else {
                 throw ProgramError.invalidClusterContext
             }
-            return FixedCycleProgressionSnapshot(
+            let performed = entries.contains {
+                $0.sessionId == session.id
+                    && $0.exerciseId == exercise.id
+                    && $0.isLocked
+                    && $0.reps > 0
+            }
+            let resistanceProfile = (try? ResistanceProfileService.profile(
+                workoutKind: .fixed,
+                sessionId: session.id,
+                exerciseId: exercise.id,
+                occurrenceId: nil,
+                in: resistanceProfiles
+            )).flatMap(ResistanceProfileService.value)
+            return ClusterExerciseProgressionSnapshot(
                 position: slot.position,
                 exerciseId: exercise.id,
                 exerciseName: exercise.name,
@@ -2378,11 +2408,14 @@ enum FixedCycleClusterProgramService {
                     effectiveStep: selection.effectiveStep,
                     slotPosition: slot.position
                 ),
-                resistanceProfile: nil,
-                completionStatus: .skipped
+                resistanceProfile: resistanceProfile,
+                completionStatus: performed ? .performed : .skipped
             )
         }
-        return try FixedCycleSessionContext(
+        guard !snapshots.isEmpty else {
+            throw ProgramError.invalidClusterContext
+        }
+        return try ClusterOccurrenceRecord(
             sessionId: session.id,
             cycleInstanceId: selection.cycleInstanceId,
             templateId: selection.templateId,
@@ -2391,92 +2424,8 @@ enum FixedCycleClusterProgramService {
             absoluteStep: selection.absoluteStep,
             templateDayPosition: selection.day.position,
             dayLabel: selection.day.label,
-            exerciseSnapshots: snapshots
-        )
-    }
-
-    static func makeOccurrence(
-        session: Session,
-        selection: Selection,
-        context: FixedCycleSessionContext,
-        exercises: [Exercise],
-        entries: [SetEntry],
-        resistanceProfiles: [ExerciseResistanceProfile],
-        completedAt: Date = .now
-    ) throws -> FixedCycleProgressionOccurrence {
-        guard context.sessionId == session.id,
-              context.cycleInstanceId == selection.cycleInstanceId,
-              context.templateId == selection.templateId,
-              context.programVersionID == programVersionID,
-              context.clusterID == selection.cluster.rawValue,
-              context.absoluteStep == selection.absoluteStep else {
-            throw ProgramError.invalidClusterContext
-        }
-        let snapshots: [FixedCycleProgressionSnapshot] = context.exerciseSnapshots.map { snapshot in
-            let performed = entries.contains {
-                $0.sessionId == session.id
-                    && $0.exerciseId == snapshot.exerciseId
-                    && $0.isLocked
-                    && $0.reps > 0
-            }
-            let resistanceProfile = (try? ResistanceProfileService.profile(
-                workoutKind: .fixed,
-                sessionId: session.id,
-                exerciseId: snapshot.exerciseId,
-                occurrenceId: nil,
-                in: resistanceProfiles
-            )).flatMap(ResistanceProfileService.value)
-            return FixedCycleProgressionSnapshot(
-                position: snapshot.position,
-                exerciseId: snapshot.exerciseId,
-                exerciseName: snapshot.exerciseName,
-                muscle: snapshot.muscle,
-                prescribedSetCount: snapshot.prescribedSetCount,
-                progressionKey: snapshot.progressionKey,
-                resistanceProfile: resistanceProfile,
-                completionStatus: performed ? .performed : .skipped
-            )
-        }
-        guard !snapshots.isEmpty else {
-            throw ProgramError.invalidClusterContext
-        }
-        return try FixedCycleProgressionOccurrence(
-            sessionId: session.id,
-            cycleInstanceId: context.cycleInstanceId,
-            templateId: context.templateId,
-            programVersionID: programVersionID,
-            clusterID: selection.cluster.rawValue,
-            absoluteStep: selection.absoluteStep,
-            templateDayPosition: context.templateDayPosition,
-            dayLabel: context.dayLabel,
             completedAt: completedAt,
             exerciseSnapshots: snapshots
-        )
-    }
-
-    /// Convenience for service-level callers that do not persist drafts. The
-    /// app's workout flow always persists and passes FixedCycleSessionContext.
-    static func makeOccurrence(
-        session: Session,
-        selection: Selection,
-        exercises: [Exercise],
-        entries: [SetEntry],
-        resistanceProfiles: [ExerciseResistanceProfile],
-        completedAt: Date = .now
-    ) throws -> FixedCycleProgressionOccurrence {
-        let context = try makeSessionContext(
-            session: session,
-            selection: selection,
-            exercises: exercises
-        )
-        return try makeOccurrence(
-            session: session,
-            selection: selection,
-            context: context,
-            exercises: exercises,
-            entries: entries,
-            resistanceProfiles: resistanceProfiles,
-            completedAt: completedAt
         )
     }
 
@@ -2504,9 +2453,9 @@ enum FixedCycleClusterProgramService {
     @discardableResult
     static func advanceCompletedCluster(
         selection: Selection,
-        occurrence: FixedCycleProgressionOccurrence,
-        states: [FixedCycleClusterPointer]
-    ) throws -> FixedCycleClusterPointer {
+        occurrence: ClusterOccurrenceRecord,
+        states: [ClusterRotationState]
+    ) throws -> ClusterRotationState {
         guard occurrence.programVersionID == programVersionID,
               occurrence.clusterID == selection.cluster.rawValue,
               occurrence.positionIndex == selection.absoluteStep,
@@ -2529,8 +2478,8 @@ enum FixedCycleClusterProgramService {
     static func occurrence(
         sessionID: UUID,
         cluster: Cluster,
-        occurrences: [FixedCycleProgressionOccurrence]
-    ) -> FixedCycleProgressionOccurrence? {
+        occurrences: [ClusterOccurrenceRecord]
+    ) -> ClusterOccurrenceRecord? {
         occurrences.first {
             $0.sessionId == sessionID
                 && $0.programVersionID == programVersionID

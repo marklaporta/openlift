@@ -28,12 +28,11 @@ preserve every exercise/session/set and create zero profile rows, so legacy
 cable settings remain unknown. The Sherwick audit and reviewed-manifest repair
 are separate from schema migration and never run as a migration stage.
 
-V13 is also additive. It adds three parallel Fixed Cycle entities:
-`FixedCycleClusterPointer`, `FixedCycleSessionContext`, and
-`FixedCycleProgressionOccurrence`. Opening a V12 store under V13 preserves all
-legacy rows and creates none of these records. Schema migration never assigns a
-legacy workout to a new progression identity and never activates the clustered
-program.
+V13 is also additive. It adds exactly two parallel Fixed Cycle entities:
+mutable `ClusterRotationState` and immutable `ClusterOccurrenceRecord`.
+Opening a V12 store under V13 preserves all legacy rows and creates neither
+record. Schema migration never assigns a legacy workout to a new progression
+identity and never activates the clustered program.
 
 The reviewed Sherwick repair runs only after the V12 store opens successfully.
 Its frozen manifest contains the exact 19 occurrences from the reviewed

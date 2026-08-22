@@ -1472,7 +1472,7 @@ final class FixedCycleExerciseSnapshot {
     }
 }
 
-enum FixedCycleProgressionStatus: String, Codable, Equatable, Sendable {
+enum ClusterExerciseCompletionStatus: String, Codable, Equatable, Sendable {
     case performed
     case skipped
 }
@@ -1480,7 +1480,7 @@ enum FixedCycleProgressionStatus: String, Codable, Equatable, Sendable {
 /// Immutable value copied into a completed cluster occurrence. Progression
 /// history is queried from this value, never re-derived from a later program
 /// shape or an exercise name.
-struct FixedCycleProgressionSnapshot: Codable, Equatable, Sendable {
+struct ClusterExerciseProgressionSnapshot: Codable, Equatable, Sendable {
     let position: Int
     let exerciseId: UUID
     let exerciseName: String
@@ -1488,20 +1488,20 @@ struct FixedCycleProgressionSnapshot: Codable, Equatable, Sendable {
     let prescribedSetCount: Int
     let progressionKey: String
     let resistanceProfile: ResistanceProfileValue?
-    let completionStatus: FixedCycleProgressionStatus
+    let completionStatus: ClusterExerciseCompletionStatus
 }
 
 /// The authoritative next position for one independently advancing cluster.
-/// V13 deliberately stores this beside the frozen Fixed Cycle graph.
+/// This is the only mutable V13 clustered-program entity.
 @Model
-final class FixedCycleClusterPointer {
+final class ClusterRotationState {
     @Attribute(.unique) var id: UUID
     @Attribute(.unique) var key: String
     var cycleInstanceId: UUID
     var templateId: UUID
     var programVersionID: String
     var clusterID: String
-    var completedCount: Int
+    var positionIndex: Int
     var updatedAt: Date
     var lastCompletedOccurrenceID: UUID?
     /// True only when recovery had occurrence history but no exported pointer.
@@ -1515,7 +1515,7 @@ final class FixedCycleClusterPointer {
         templateId: UUID,
         programVersionID: String,
         clusterID: String,
-        completedCount: Int,
+        positionIndex: Int,
         updatedAt: Date = .now,
         lastCompletedOccurrenceID: UUID? = nil,
         isDerived: Bool = false
@@ -1530,39 +1530,10 @@ final class FixedCycleClusterPointer {
         self.templateId = templateId
         self.programVersionID = programVersionID
         self.clusterID = clusterID
-        self.completedCount = completedCount
+        self.positionIndex = positionIndex
         self.updatedAt = updatedAt
         self.lastCompletedOccurrenceID = lastCompletedOccurrenceID
         self.isDerived = isDerived
-    }
-
-    convenience init(
-        id: UUID = UUID(),
-        cycleInstanceId: UUID,
-        templateId: UUID,
-        programVersionID: String,
-        clusterID: String,
-        positionIndex: Int,
-        updatedAt: Date = .now,
-        lastCompletedOccurrenceID: UUID? = nil,
-        isDerived: Bool = false
-    ) {
-        self.init(
-            id: id,
-            cycleInstanceId: cycleInstanceId,
-            templateId: templateId,
-            programVersionID: programVersionID,
-            clusterID: clusterID,
-            completedCount: positionIndex,
-            updatedAt: updatedAt,
-            lastCompletedOccurrenceID: lastCompletedOccurrenceID,
-            isDerived: isDerived
-        )
-    }
-
-    var positionIndex: Int {
-        get { completedCount }
-        set { completedCount = newValue }
     }
 
     static func key(
@@ -1574,68 +1545,12 @@ final class FixedCycleClusterPointer {
     }
 }
 
-/// Frozen selection for one cluster in one draft. A live template is never
-/// consulted after this row is created, so activation, template edits, export
-/// retry, and reordered day arrays cannot change the workout being completed.
-@Model
-final class FixedCycleSessionContext {
-    @Attribute(.unique) var id: UUID
-    @Attribute(.unique) var key: String
-    var sessionId: UUID
-    var cycleInstanceId: UUID
-    var templateId: UUID
-    var programVersionID: String
-    var clusterID: String
-    var absoluteStep: Int
-    var templateDayPosition: Int
-    var dayLabel: String
-    var createdAt: Date
-    private var exerciseSnapshotsData: Data
-
-    init(
-        id: UUID = UUID(),
-        sessionId: UUID,
-        cycleInstanceId: UUID,
-        templateId: UUID,
-        programVersionID: String,
-        clusterID: String,
-        absoluteStep: Int,
-        templateDayPosition: Int,
-        dayLabel: String,
-        exerciseSnapshots: [FixedCycleProgressionSnapshot],
-        createdAt: Date = .now
-    ) throws {
-        self.id = id
-        self.key = Self.key(sessionId: sessionId, clusterID: clusterID)
-        self.sessionId = sessionId
-        self.cycleInstanceId = cycleInstanceId
-        self.templateId = templateId
-        self.programVersionID = programVersionID
-        self.clusterID = clusterID
-        self.absoluteStep = absoluteStep
-        self.templateDayPosition = templateDayPosition
-        self.dayLabel = dayLabel
-        self.createdAt = createdAt
-        self.exerciseSnapshotsData = try JSONEncoder().encode(exerciseSnapshots)
-    }
-
-    var exerciseSnapshots: [FixedCycleProgressionSnapshot] {
-        (try? JSONDecoder().decode(
-            [FixedCycleProgressionSnapshot].self,
-            from: exerciseSnapshotsData
-        )) ?? []
-    }
-
-    static func key(sessionId: UUID, clusterID: String) -> String {
-        "\(sessionId.uuidString)|\(clusterID)"
-    }
-}
-
 /// Immutable completion evidence for exactly one whole cluster. It references
 /// the legacy Session by UUID so V12's Session shape remains untouched.
 @Model
-final class FixedCycleProgressionOccurrence {
+final class ClusterOccurrenceRecord {
     @Attribute(.unique) var id: UUID
+    @Attribute(.unique) var key: String
     var sessionId: UUID
     var cycleInstanceId: UUID
     var templateId: UUID
@@ -1658,9 +1573,10 @@ final class FixedCycleProgressionOccurrence {
         templateDayPosition: Int,
         dayLabel: String,
         completedAt: Date = .now,
-        exerciseSnapshots: [FixedCycleProgressionSnapshot]
+        exerciseSnapshots: [ClusterExerciseProgressionSnapshot]
     ) throws {
         self.id = id
+        self.key = Self.key(sessionId: sessionId, clusterID: clusterID)
         self.sessionId = sessionId
         self.cycleInstanceId = cycleInstanceId
         self.templateId = templateId
@@ -1684,7 +1600,7 @@ final class FixedCycleProgressionOccurrence {
         templateDayPosition: Int,
         dayLabel: String,
         completedAt: Date = .now,
-        exerciseSnapshots: [FixedCycleProgressionSnapshot]
+        exerciseSnapshots: [ClusterExerciseProgressionSnapshot]
     ) throws {
         try self.init(
             id: id,
@@ -1701,12 +1617,16 @@ final class FixedCycleProgressionOccurrence {
         )
     }
 
-    var exerciseSnapshots: [FixedCycleProgressionSnapshot] {
+    var exerciseSnapshots: [ClusterExerciseProgressionSnapshot] {
         (try? JSONDecoder().decode(
-            [FixedCycleProgressionSnapshot].self,
+            [ClusterExerciseProgressionSnapshot].self,
             from: exerciseSnapshotsData
         )) ?? []
     }
 
     var positionIndex: Int { absoluteStep }
+
+    static func key(sessionId: UUID, clusterID: String) -> String {
+        "\(sessionId.uuidString)|\(clusterID)"
+    }
 }

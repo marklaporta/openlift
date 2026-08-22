@@ -87,8 +87,8 @@ enum SessionExportService {
         let fixedReadiness = try modelContext.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
         let fixedOverrides = try modelContext.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>())
         let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
-        let clusterOccurrences = try modelContext.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>())
-        let clusterRotationStates = try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
+        let clusterOccurrences = try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        let clusterRotationStates = try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
         let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
 
         for session in retryableSessions {
@@ -165,8 +165,8 @@ enum SessionExportService {
         let fixedReadiness = try modelContext.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
         let fixedOverrides = try modelContext.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>())
         let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
-        let clusterOccurrences = try modelContext.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>())
-        let clusterRotationStates = try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
+        let clusterOccurrences = try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        let clusterRotationStates = try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
         let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
         let cycleName = exportCycleName(
             for: session,
@@ -359,7 +359,7 @@ enum SessionExportService {
         let exercises: [ClusterExerciseOccurrencePayload]
     }
 
-    struct FixedCycleClusterPointerPayload: Codable, Equatable, Sendable {
+    struct ClusterRotationStatePayload: Codable, Equatable, Sendable {
         let program_version_id: String
         let cluster_id: String
         let position_index: Int
@@ -381,7 +381,7 @@ enum SessionExportService {
         let cluster_key: String?
         let absolute_cluster_step: Int?
         let cluster_occurrences: [ClusterOccurrencePayload]?
-        let cluster_rotation_states: [FixedCycleClusterPointerPayload]?
+        let cluster_rotation_states: [ClusterRotationStatePayload]?
     }
 
     struct ExportPayload: Codable {
@@ -515,8 +515,8 @@ enum SessionExportService {
         readiness: [FixedCycleReadinessObservation],
         overrides: [FixedCycleOccurrenceOverride],
         snapshots: [FixedCycleExerciseSnapshot] = [],
-        clusterOccurrences: [FixedCycleProgressionOccurrence] = [],
-        clusterRotationStates: [FixedCycleClusterPointer] = []
+        clusterOccurrences: [ClusterOccurrenceRecord] = [],
+        clusterRotationStates: [ClusterRotationState] = []
     ) -> FixedCycleMetadata {
         let exerciseById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
         let sessionOverrides = overrides.filter { $0.sessionId == session.id }
@@ -647,7 +647,6 @@ enum SessionExportService {
                 day_label: occurrence.dayLabel,
                 completed_at: iso.string(from: occurrence.completedAt),
                 exercises: occurrence.exerciseSnapshots
-                    .filter { $0.completionStatus == .performed }
                     .map { snapshot in
                         ClusterExerciseOccurrencePayload(
                             position: snapshot.position,
@@ -673,7 +672,7 @@ enum SessionExportService {
             }
             .sorted { $0.clusterID < $1.clusterID }
             .map { state in
-                FixedCycleClusterPointerPayload(
+                ClusterRotationStatePayload(
                     program_version_id: state.programVersionID,
                     cluster_id: state.clusterID,
                     position_index: state.positionIndex,
@@ -762,8 +761,8 @@ enum SessionExportService {
         readiness: [FixedCycleReadinessObservation],
         overrides: [FixedCycleOccurrenceOverride],
         snapshots: [FixedCycleExerciseSnapshot],
-        clusterOccurrences: [FixedCycleProgressionOccurrence],
-        clusterRotationStates: [FixedCycleClusterPointer]
+        clusterOccurrences: [ClusterOccurrenceRecord],
+        clusterRotationStates: [ClusterRotationState]
     ) -> FixedCycleMetadata? {
         guard session.dayLabelSnapshot != "Off-Schedule" else { return nil }
         let cycle = activeCycles.first { $0.id == session.cycleInstanceId }
@@ -826,6 +825,30 @@ enum SessionExportService {
         return (String(programVersionID[..<marker.lowerBound]), version)
     }
 
+    static func exportableSetEntries(
+        _ setEntries: [SetEntry],
+        fixedCycleMetadata: FixedCycleMetadata?
+    ) -> [SetEntry] {
+        let completedClusterExerciseIds: Set<UUID>?
+        if let metadata = fixedCycleMetadata, metadata.schema_version >= 4 {
+            completedClusterExerciseIds = Set(
+                (metadata.cluster_occurrences ?? [])
+                    .flatMap(\.exercises)
+                    .filter {
+                        $0.completion_status == ClusterExerciseCompletionStatus.performed.rawValue
+                    }
+                    .compactMap { UUID(uuidString: $0.exercise_id) }
+            )
+        } else {
+            completedClusterExerciseIds = nil
+        }
+        return setEntries.filter { entry in
+            guard entry.reps > 0 else { return false }
+            guard let completedClusterExerciseIds else { return true }
+            return entry.isLocked && completedClusterExerciseIds.contains(entry.exerciseId)
+        }
+    }
+
     @discardableResult
     static func export(
         session: Session,
@@ -838,7 +861,10 @@ enum SessionExportService {
         resistanceProfiles: [ExerciseResistanceProfile] = [],
         environment: ExportEnvironment = .live()
     ) throws -> ExportWriteOutcome {
-        let loggedEntries = setEntries.filter { $0.reps > 0 }
+        let loggedEntries = exportableSetEntries(
+            setEntries,
+            fixedCycleMetadata: fixedCycleMetadata
+        )
         let grouped = Dictionary(grouping: loggedEntries, by: { $0.exerciseId })
 
         let orderedPositions = Dictionary(

@@ -13,9 +13,8 @@ struct CycleView: View {
     @Query private var activeCycles: [ActiveCycleInstance]
     @Query private var sessions: [Session]
     @Query private var setEntries: [SetEntry]
-    @Query private var clusterPointers: [FixedCycleClusterPointer]
-    @Query private var fixedCycleSessionContexts: [FixedCycleSessionContext]
-    @Query private var progressionOccurrences: [FixedCycleProgressionOccurrence]
+    @Query private var clusterPointers: [ClusterRotationState]
+    @Query private var progressionOccurrences: [ClusterOccurrenceRecord]
     @Query private var trainingPreferences: [TrainingPreference]
     @Query private var adaptivePrograms: [AdaptiveProgram]
     @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
@@ -415,9 +414,7 @@ struct CycleView: View {
             }
             let cleanup = FixedCycleClusterProgramService.activationCleanupPlan(
                 existingCycles: activeCycles,
-                pointers: clusterPointers,
-                contexts: fixedCycleSessionContexts,
-                sessions: sessions
+                states: clusterPointers
             )
             for draft in draftSessions {
                 for entry in setEntries where entry.sessionId == draft.id {
@@ -425,10 +422,6 @@ struct CycleView: View {
                 }
                 modelContext.delete(draft)
             }
-            for context in fixedCycleSessionContexts where cleanup.contextIDs.contains(context.id) {
-                modelContext.delete(context)
-            }
-
             // Keep exactly one active cycle instance to avoid stale pointer selection.
             for pointer in clusterPointers where cleanup.pointerIDs.contains(pointer.id) {
                 modelContext.delete(pointer)
