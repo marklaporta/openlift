@@ -234,9 +234,8 @@ final class MigrationSafetyTests: XCTestCase {
             try context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).first?.chainPercent,
             70
         )
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleSessionContext>()).isEmpty)
-        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleProgressionOccurrence>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterRotationState>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).isEmpty)
     }
 
     func testV9StoreMigratesToV10WithExistingSetCompletionTimestampsNil() throws {

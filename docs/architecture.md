@@ -43,8 +43,7 @@ The main SwiftData models are defined in [`Models.swift`](../Sources/Models.swif
 - `FixedCycleReadinessObservation`, `FixedCycleReadinessResponse`
 - `FixedCycleOccurrenceOverride`
 - `ExerciseResistanceProfile`
-- `FixedCycleClusterPointer`, `FixedCycleSessionContext`, and
-  `FixedCycleProgressionOccurrence`
+- `ClusterRotationState` and `ClusterOccurrenceRecord`
 
 Design intent:
 
@@ -78,19 +77,22 @@ unmigrated legacy cable work.
 The profile freezes when its first set is locked. Correction then requires an
 explicit occurrence-wide confirmation. New cable work first copies the last
 complete profile for that exercise, falling back to the newest complete cable
-profile for Mark's usually-stable setup; a complete selection is still required
-before the first set locks. Repeat-last and progression scoring require an
-exact complete match. Unlike/unknown history remains visible as reference.
+profile for Mark's usually-stable setup. The two new clustered cable-wrist
+movements instead start at the approved VOLTRA default of 70% inverse chains
+and 30% eccentric. A complete selection is still required before the first set
+locks. Repeat-last and progression scoring require an exact complete match.
+Unlike/unknown history remains visible as reference.
 
 ### Clustered Fixed Cycle (V13)
 
 The versioned clustered program keeps the V1-V12 graph unchanged and stores its
-new state in three parallel entities. Each cluster has one authoritative
-completed-count pointer. A draft freezes the three selected cluster steps and
-their progression keys in `FixedCycleSessionContext`; completing a whole
-cluster creates one immutable `FixedCycleProgressionOccurrence` and advances
-only that cluster's pointer. Skipped sets do not prevent advancement, and no
-subsection inside a cluster advances independently.
+new state in exactly two parallel entities. Each cluster has one authoritative
+mutable `ClusterRotationState`. Completing a whole cluster creates one
+immutable `ClusterOccurrenceRecord` that freezes the selected step, progression
+keys, performed/skipped status, and resistance profiles, then advances only
+that cluster's state. The reserved program template is immutable, skipped sets
+do not prevent advancement, and no subsection inside a cluster advances
+independently.
 
 Progression keys are versioned structural identities, not template-day lookup
 heuristics. Shorter internal rotations are derived from the cluster step, while

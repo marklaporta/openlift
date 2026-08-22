@@ -2444,13 +2444,13 @@ enum ExerciseEffortLookupService {
         rotationSessions: [Session],
         rotationSetEntries: [SetEntry],
         progressionKey: String? = nil,
-        progressionOccurrences: [FixedCycleProgressionOccurrence] = [],
+        progressionOccurrences: [ClusterOccurrenceRecord] = [],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
         resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> ExerciseEffortLookupResult? {
         if let progressionKey {
             let identityBySession = Dictionary(
-                progressionOccurrences.compactMap { occurrence -> (UUID, FixedCycleProgressionSnapshot)? in
+                progressionOccurrences.compactMap { occurrence -> (UUID, ClusterExerciseProgressionSnapshot)? in
                     guard let snapshot = occurrence.exerciseSnapshots.first(where: {
                         $0.progressionKey == progressionKey
                             && $0.exerciseId == exerciseId
@@ -2492,7 +2492,7 @@ enum ExerciseEffortLookupService {
                 adaptiveSetEntries: adaptiveSetEntries,
                 rotationSessions: rotationSessions,
                 rotationSetEntries: rotationSetEntries,
-                excludingRotationSessionIds: Set(progressionOccurrences.map(\.sessionId)),
+                excludingSessionIds: Set(progressionOccurrences.map(\.sessionId)),
                 resistanceRequirement: resistanceRequirement,
                 resistanceProfiles: resistanceProfiles
             )
@@ -2538,14 +2538,15 @@ enum ExerciseEffortLookupService {
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
         rotationSetEntries: [SetEntry],
-        excludingRotationSessionIds: Set<UUID> = [],
+        excludingSessionIds: Set<UUID> = [],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
         resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> ExerciseEffortLookupResult? {
         let adaptive = adaptiveSessions.flatMap { session -> [ExerciseEffortLookupResult] in
             guard session.status == .completed,
                   session.id != excludingSessionId,
-                  session.generatedPlanId != excludingPlanId else {
+                  session.generatedPlanId != excludingPlanId,
+                  !excludingSessionIds.contains(session.id) else {
                 return []
             }
             let occurrenceRows = Dictionary(grouping: adaptiveSetEntries.filter {
@@ -2586,7 +2587,7 @@ enum ExerciseEffortLookupService {
 
         let rotation = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
             guard session.id != excludingSessionId,
-                  !excludingRotationSessionIds.contains(session.id) else { return nil }
+                  !excludingSessionIds.contains(session.id) else { return nil }
             return rotationResult(
                 session: session,
                 exerciseId: exerciseId,
