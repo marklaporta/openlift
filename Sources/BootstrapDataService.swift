@@ -94,6 +94,7 @@ enum BootstrapDataService {
     }
 
     enum ClusteredProgramRolloutError: LocalizedError, Equatable {
+        case draftBackupConfirmationRequired(sessionId: UUID)
         case nonEmptyDraft(sessionId: UUID)
         case existingTemplateConflict
         case existingRotationStateConflict
@@ -101,6 +102,8 @@ enum BootstrapDataService {
 
         var errorDescription: String? {
             switch self {
+            case .draftBackupConfirmationRequired(let sessionId):
+                return "The current Fixed Cycle draft \(sessionId.uuidString) contains unlocked prefilled work. Confirm a verified backup with OPENLIFT_CLUSTERED_DRAFT_BACKUP_CONFIRMED before retiring it for the clustered program rollout."
             case .nonEmptyDraft(let sessionId):
                 return "The current draft \(sessionId.uuidString) contains entered or locked work. Resolve it before activating the clustered program."
             case .existingTemplateConflict:
@@ -1561,7 +1564,8 @@ enum BootstrapDataService {
     /// new progression key and normal startup never selects this program.
     @discardableResult
     static func prepareClusteredProgramRollout(
-        modelContext: ModelContext
+        modelContext: ModelContext,
+        clusteredDraftBackupConfirmed: Bool = false
     ) throws -> ClusteredProgramRolloutResult {
         do {
             let preferences = try modelContext.fetch(FetchDescriptor<TrainingPreference>())
@@ -1615,9 +1619,15 @@ enum BootstrapDataService {
             )
             for draft in sessions where draft.status == .draft {
                 let draftEntries = entries.filter { $0.sessionId == draft.id }
-                if draftEntries.contains(where: { $0.isLocked || $0.weight != 0 || $0.reps != 0 })
+                if draftEntries.contains(where: \.isLocked)
                     || clusterOccurrences.contains(where: { $0.sessionId == draft.id }) {
                     throw ClusteredProgramRolloutError.nonEmptyDraft(sessionId: draft.id)
+                }
+                if !clusteredDraftBackupConfirmed,
+                   draftEntries.contains(where: { $0.weight != 0 || $0.reps != 0 }) {
+                    throw ClusteredProgramRolloutError.draftBackupConfirmationRequired(
+                        sessionId: draft.id
+                    )
                 }
             }
             let adaptiveSessions = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())

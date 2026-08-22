@@ -43,7 +43,8 @@ struct OpenLiftApp: App {
             let modelContext = ModelContext(startup.container)
             do {
                 let result = try BootstrapDataService.prepareClusteredProgramRollout(
-                    modelContext: modelContext
+                    modelContext: modelContext,
+                    clusteredDraftBackupConfirmed: AppRuntime.clusteredDraftBackupIsConfirmed
                 )
                 print(
                     "OPENLIFT_CLUSTERED_PROGRAM_ROLLOUT_RESULT applied=\(result.didApply) template=\(result.templateId) cycle=\(result.cycleId)"
