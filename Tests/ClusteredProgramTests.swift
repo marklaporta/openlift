@@ -891,7 +891,159 @@ final class ClusteredProgramTests: XCTestCase {
         }
     }
 
-    func testClusteredRolloutRejectsNonEmptyDraftWithoutMutation() throws {
+    func testClusteredRolloutRequiresBackupConfirmationForUnlockedPrefillWithoutMutation() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(
+            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+        )
+        let context = ModelContext(container)
+        let template = CycleTemplate(name: "Legacy", days: [])
+        let cycle = ActiveCycleInstance(templateId: template.id)
+        let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
+        context.insert(template)
+        context.insert(cycle)
+        context.insert(session)
+        for setIndex in 1...13 {
+            context.insert(
+                SetEntry(
+                    sessionId: session.id,
+                    exerciseId: UUID(),
+                    setIndex: setIndex,
+                    weight: Double(10 + setIndex),
+                    reps: 8,
+                    isLocked: false
+                )
+            )
+        }
+        try context.save()
+
+        XCTAssertThrowsError(
+            try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
+        ) { error in
+            XCTAssertEqual(
+                error as? BootstrapDataService.ClusteredProgramRolloutError,
+                .draftBackupConfirmationRequired(sessionId: session.id)
+            )
+        }
+        XCTAssertNotNil(try context.fetch(FetchDescriptor<Session>()).first { $0.id == session.id })
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<SetEntry>()).filter { $0.sessionId == session.id }.count,
+            13
+        )
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CycleTemplate>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Exercise>()), 0)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
+        XCTAssertFalse(try context.fetch(FetchDescriptor<TrainingPreference>()).contains {
+            $0.key == BootstrapDataService.clusteredProgramRolloutMarkerKey
+        })
+    }
+
+    func testClusteredRolloutRetiresUnlockedPrefillWithBackupConfirmation() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(
+            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+        )
+        let context = ModelContext(container)
+        let template = CycleTemplate(name: "Legacy", days: [])
+        let cycle = ActiveCycleInstance(templateId: template.id)
+        let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
+        context.insert(template)
+        context.insert(cycle)
+        context.insert(session)
+        for setIndex in 1...13 {
+            context.insert(
+                SetEntry(
+                    sessionId: session.id,
+                    exerciseId: UUID(),
+                    setIndex: setIndex,
+                    weight: Double(10 + setIndex),
+                    reps: 8,
+                    isLocked: false
+                )
+            )
+        }
+        try context.save()
+
+        let result = try BootstrapDataService.prepareClusteredProgramRollout(
+            modelContext: context,
+            clusteredDraftBackupConfirmed: true
+        )
+
+        XCTAssertTrue(result.didApply)
+        XCTAssertNil(try context.fetch(FetchDescriptor<Session>()).first { $0.id == session.id })
+        XCTAssertTrue(
+            try context.fetch(FetchDescriptor<SetEntry>()).filter { $0.sessionId == session.id }.isEmpty
+        )
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).count,
+            FixedCycleClusterProgramService.Cluster.allCases.count
+        )
+        XCTAssertTrue(try context.fetch(FetchDescriptor<TrainingPreference>()).contains {
+            $0.key == BootstrapDataService.clusteredProgramRolloutMarkerKey
+        })
+    }
+
+    func testConfirmedDraftRetirementRollsBackWithLaterRolloutFailure() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(
+            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+        )
+        let context = ModelContext(container)
+        let template = CycleTemplate(name: "Legacy", days: [])
+        let cycle = ActiveCycleInstance(templateId: template.id)
+        let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
+        context.insert(template)
+        context.insert(cycle)
+        context.insert(session)
+        for setIndex in 1...13 {
+            context.insert(
+                SetEntry(
+                    sessionId: session.id,
+                    exerciseId: UUID(),
+                    setIndex: setIndex,
+                    weight: Double(10 + setIndex),
+                    reps: 8,
+                    isLocked: false
+                )
+            )
+        }
+        let recoveredCycleID = UUID()
+        let recoveredTemplateID = UUID()
+        for cluster in FixedCycleClusterProgramService.Cluster.allCases {
+            context.insert(
+                FixedCycleClusterPointer(
+                    cycleInstanceId: recoveredCycleID,
+                    templateId: recoveredTemplateID,
+                    programVersionID: FixedCycleClusterProgramService.programVersionID,
+                    clusterID: cluster.rawValue,
+                    positionIndex: 0,
+                    isDerived: true
+                )
+            )
+        }
+        try context.save()
+
+        XCTAssertThrowsError(
+            try BootstrapDataService.prepareClusteredProgramRollout(
+                modelContext: context,
+                clusteredDraftBackupConfirmed: true
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? BootstrapDataService.ClusteredProgramRolloutError,
+                .existingRotationStateConflict
+            )
+        }
+        XCTAssertNotNil(try context.fetch(FetchDescriptor<Session>()).first { $0.id == session.id })
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<SetEntry>()).filter { $0.sessionId == session.id }.count,
+            13
+        )
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CycleTemplate>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Exercise>()), 0)
+        XCTAssertFalse(try context.fetch(FetchDescriptor<TrainingPreference>()).contains {
+            $0.key == BootstrapDataService.clusteredProgramRolloutMarkerKey
+        })
+    }
+
+    func testClusteredRolloutBackupConfirmationNeverRetiresLockedFixedCycleWork() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
             schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
         )
@@ -904,8 +1056,8 @@ final class ClusteredProgramTests: XCTestCase {
             exerciseId: UUID(),
             setIndex: 1,
             weight: 10,
-            reps: 0,
-            isLocked: false
+            reps: 8,
+            isLocked: true
         )
         context.insert(template)
         context.insert(cycle)
@@ -914,7 +1066,10 @@ final class ClusteredProgramTests: XCTestCase {
         try context.save()
 
         XCTAssertThrowsError(
-            try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
+            try BootstrapDataService.prepareClusteredProgramRollout(
+                modelContext: context,
+                clusteredDraftBackupConfirmed: true
+            )
         ) { error in
             XCTAssertEqual(
                 error as? BootstrapDataService.ClusteredProgramRolloutError,
@@ -923,10 +1078,51 @@ final class ClusteredProgramTests: XCTestCase {
         }
         XCTAssertNotNil(try context.fetch(FetchDescriptor<Session>()).first { $0.id == session.id })
         XCTAssertNotNil(try context.fetch(FetchDescriptor<SetEntry>()).first { $0.id == entry.id })
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CycleTemplate>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Exercise>()), 0)
         XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
-        XCTAssertFalse(try context.fetch(FetchDescriptor<TrainingPreference>()).contains {
-            $0.key == BootstrapDataService.clusteredProgramRolloutMarkerKey
-        })
+    }
+
+    func testClusteredRolloutBackupConfirmationDoesNotAuthorizeAdaptiveDraftRetirement() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(
+            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+        )
+        let context = ModelContext(container)
+        let session = AdaptiveWorkoutSession(generatedPlanId: UUID())
+        let entry = AdaptiveSetEntry(
+            adaptiveSessionId: session.id,
+            occurrenceId: UUID(),
+            exerciseId: UUID(),
+            setIndex: 1,
+            weight: 10,
+            reps: 8,
+            isLocked: false
+        )
+        context.insert(session)
+        context.insert(entry)
+        try context.save()
+
+        XCTAssertThrowsError(
+            try BootstrapDataService.prepareClusteredProgramRollout(
+                modelContext: context,
+                clusteredDraftBackupConfirmed: true
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? BootstrapDataService.ClusteredProgramRolloutError,
+                .nonEmptyDraft(sessionId: session.id)
+            )
+        }
+        XCTAssertNotNil(
+            try context.fetch(FetchDescriptor<AdaptiveWorkoutSession>()).first {
+                $0.id == session.id
+            }
+        )
+        XCTAssertNotNil(
+            try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).first { $0.id == entry.id }
+        )
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Exercise>()), 0)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<FixedCycleClusterPointer>()).isEmpty)
     }
 
     func testClusteredRolloutRejectsDraftWithCompletedAllSkippedCluster() throws {

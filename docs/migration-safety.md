@@ -82,11 +82,15 @@ only when the app launches with
 
 Before invoking it against a real store, close OpenLift and make a verified copy
 of `default.store` together with any `default.store-wal` and
-`default.store-shm` sidecars. Confirm there is no entered Fixed Cycle or
-Adaptive draft. The rollout then:
+`default.store-shm` sidecars. The rollout always refuses locked Fixed Cycle
+work and any locked or entered Adaptive draft. Unlocked, nonzero Fixed Cycle
+prefill rows may be retired only when that backup has been verified and the app
+also launches with `OPENLIFT_CLUSTERED_DRAFT_BACKUP_CONFIRMED`; without that
+second argument, the rollout fails without mutation. The rollout then:
 
-1. refuses entered/locked draft work and refuses a conflicting same-name
-   template or partial pointer state;
+1. refuses locked Fixed Cycle work, locked or entered Adaptive drafts, unconfirmed
+   nonzero Fixed Cycle drafts, and any conflicting same-name template or
+   partial pointer state;
 2. creates or reuses the exact versioned `Clustered Hypertrophy v1` template;
 3. creates one active cycle and three independent zero-based cluster pointers,
    unless a complete export-recovered pointer set already exists;
@@ -95,7 +99,9 @@ Adaptive draft. The rollout then:
 5. writes a durable marker containing the template and cycle identities.
 
 Template/catalog insertion, cycle selection, pointer creation, and marker
-creation are one transaction. Any validation error rolls all of them back.
+creation are one transaction. Confirmed unlocked Fixed Cycle draft/autofill
+retirement occurs in that same transaction. Any validation error rolls all of
+them back.
 Re-running the flag after success validates the marker and three-pointer state
 and returns without rewinding. Rollout is intentionally fail-closed if the
 marker exists but its referenced state is incomplete.
