@@ -7,6 +7,7 @@ enum FixedCycleWorkoutError: LocalizedError, Equatable {
     case qualifyingSetRequired
     case exerciseAlreadyExists
     case cannotReplacePerformedExercise
+    case completedClusterDraftCannotBeDiscarded
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +21,8 @@ enum FixedCycleWorkoutError: LocalizedError, Equatable {
             return "That exercise is already configured in this muscle block."
         case .cannotReplacePerformedExercise:
             return "This exercise already has completed work in the draft. Keep that evidence or remove it explicitly before replacing the future slot."
+        case .completedClusterDraftCannotBeDiscarded:
+            return "This draft contains a completed cluster and cannot be discarded. Finish the workout so its history remains intact."
         }
     }
 }
@@ -254,6 +257,42 @@ enum FixedCycleWorkoutService {
         }
     }
 
+    /// Pressing Finish is the intentional whole-cluster completion action.
+    /// A versioned clustered session may therefore complete even when every
+    /// prescribed row was skipped; drafts never call the advancement path.
+    static func canIntentionallyComplete(
+        sessionId: UUID,
+        entries: [SetEntry],
+        isClusteredProgram: Bool,
+        hasCompletedCluster: Bool = false
+    ) -> Bool {
+        isClusteredProgram
+            ? hasCompletedCluster
+            : hasQualifyingSet(sessionId: sessionId, entries: entries)
+    }
+
+    static func completedClusterExerciseIds(
+        sessionId: UUID,
+        occurrences: [FixedCycleProgressionOccurrence]
+    ) -> Set<UUID> {
+        Set(
+            occurrences
+                .filter { $0.sessionId == sessionId }
+                .flatMap(\.exerciseSnapshots)
+                .filter { $0.completionStatus == .performed }
+                .map(\.exerciseId)
+        )
+    }
+
+    static func draftSetCount(
+        defaultSetCount: Int,
+        effort: ExerciseEffortLookupResult?
+    ) -> Int {
+        effort?.isProgressionPrefillEligible == true
+            ? max(1, effort?.rows.count ?? defaultSetCount)
+            : max(1, defaultSetCount)
+    }
+
     static func hasQualifyingSet(
         sessionId: UUID,
         exerciseIds: Set<UUID>,
@@ -302,6 +341,8 @@ enum FixedCycleWorkoutService {
         adaptiveSetEntries: [AdaptiveSetEntry],
         rotationSessions: [Session],
         rotationSetEntries: [SetEntry],
+        progressionKey: String? = nil,
+        progressionOccurrences: [FixedCycleProgressionOccurrence] = [],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
         resistanceProfiles: [ExerciseResistanceProfile] = []
     ) -> ExerciseEffortLookupResult? {
@@ -314,6 +355,8 @@ enum FixedCycleWorkoutService {
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
             rotationSetEntries: rotationSetEntries,
+            progressionKey: progressionKey,
+            progressionOccurrences: progressionOccurrences,
             resistanceRequirement: resistanceRequirement,
             resistanceProfiles: resistanceProfiles
         )
@@ -488,6 +531,9 @@ struct WorkoutView: View {
     @Query private var fixedReadiness: [FixedCycleReadinessObservation]
     @Query private var fixedOverrides: [FixedCycleOccurrenceOverride]
     @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
+    @Query private var clusterRotationStates: [FixedCycleClusterPointer]
+    @Query private var fixedCycleSessionContexts: [FixedCycleSessionContext]
+    @Query private var clusterOccurrences: [FixedCycleProgressionOccurrence]
     @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     @State private var errorMessage: String?
@@ -544,9 +590,30 @@ struct WorkoutView: View {
 
     private var activeDay: CycleDay? {
         guard let cycle = activeCycle, let template = activeTemplate else { return nil }
+        guard !FixedCycleClusterProgramService.isProgramTemplate(template) else { return nil }
         let orderedDays = CycleOrdering.sortedDays(template.days)
         guard cycle.currentDayIndex >= 0, cycle.currentDayIndex < orderedDays.count else { return nil }
         return orderedDays[cycle.currentDayIndex]
+    }
+
+    private var clusterSelections: [FixedCycleClusterProgramService.Selection] {
+        guard let template = activeTemplate, let cycle = activeCycle else { return [] }
+        return (try? FixedCycleClusterProgramService.selections(
+            template: template,
+            cycleInstanceId: cycle.id,
+            states: clusterRotationStates
+        )) ?? []
+    }
+
+    private var readinessDay: CycleDay? {
+        if let activeTemplate,
+           FixedCycleClusterProgramService.isProgramTemplate(activeTemplate) {
+            // Fixed Cycle readiness already appends every other muscle used by
+            // the template, so one current cluster day safely seeds the stable
+            // ordering without manufacturing transient SwiftData models.
+            return clusterSelections.first?.day
+        }
+        return activeDay
     }
 
     private var latestFixedReadiness: FixedCycleReadinessObservation? {
@@ -705,14 +772,20 @@ struct WorkoutView: View {
                         session: completedFixedSessionToday,
                         nextDay: activeDay
                     )
-                } else if let draftSession, let activeTemplate, let activeDay {
-                    if latestFixedReadiness == nil {
+                } else if let draftSession, let activeTemplate {
+                    if latestFixedReadiness == nil, let readinessDay {
                         fixedReadinessEntry(
                             session: draftSession,
                             template: activeTemplate,
-                            day: activeDay
+                            day: readinessDay
                         )
                     } else if let latestFixedReadiness {
+                        if FixedCycleClusterProgramService.isProgramTemplate(activeTemplate) {
+                            clusteredDraftSections(
+                                session: draftSession,
+                                readiness: latestFixedReadiness
+                            )
+                        } else if let activeDay {
                         Section {
                             Text("\(activeDay.label) · Draft session")
                                 .font(.headline)
@@ -757,6 +830,7 @@ struct WorkoutView: View {
                                     resistanceProfiles
                                 ),
                                 sessionId: draftSession.id,
+                                allowsProgramEdits: true,
                                 onAddSet: { addSet(for: resolved.exerciseId, sessionId: draftSession.id) },
                                 onRemoveSet: { removeSet(for: resolved.exerciseId, sessionId: draftSession.id) },
                                 onSwap: {
@@ -872,6 +946,7 @@ struct WorkoutView: View {
                             .buttonStyle(.borderedProminent)
                             .disabled(!isFixedExecutionEnabled)
                         }
+                        }
                     }
                 } else {
                     ContentUnavailableView(
@@ -891,6 +966,122 @@ struct WorkoutView: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func clusteredDraftSections(
+        session: Session,
+        readiness: FixedCycleReadinessObservation
+    ) -> some View {
+        Section {
+            Text("Three independent clusters · Draft session")
+                .font(.headline)
+            Text("Complete only the clusters you train. Unperformed prescribed sets are omitted.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        ForEach(clusterSelections) { selection in
+            let completed = FixedCycleClusterProgramService.occurrence(
+                sessionID: session.id,
+                cluster: selection.cluster,
+                occurrences: clusterOccurrences
+            )
+            let displayedStep = completed.map {
+                $0.positionIndex % selection.cluster.rotationLength
+            } ?? selection.effectiveStep
+            Section {
+                if let completed {
+                    let performed = completed.exerciseSnapshots.filter {
+                        $0.completionStatus == .performed
+                    }
+                    Label(
+                        performed.isEmpty
+                            ? "Completed with all prescribed sets skipped"
+                            : "Completed · \(performed.map(\.exerciseName).joined(separator: " · "))",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .foregroundStyle(.green)
+                } else {
+                    let cautionMuscles = FixedCycleWorkoutService.cautionMuscles(
+                        for: selection.day,
+                        readiness: readiness
+                    )
+                    if !cautionMuscles.isEmpty {
+                        Text("Caution: \(cautionMuscles.map(\.displayName).joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    ForEach(CycleOrdering.sortedSlots(selection.day.slots)) { slot in
+                        let exercise = exercises.first(where: { $0.id == slot.exerciseId })
+                        let key = FixedCycleClusterProgramService.progressionKey(
+                            cluster: selection.cluster,
+                            effectiveStep: selection.effectiveStep,
+                            slotPosition: slot.position
+                        )
+                        let source = prefillEffort(
+                            exerciseId: slot.exerciseId,
+                            session: session,
+                            progressionKey: key
+                        )
+                        let resistanceProfile = try? ResistanceProfileService.profile(
+                            workoutKind: .fixed,
+                            sessionId: session.id,
+                            exerciseId: slot.exerciseId,
+                            occurrenceId: nil,
+                            in: resistanceProfiles
+                        )
+                        ExerciseSection(
+                            slot: slot,
+                            exercise: exercise,
+                            entries: entries(for: slot.exerciseId, sessionId: session.id),
+                            isExecutionEnabled: isFixedExecutionEnabled,
+                            prefillSource: source.map(prefillSourceText),
+                            resistanceProfile: resistanceProfile.map(ResistanceProfileService.snapshot),
+                            resistanceProfiles: ResistanceProfileService.snapshots(resistanceProfiles),
+                            sessionId: session.id,
+                            allowsProgramEdits: false,
+                            onAddSet: { addSet(for: slot.exerciseId, sessionId: session.id) },
+                            onRemoveSet: { removeSet(for: slot.exerciseId, sessionId: session.id) },
+                            onSwap: {},
+                            onHistory: {
+                                guard let exercise else { return }
+                                historyContext = ExerciseHistoryContext(
+                                    exerciseId: exercise.id,
+                                    exerciseName: exercise.name
+                                )
+                            },
+                            onSkipToday: {},
+                            onSkipMuscleToday: {},
+                            onRemoveFuture: {},
+                            onRemoveMuscleFuture: {},
+                            onEntryUpdated: { scheduleDraftExport() },
+                            onError: { errorMessage = $0 }
+                        )
+                    }
+
+                    Button("Complete \(selection.cluster.displayName)") {
+                        completeCluster(selection, in: session)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!isFixedExecutionEnabled)
+                }
+            } header: {
+                Text("\(selection.cluster.displayName) · \(FixedCycleClusterProgramService.variantLabel(displayedStep))")
+            }
+        }
+
+        Section {
+            Button("Finish Workout") {
+                finishWorkout()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                !isFixedExecutionEnabled
+                    || !clusterOccurrences.contains(where: { $0.sessionId == session.id })
+            )
         }
     }
 
@@ -1042,6 +1233,14 @@ struct WorkoutView: View {
             )
             try cycle.validate(template: template)
             modelContext.insert(cycle)
+            if FixedCycleClusterProgramService.isProgramTemplate(template) {
+                for pointer in FixedCycleClusterProgramService.makeRotationStates(
+                    cycleInstanceId: cycle.id,
+                    templateId: template.id
+                ) {
+                    modelContext.insert(pointer)
+                }
+            }
             currentCycles = [cycle]
         }
 
@@ -1056,6 +1255,10 @@ struct WorkoutView: View {
            ),
            cycle.templateId != template.id {
             try deleteDraftSessions(from: currentSessions, forCycleId: cycle.id)
+            for pointer in try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
+            where pointer.cycleInstanceId == cycle.id {
+                modelContext.delete(pointer)
+            }
             cycle.templateId = template.id
             cycle.currentDayIndex = BootstrapDataService.inferredNextDayIndex(
                 dayCount: template.days.count,
@@ -1063,6 +1266,14 @@ struct WorkoutView: View {
                 targetCycleName: template.name,
                 latestExport: latestExport
             )
+            if FixedCycleClusterProgramService.isProgramTemplate(template) {
+                for pointer in FixedCycleClusterProgramService.makeRotationStates(
+                    cycleInstanceId: cycle.id,
+                    templateId: template.id
+                ) {
+                    modelContext.insert(pointer)
+                }
+            }
             try cycle.validate(template: template)
         }
 
@@ -1144,6 +1355,7 @@ struct WorkoutView: View {
         let fetchedCycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
         let fetchedTemplates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
         let fetchedSessions = try modelContext.fetch(FetchDescriptor<Session>())
+        let fetchedPointers = try modelContext.fetch(FetchDescriptor<FixedCycleClusterPointer>())
         guard let cycle = activeCycle ?? fetchedCycles.first else { return }
         guard let template = activeTemplate ?? fetchedTemplates.first(where: { $0.id == cycle.templateId }) else { return }
         guard FixedCycleWorkoutService.shouldCreateDraft(
@@ -1154,11 +1366,41 @@ struct WorkoutView: View {
 
         try cycle.validate(template: template)
 
-        let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: cycle.currentDayIndex)
+        let isClustered = FixedCycleClusterProgramService.isProgramTemplate(template)
+        let selections = isClustered
+            ? try FixedCycleClusterProgramService.selections(
+                template: template,
+                cycleInstanceId: cycle.id,
+                states: fetchedPointers
+            )
+            : []
+        let session = Session(
+            cycleInstanceId: cycle.id,
+            cycleDayIndex: isClustered ? 0 : cycle.currentDayIndex,
+            cycleNameSnapshot: isClustered ? template.name : nil,
+            dayLabelSnapshot: isClustered ? "Clustered Workout" : nil
+        )
         try session.validate()
         modelContext.insert(session)
-
-        try addDraftEntries(for: session, cycle: cycle, template: template)
+        if isClustered {
+            for selection in selections {
+                modelContext.insert(
+                    try FixedCycleClusterProgramService.makeSessionContext(
+                        session: session,
+                        selection: selection,
+                        exercises: exercises
+                    )
+                )
+                try addDraftEntries(
+                    for: session,
+                    day: selection.day,
+                    selection: selection
+                )
+            }
+        } else {
+            let day = CycleOrdering.sortedDays(template.days)[cycle.currentDayIndex]
+            try addDraftEntries(for: session, day: day)
+        }
 
         try modelContext.save()
         scheduleDraftExport()
@@ -1171,14 +1413,71 @@ struct WorkoutView: View {
         )
         guard !draftIds.isEmpty else { return }
 
+        guard !clusterOccurrences.contains(where: { draftIds.contains($0.sessionId) }) else {
+            throw FixedCycleWorkoutError.completedClusterDraftCannotBeDiscarded
+        }
+
         for entry in setEntries where draftIds.contains(entry.sessionId) {
             modelContext.delete(entry)
         }
         for override in slotOverrides where draftIds.contains(override.sessionId) {
             modelContext.delete(override)
         }
+        for context in fixedCycleSessionContexts where draftIds.contains(context.sessionId) {
+            modelContext.delete(context)
+        }
         for draft in sessions where draftIds.contains(draft.id) {
             modelContext.delete(draft)
+        }
+    }
+
+    private func completeCluster(
+        _ selection: FixedCycleClusterProgramService.Selection,
+        in session: Session
+    ) {
+        do {
+            guard isFixedExecutionEnabled else {
+                throw FixedCycleWorkoutError.readinessRequired
+            }
+            guard FixedCycleClusterProgramService.occurrence(
+                sessionID: session.id,
+                cluster: selection.cluster,
+                occurrences: clusterOccurrences
+            ) == nil else { return }
+            guard let context = fixedCycleSessionContexts.first(where: {
+                $0.sessionId == session.id
+                    && $0.clusterID == selection.cluster.rawValue
+                    && $0.absoluteStep == selection.absoluteStep
+            }) else {
+                throw FixedCycleClusterProgramService.ProgramError.invalidClusterContext
+            }
+
+            let occurrence = try FixedCycleClusterProgramService.makeOccurrence(
+                session: session,
+                selection: selection,
+                context: context,
+                exercises: exercises,
+                entries: setEntries,
+                resistanceProfiles: resistanceProfiles
+            )
+            let clusterExerciseIDs = Set(selection.day.slots.map(\.exerciseId))
+            for entry in setEntries where
+                entry.sessionId == session.id
+                    && clusterExerciseIDs.contains(entry.exerciseId)
+                    && (!entry.isLocked || entry.reps <= 0) {
+                modelContext.delete(entry)
+            }
+            modelContext.insert(occurrence)
+            _ = try FixedCycleClusterProgramService.advanceCompletedCluster(
+                selection: selection,
+                occurrence: occurrence,
+                states: clusterRotationStates
+            )
+            try modelContext.save()
+            scheduleDraftExport()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -1188,19 +1487,36 @@ struct WorkoutView: View {
             guard isFixedExecutionEnabled else {
                 throw FixedCycleWorkoutError.readinessRequired
             }
-            guard FixedCycleWorkoutService.hasQualifyingSet(
+            let isClustered = FixedCycleClusterProgramService.isProgramTemplate(template)
+            guard FixedCycleWorkoutService.canIntentionallyComplete(
                 sessionId: session.id,
-                entries: setEntries
+                entries: setEntries,
+                isClusteredProgram: isClustered,
+                hasCompletedCluster: clusterOccurrences.contains(where: { $0.sessionId == session.id })
             ) else {
                 throw FixedCycleWorkoutError.qualifyingSetRequired
             }
             draftExportTask?.cancel()
             draftExportTask = nil
-            let dayIndex = cycle.currentDayIndex
+            let dayIndex = session.cycleDayIndex
 
             // Keep only confirmed logged sets in completed sessions/history/export.
             let sessionEntries = setEntries.filter { $0.sessionId == session.id }
-            for entry in sessionEntries where entry.reps <= 0 || !entry.isLocked {
+            let completedClusterExerciseIds = isClustered
+                ? FixedCycleWorkoutService.completedClusterExerciseIds(
+                    sessionId: session.id,
+                    occurrences: clusterOccurrences
+                )
+                : nil
+            let retainedSessionEntries = sessionEntries.filter {
+                $0.reps > 0
+                    && $0.isLocked
+                    && (completedClusterExerciseIds?.contains($0.exerciseId) != false)
+            }
+            for entry in sessionEntries where
+                entry.reps <= 0
+                    || !entry.isLocked
+                    || (completedClusterExerciseIds?.contains(entry.exerciseId) == false) {
                 modelContext.delete(entry)
             }
             for override in slotOverrides where override.sessionId == session.id {
@@ -1209,25 +1525,60 @@ struct WorkoutView: View {
 
             session.status = .completed
             session.finishedAt = .now
-            session.cycleNameSnapshot = template.name
+            if !isClustered {
+                session.cycleNameSnapshot = template.name
+            }
             let orderedDays = CycleOrdering.sortedDays(template.days)
-            if dayIndex >= 0, dayIndex < orderedDays.count {
+            if isClustered {
+                let completedNames = FixedCycleClusterProgramService.Cluster.allCases.compactMap { cluster in
+                    clusterOccurrences.contains {
+                        $0.sessionId == session.id && $0.clusterID == cluster.rawValue
+                    } ? cluster.displayName : nil
+                }
+                session.dayLabelSnapshot = completedNames.joined(separator: " + ")
+            } else if dayIndex >= 0, dayIndex < orderedDays.count {
                 session.dayLabelSnapshot = orderedDays[dayIndex].label
             }
             let persistedFixedSnapshots = try modelContext
                 .fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
-            let fixedMetadata = dayIndex >= 0 && dayIndex < orderedDays.count
-                ? SessionExportService.fixedCycleMetadata(
+            let fixedMetadata: SessionExportService.FixedCycleMetadata?
+            if isClustered,
+               let frozenContext = fixedCycleSessionContexts
+                .filter({ $0.sessionId == session.id })
+                .sorted(by: { $0.clusterID < $1.clusterID })
+                .first {
+                fixedMetadata = SessionExportService.fixedCycleMetadata(
+                    session: session,
+                    template: template,
+                    day: CycleDay(
+                        label: frozenContext.dayLabel,
+                        slots: [],
+                        position: frozenContext.templateDayPosition
+                    ),
+                    exercises: exercises,
+                    setEntries: retainedSessionEntries,
+                    readiness: fixedReadiness,
+                    overrides: fixedOverrides,
+                    snapshots: persistedFixedSnapshots,
+                    clusterOccurrences: clusterOccurrences,
+                    clusterRotationStates: clusterRotationStates
+                )
+            } else if dayIndex >= 0 && dayIndex < orderedDays.count {
+                fixedMetadata = SessionExportService.fixedCycleMetadata(
                     session: session,
                     template: template,
                     day: orderedDays[dayIndex],
                     exercises: exercises,
-                    setEntries: setEntries,
+                    setEntries: retainedSessionEntries,
                     readiness: fixedReadiness,
                     overrides: fixedOverrides,
-                    snapshots: persistedFixedSnapshots
+                    snapshots: persistedFixedSnapshots,
+                    clusterOccurrences: [],
+                    clusterRotationStates: clusterRotationStates
                 )
-                : nil
+            } else {
+                fixedMetadata = nil
+            }
             for item in fixedMetadata?.ordered_exercises ?? [] {
                 guard let exerciseId = UUID(uuidString: item.exercise_id),
                       let muscle = MuscleGroup(rawValue: item.muscle) else {
@@ -1260,7 +1611,7 @@ struct WorkoutView: View {
                     session: session,
                     cycleName: template.name,
                     exercises: exercises,
-                    setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
+                    setEntries: retainedSessionEntries,
                     requireICloudMirror: !AppRuntime.isUITesting,
                     fixedCycleMetadata: fixedMetadata,
                     resistanceProfiles: resistanceProfiles,
@@ -1274,7 +1625,9 @@ struct WorkoutView: View {
                 errorMessage = error.localizedDescription
             }
 
-            cycle.currentDayIndex = (dayIndex + 1) % max(template.days.count, 1)
+            if !isClustered {
+                cycle.currentDayIndex = (dayIndex + 1) % max(template.days.count, 1)
+            }
             try cycle.validate(template: template)
 
             try modelContext.save()
@@ -1303,7 +1656,7 @@ struct WorkoutView: View {
             }
         }
 
-        if let effort, effort.isComparable, !effort.rows.isEmpty {
+        if let effort, effort.isProgressionPrefillEligible, !effort.rows.isEmpty {
             let rows = effort.rows
             let row = rows.first(where: { $0.setIndex == setIndex }) ?? rows.last!
             return (row.weight, row.reps)
@@ -1324,17 +1677,28 @@ struct WorkoutView: View {
         return (0, 0)
     }
 
-    private func addDraftEntries(for session: Session, cycle: ActiveCycleInstance, template: CycleTemplate) throws {
-        guard cycle.currentDayIndex >= 0, cycle.currentDayIndex < template.days.count else {
-            throw OpenLiftValidationError.invalidCurrentDayIndex(index: cycle.currentDayIndex, dayCount: template.days.count)
-        }
-
-        let day = CycleOrdering.sortedDays(template.days)[cycle.currentDayIndex]
+    private func addDraftEntries(
+        for session: Session,
+        day: CycleDay,
+        selection: FixedCycleClusterProgramService.Selection? = nil
+    ) throws {
         for slot in CycleOrdering.sortedSlots(day.slots) {
-            let effort = prefillEffort(exerciseId: slot.exerciseId, session: session)
-            let setCount = effort?.isComparable == true
-                ? effort!.rows.count
-                : slot.defaultSetCount
+            let progressionKey = selection.map {
+                FixedCycleClusterProgramService.progressionKey(
+                    cluster: $0.cluster,
+                    effectiveStep: $0.effectiveStep,
+                    slotPosition: slot.position
+                )
+            }
+            let effort = prefillEffort(
+                exerciseId: slot.exerciseId,
+                session: session,
+                progressionKey: progressionKey
+            )
+            let setCount = FixedCycleWorkoutService.draftSetCount(
+                defaultSetCount: slot.defaultSetCount,
+                effort: effort
+            )
 
             for setIndex in 1...max(1, setCount) {
                 let prefills = prefillValues(
@@ -1632,10 +1996,10 @@ struct WorkoutView: View {
         let current = FixedCycleWorkoutService.localDateKey(for: now)
         guard current != observedLocalDateKey else { return false }
         observedLocalDateKey = current
-        if let activeTemplate, let activeDay {
+        if let activeTemplate, let readinessDay {
             readinessInputs = Dictionary(
                 uniqueKeysWithValues: FixedCycleWorkoutService
-                    .readinessMuscles(for: activeTemplate, targeting: activeDay)
+                    .readinessMuscles(for: activeTemplate, targeting: readinessDay)
                     .map { ($0, FixedCycleWorkoutService.allClear) }
             )
         } else {
@@ -1669,7 +2033,8 @@ struct WorkoutView: View {
 
     private func prefillEffort(
         exerciseId: UUID,
-        session: Session
+        session: Session,
+        progressionKey: String? = nil
     ) -> ExerciseEffortLookupResult? {
         return FixedCycleWorkoutService.prefillEffort(
             exerciseId: exerciseId,
@@ -1678,6 +2043,8 @@ struct WorkoutView: View {
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: sessions,
             rotationSetEntries: setEntries,
+            progressionKey: progressionKey,
+            progressionOccurrences: clusterOccurrences,
             resistanceRequirement: resistanceRequirement(
                 exerciseId: exerciseId,
                 sessionId: session.id
@@ -1724,11 +2091,21 @@ struct WorkoutView: View {
                 exerciseId: exerciseId,
                 occurrenceId: nil,
                 in: currentProfiles
-            ) == nil,
-            let defaultValue = ResistanceProfileService.lastUsedValue(
-                exerciseId: exerciseId,
-                profiles: currentProfiles
-            ) else { continue }
+            ) == nil else { continue }
+            let programDefault = activeTemplate.flatMap {
+                FixedCycleClusterProgramService.isProgramTemplate($0)
+                    ? exercises.first(where: { $0.id == exerciseId }).flatMap {
+                        FixedCycleClusterProgramService.defaultResistanceProfile(
+                            forExerciseNamed: $0.name
+                        )
+                    }
+                    : nil
+            }
+            guard let defaultValue = programDefault
+                    ?? ResistanceProfileService.lastUsedValue(
+                        exerciseId: exerciseId,
+                        profiles: currentProfiles
+                    ) else { continue }
             let created = try ResistanceProfileService.create(
                 workoutKind: .fixed,
                 sessionId: session.id,
@@ -1743,7 +2120,12 @@ struct WorkoutView: View {
     }
 
     private func prefillSourceText(_ result: ExerciseEffortLookupResult) -> String {
-        let match = result.matchKind == .sameCycleDay ? "Prior same-day effort" : "Global latest effort"
+        let match: String
+        switch result.matchKind {
+        case .sameCycleDay: match = "Prior same-day effort"
+        case .sameProgressionIdentity: match = "Prior progression-key effort"
+        case .globalLatest: match = "Global latest effort"
+        }
         let kind: String
         switch result.sourceKind {
         case .fixedCycle: kind = "Fixed Cycle"
@@ -1753,8 +2135,14 @@ struct WorkoutView: View {
         let profile: String
         switch result.profileComparison {
         case .exact: profile = result.resistanceProfile?.displayName ?? "Same resistance"
-        case .different: profile = "Different resistance profile — reference only"
-        case .unknown: profile = "Resistance profile unknown — reference only"
+        case .different:
+            profile = result.matchKind == .sameProgressionIdentity
+                ? "Same progression key · different resistance profile fallback"
+                : "Different resistance profile — reference only"
+        case .unknown:
+            profile = result.matchKind == .sameProgressionIdentity
+                ? "Same progression key · resistance profile fallback"
+                : "Resistance profile unknown — reference only"
         }
         return "\(match) · \(kind) · \(profile) · \(result.completedAt.formatted(date: .abbreviated, time: .omitted))"
     }
@@ -2045,7 +2433,7 @@ struct WorkoutView: View {
             date: .now,
             exercises: exerciseSnapshots,
             entries: entrySnapshots,
-            fixedCycleMetadata: activeDay.map {
+            fixedCycleMetadata: (activeDay ?? CycleOrdering.sortedDays(template.days).first).map {
                 SessionExportService.fixedCycleMetadata(
                     session: session,
                     template: template,
@@ -2054,7 +2442,9 @@ struct WorkoutView: View {
                     setEntries: setEntries,
                     readiness: fixedReadiness,
                     overrides: fixedOverrides,
-                    snapshots: fixedSnapshots
+                    snapshots: fixedSnapshots,
+                    clusterOccurrences: clusterOccurrences,
+                    clusterRotationStates: clusterRotationStates
                 )
             }
         )
@@ -2356,6 +2746,7 @@ private struct ExerciseSection: View {
     let resistanceProfile: ResistanceProfileSnapshot?
     let resistanceProfiles: [ResistanceProfileSnapshot]
     let sessionId: UUID
+    let allowsProgramEdits: Bool
     let onAddSet: () -> Void
     let onRemoveSet: () -> Void
     let onSwap: () -> Void
@@ -2519,7 +2910,8 @@ private struct ExerciseSection: View {
                 Text(exercise?.name ?? "Unknown Exercise")
                 Spacer()
                 HStack(spacing: 14) {
-                    Button(action: onSwap) {
+                    if allowsProgramEdits {
+                        Button(action: onSwap) {
                         VStack(spacing: -3) {
                             Image(systemName: "arrow.right")
                             Image(systemName: "arrow.left")
@@ -2532,6 +2924,7 @@ private struct ExerciseSection: View {
                     .accessibilityIdentifier("workout.swap.\(slot.position)")
                     .accessibilityLabel("Swap \(exercise?.name ?? "exercise")")
                     .disabled(!isExecutionEnabled)
+                    }
                     Button(action: onHistory) {
                         Image(systemName: "calendar")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2558,16 +2951,18 @@ private struct ExerciseSection: View {
                     .frame(width: actionButtonSize, height: actionButtonSize)
                     .disabled(!isExecutionEnabled)
 
-                    Menu {
-                        Button("Skip Exercise for Today", action: onSkipToday)
-                        Button("Skip \(slot.muscle.displayName) for Today", action: onSkipMuscleToday)
-                        Divider()
-                        Button("Remove Exercise from Future Workouts", role: .destructive, action: onRemoveFuture)
-                        Button("Remove \(slot.muscle.displayName) from Future Workouts", role: .destructive, action: onRemoveMuscleFuture)
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
+                    if allowsProgramEdits {
+                        Menu {
+                            Button("Skip Exercise for Today", action: onSkipToday)
+                            Button("Skip \(slot.muscle.displayName) for Today", action: onSkipMuscleToday)
+                            Divider()
+                            Button("Remove Exercise from Future Workouts", role: .destructive, action: onRemoveFuture)
+                            Button("Remove \(slot.muscle.displayName) from Future Workouts", role: .destructive, action: onRemoveMuscleFuture)
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .disabled(!isExecutionEnabled)
                     }
-                    .disabled(!isExecutionEnabled)
                 }
             }
         }

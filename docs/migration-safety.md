@@ -28,6 +28,13 @@ preserve every exercise/session/set and create zero profile rows, so legacy
 cable settings remain unknown. The Sherwick audit and reviewed-manifest repair
 are separate from schema migration and never run as a migration stage.
 
+V13 is also additive. It adds three parallel Fixed Cycle entities:
+`FixedCycleClusterPointer`, `FixedCycleSessionContext`, and
+`FixedCycleProgressionOccurrence`. Opening a V12 store under V13 preserves all
+legacy rows and creates none of these records. Schema migration never assigns a
+legacy workout to a new progression identity and never activates the clustered
+program.
+
 The reviewed Sherwick repair runs only after the V12 store opens successfully.
 Its frozen manifest contains the exact 19 occurrences from the reviewed
 2026-08-04 device audit. Each launch recomputes the source audit and requires an
@@ -64,6 +71,34 @@ to retire unlocked Fixed Cycle draft rows and preserve locked Adaptive work as
 a completed session while dropping only its editable autofill rows. Locked
 Fixed Cycle work and malformed Adaptive drafts still block. Merely launching
 or upgrading the app never runs either path.
+
+## Clustered Hypertrophy one-time rollout
+
+`BootstrapDataService.prepareClusteredProgramRollout` is a separate explicit,
+backup-gated operation. Merely installing or launching a V13 build performs only
+the additive schema migration. The clustered template is created and selected
+only when the app launches with
+`OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT`.
+
+Before invoking it against a real store, close OpenLift and make a verified copy
+of `default.store` together with any `default.store-wal` and
+`default.store-shm` sidecars. Confirm there is no entered Fixed Cycle or
+Adaptive draft. The rollout then:
+
+1. refuses entered/locked draft work and refuses a conflicting same-name
+   template or partial pointer state;
+2. creates or reuses the exact versioned `Clustered Hypertrophy v1` template;
+3. creates one active cycle and three independent zero-based cluster pointers,
+   unless a complete export-recovered pointer set already exists;
+4. switches to Fixed Cycle without rewriting completed history or assigning
+   progression keys to legacy sessions; and
+5. writes a durable marker containing the template and cycle identities.
+
+Template/catalog insertion, cycle selection, pointer creation, and marker
+creation are one transaction. Any validation error rolls all of them back.
+Re-running the flag after success validates the marker and three-pointer state
+and returns without rewinding. Rollout is intentionally fail-closed if the
+marker exists but its referenced state is incomplete.
 
 ## July 27 Adaptive Incline Curl one-time repair
 

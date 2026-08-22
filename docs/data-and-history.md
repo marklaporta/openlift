@@ -20,6 +20,8 @@ Core models live in [`Models.swift`](../Sources/Models.swift):
 - `SetEntry`
 - `SessionSlotOverride`
 - append-only Fixed Cycle readiness revisions and occurrence-level skip records
+- V13 clustered Fixed Cycle pointers, frozen draft contexts, and immutable
+  completed-cluster occurrences
 
 ## What Counts As History
 
@@ -47,6 +49,14 @@ Cable effort adds one more identity gate: resistance source and the complete
 raw profile must match. Different or unknown profiles are shown as reference
 history but are not silently prefilled or scored against each other.
 
+The versioned clustered program uses an explicit progression key per exercise
+slot. Legs use A-F, arms use A-C, shoulders use A-B, and the alternating
+calves/forearms slot uses A-F even though each cluster has only one runtime
+pointer. A same-key prior occurrence is preferred; a fresh key may use legacy
+global history as initial reference without retroactively relabeling it. Drafts
+copy the literal qualifying row count, so manually reducing a non-leg lane from
+three rows to two carries forward after that lane is completed.
+
 Legacy Rotation `Session` and `SetEntry` shapes remain unchanged for copied-store
 migration safety. Adaptive planning/execution provenance lives in parallel
 records keyed by stable plan, session, set-entry, and planned-occurrence IDs.
@@ -62,8 +72,9 @@ Relevant logic:
 ## Export Paths
 
 Completed Fixed/ad-hoc exported exercises may carry optional
-`resistance_profile`; Adaptive carries it on each exported occurrence. Fixed
-cycle metadata is schema v3 and Adaptive workout export is schema v4. Older
+`resistance_profile`; Adaptive carries it on each exported occurrence. Legacy
+Fixed Cycle metadata is schema v3, clustered Fixed Cycle metadata is schema v4,
+and Adaptive workout export is schema v4 in its separate payload family. Older
 payloads still decode, with an absent field remaining unknown. Hydration creates
 a profile only from a complete valid payload.
 
@@ -164,6 +175,15 @@ exercise IDs, and actual completed set rows. Older payloads still decode, and
 hydration deduplicates the new parallel records by their stable UUIDs.
 Draft recovery snapshots use the same optional metadata, so a readiness-only day
 is mirrored without being promoted to a completed workout or load exposure.
+
+Clustered schema-v4 metadata adds immutable completed-cluster occurrences and
+the three explicit rotation pointers. Only clusters intentionally completed in
+the session are exported. Unfinished clusters and unperformed exercises are
+omitted from completed-workout exercise lists; an all-skipped completed cluster
+still exports its empty occurrence as advancement evidence. Export retries use
+the frozen occurrence rather than the mutable live template. Hydration restores
+explicit exported pointers when present and otherwise derives a pointer only
+from gap-free, non-conflicting occurrence steps.
 
 Adaptive workouts use additive schema v2 JSON. The payload records
 `workout_kind: adaptive`, the session UUID, raw readiness/version, planner

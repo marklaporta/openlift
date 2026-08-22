@@ -207,6 +207,9 @@ final class ExportDiagnostic {
 
 enum RotationPoolKey: String, Codable, CaseIterable {
     case quadsCompound = "quads_compound"
+    /// Reserved structural identity. User-authored/imported templates cannot
+    /// create or overwrite this versioned program through CycleView.
+    case clusteredHypertrophyV1 = "openlift_clustered_hypertrophy_v1"
 }
 
 enum TrainingMode: String, Codable, CaseIterable, Hashable {
@@ -1467,4 +1470,243 @@ final class FixedCycleExerciseSnapshot {
         self.statusRawValue = statusRawValue
         self.skipReason = skipReason
     }
+}
+
+enum FixedCycleProgressionStatus: String, Codable, Equatable, Sendable {
+    case performed
+    case skipped
+}
+
+/// Immutable value copied into a completed cluster occurrence. Progression
+/// history is queried from this value, never re-derived from a later program
+/// shape or an exercise name.
+struct FixedCycleProgressionSnapshot: Codable, Equatable, Sendable {
+    let position: Int
+    let exerciseId: UUID
+    let exerciseName: String
+    let muscle: MuscleGroup
+    let prescribedSetCount: Int
+    let progressionKey: String
+    let resistanceProfile: ResistanceProfileValue?
+    let completionStatus: FixedCycleProgressionStatus
+}
+
+/// The authoritative next position for one independently advancing cluster.
+/// V13 deliberately stores this beside the frozen Fixed Cycle graph.
+@Model
+final class FixedCycleClusterPointer {
+    @Attribute(.unique) var id: UUID
+    @Attribute(.unique) var key: String
+    var cycleInstanceId: UUID
+    var templateId: UUID
+    var programVersionID: String
+    var clusterID: String
+    var completedCount: Int
+    var updatedAt: Date
+    var lastCompletedOccurrenceID: UUID?
+    /// True only when recovery had occurrence history but no exported pointer.
+    /// Derived state is usable, but remains visible rather than masquerading as
+    /// an explicitly exported pointer.
+    var isDerived: Bool
+
+    init(
+        id: UUID = UUID(),
+        cycleInstanceId: UUID,
+        templateId: UUID,
+        programVersionID: String,
+        clusterID: String,
+        completedCount: Int,
+        updatedAt: Date = .now,
+        lastCompletedOccurrenceID: UUID? = nil,
+        isDerived: Bool = false
+    ) {
+        self.id = id
+        self.key = Self.key(
+            cycleInstanceId: cycleInstanceId,
+            programVersionID: programVersionID,
+            clusterID: clusterID
+        )
+        self.cycleInstanceId = cycleInstanceId
+        self.templateId = templateId
+        self.programVersionID = programVersionID
+        self.clusterID = clusterID
+        self.completedCount = completedCount
+        self.updatedAt = updatedAt
+        self.lastCompletedOccurrenceID = lastCompletedOccurrenceID
+        self.isDerived = isDerived
+    }
+
+    convenience init(
+        id: UUID = UUID(),
+        cycleInstanceId: UUID,
+        templateId: UUID,
+        programVersionID: String,
+        clusterID: String,
+        positionIndex: Int,
+        updatedAt: Date = .now,
+        lastCompletedOccurrenceID: UUID? = nil,
+        isDerived: Bool = false
+    ) {
+        self.init(
+            id: id,
+            cycleInstanceId: cycleInstanceId,
+            templateId: templateId,
+            programVersionID: programVersionID,
+            clusterID: clusterID,
+            completedCount: positionIndex,
+            updatedAt: updatedAt,
+            lastCompletedOccurrenceID: lastCompletedOccurrenceID,
+            isDerived: isDerived
+        )
+    }
+
+    var positionIndex: Int {
+        get { completedCount }
+        set { completedCount = newValue }
+    }
+
+    static func key(
+        cycleInstanceId: UUID,
+        programVersionID: String,
+        clusterID: String
+    ) -> String {
+        "\(cycleInstanceId.uuidString)|\(programVersionID)|\(clusterID)"
+    }
+}
+
+/// Frozen selection for one cluster in one draft. A live template is never
+/// consulted after this row is created, so activation, template edits, export
+/// retry, and reordered day arrays cannot change the workout being completed.
+@Model
+final class FixedCycleSessionContext {
+    @Attribute(.unique) var id: UUID
+    @Attribute(.unique) var key: String
+    var sessionId: UUID
+    var cycleInstanceId: UUID
+    var templateId: UUID
+    var programVersionID: String
+    var clusterID: String
+    var absoluteStep: Int
+    var templateDayPosition: Int
+    var dayLabel: String
+    var createdAt: Date
+    private var exerciseSnapshotsData: Data
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        cycleInstanceId: UUID,
+        templateId: UUID,
+        programVersionID: String,
+        clusterID: String,
+        absoluteStep: Int,
+        templateDayPosition: Int,
+        dayLabel: String,
+        exerciseSnapshots: [FixedCycleProgressionSnapshot],
+        createdAt: Date = .now
+    ) throws {
+        self.id = id
+        self.key = Self.key(sessionId: sessionId, clusterID: clusterID)
+        self.sessionId = sessionId
+        self.cycleInstanceId = cycleInstanceId
+        self.templateId = templateId
+        self.programVersionID = programVersionID
+        self.clusterID = clusterID
+        self.absoluteStep = absoluteStep
+        self.templateDayPosition = templateDayPosition
+        self.dayLabel = dayLabel
+        self.createdAt = createdAt
+        self.exerciseSnapshotsData = try JSONEncoder().encode(exerciseSnapshots)
+    }
+
+    var exerciseSnapshots: [FixedCycleProgressionSnapshot] {
+        (try? JSONDecoder().decode(
+            [FixedCycleProgressionSnapshot].self,
+            from: exerciseSnapshotsData
+        )) ?? []
+    }
+
+    static func key(sessionId: UUID, clusterID: String) -> String {
+        "\(sessionId.uuidString)|\(clusterID)"
+    }
+}
+
+/// Immutable completion evidence for exactly one whole cluster. It references
+/// the legacy Session by UUID so V12's Session shape remains untouched.
+@Model
+final class FixedCycleProgressionOccurrence {
+    @Attribute(.unique) var id: UUID
+    var sessionId: UUID
+    var cycleInstanceId: UUID
+    var templateId: UUID
+    var programVersionID: String
+    var clusterID: String
+    var absoluteStep: Int
+    var templateDayPosition: Int
+    var dayLabel: String
+    var completedAt: Date
+    private var exerciseSnapshotsData: Data
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        cycleInstanceId: UUID,
+        templateId: UUID,
+        programVersionID: String,
+        clusterID: String,
+        absoluteStep: Int,
+        templateDayPosition: Int,
+        dayLabel: String,
+        completedAt: Date = .now,
+        exerciseSnapshots: [FixedCycleProgressionSnapshot]
+    ) throws {
+        self.id = id
+        self.sessionId = sessionId
+        self.cycleInstanceId = cycleInstanceId
+        self.templateId = templateId
+        self.programVersionID = programVersionID
+        self.clusterID = clusterID
+        self.absoluteStep = absoluteStep
+        self.templateDayPosition = templateDayPosition
+        self.dayLabel = dayLabel
+        self.completedAt = completedAt
+        self.exerciseSnapshotsData = try JSONEncoder().encode(exerciseSnapshots)
+    }
+
+    convenience init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        cycleInstanceId: UUID,
+        templateId: UUID,
+        programVersionID: String,
+        clusterID: String,
+        positionIndex: Int,
+        templateDayPosition: Int,
+        dayLabel: String,
+        completedAt: Date = .now,
+        exerciseSnapshots: [FixedCycleProgressionSnapshot]
+    ) throws {
+        try self.init(
+            id: id,
+            sessionId: sessionId,
+            cycleInstanceId: cycleInstanceId,
+            templateId: templateId,
+            programVersionID: programVersionID,
+            clusterID: clusterID,
+            absoluteStep: positionIndex,
+            templateDayPosition: templateDayPosition,
+            dayLabel: dayLabel,
+            completedAt: completedAt,
+            exerciseSnapshots: exerciseSnapshots
+        )
+    }
+
+    var exerciseSnapshots: [FixedCycleProgressionSnapshot] {
+        (try? JSONDecoder().decode(
+            [FixedCycleProgressionSnapshot].self,
+            from: exerciseSnapshotsData
+        )) ?? []
+    }
+
+    var positionIndex: Int { absoluteStep }
 }

@@ -97,6 +97,15 @@ The Cycle tab supports:
 
 Changing to a different active template requires confirmation.
 
+`Clustered Hypertrophy v1` is an internal versioned program template rather
+than a general editable template. The Cycle tab disables editing and cloning it,
+and rejects a published import that tries to replace its reserved name. Its
+three cluster pointers and stable progression identities are created only by
+the explicit backup-gated rollout described in
+[`migration-safety.md`](migration-safety.md). The template defaults to three
+rows; qualifying history carries the actual prior row count, so non-leg lanes
+can be reduced manually without adding an authoritative prescription system.
+
 ## Where To Change The Default Starter
 
 If you want to change the built-in fallback template, update:

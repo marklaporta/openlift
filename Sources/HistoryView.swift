@@ -646,6 +646,8 @@ private struct SessionDetailView: View {
     @Query private var fixedReadiness: [FixedCycleReadinessObservation]
     @Query private var fixedOverrides: [FixedCycleOccurrenceOverride]
     @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
+    @Query private var clusterOccurrences: [FixedCycleProgressionOccurrence]
+    @Query private var clusterRotationStates: [FixedCycleClusterPointer]
     @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     let session: Session
@@ -828,35 +830,8 @@ private struct SessionDetailView: View {
 
     private func retryExport() {
         do {
-            let template = activeCycles
-                .first(where: { $0.id == session.cycleInstanceId })
-                .flatMap { cycle in templates.first(where: { $0.id == cycle.templateId }) }
-            let day = template.flatMap { value -> CycleDay? in
-                let days = CycleOrdering.sortedDays(value.days)
-                return days.indices.contains(session.cycleDayIndex)
-                    ? days[session.cycleDayIndex]
-                    : nil
-            }
-            _ = try SessionExportService.exportAndTrack(
-                session: session,
-                cycleName: cycleName,
-                exercises: exercises,
-                setEntries: setEntries.filter { $0.sessionId == session.id && $0.reps > 0 && $0.isLocked },
-                requireICloudMirror: true,
-                fixedCycleMetadata: {
-                    guard let template, let day else { return nil }
-                    return SessionExportService.fixedCycleMetadata(
-                        session: session,
-                        template: template,
-                        day: day,
-                        exercises: exercises,
-                        setEntries: setEntries,
-                        readiness: fixedReadiness,
-                        overrides: fixedOverrides,
-                        snapshots: fixedSnapshots
-                    )
-                }(),
-                resistanceProfiles: resistanceProfiles,
+            _ = try SessionExportService.retryCompletedSessionExport(
+                sessionId: session.id,
                 modelContext: modelContext
             )
             try modelContext.save()

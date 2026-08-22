@@ -43,6 +43,8 @@ The main SwiftData models are defined in [`Models.swift`](../Sources/Models.swif
 - `FixedCycleReadinessObservation`, `FixedCycleReadinessResponse`
 - `FixedCycleOccurrenceOverride`
 - `ExerciseResistanceProfile`
+- `FixedCycleClusterPointer`, `FixedCycleSessionContext`, and
+  `FixedCycleProgressionOccurrence`
 
 Design intent:
 
@@ -79,6 +81,22 @@ complete profile for that exercise, falling back to the newest complete cable
 profile for Mark's usually-stable setup; a complete selection is still required
 before the first set locks. Repeat-last and progression scoring require an
 exact complete match. Unlike/unknown history remains visible as reference.
+
+### Clustered Fixed Cycle (V13)
+
+The versioned clustered program keeps the V1-V12 graph unchanged and stores its
+new state in three parallel entities. Each cluster has one authoritative
+completed-count pointer. A draft freezes the three selected cluster steps and
+their progression keys in `FixedCycleSessionContext`; completing a whole
+cluster creates one immutable `FixedCycleProgressionOccurrence` and advances
+only that cluster's pointer. Skipped sets do not prevent advancement, and no
+subsection inside a cluster advances independently.
+
+Progression keys are versioned structural identities, not template-day lookup
+heuristics. Shorter internal rotations are derived from the cluster step, while
+future structural edits require a new program version. Normal startup and V13
+migration do not activate this program; the explicit rollout is documented in
+[`migration-safety.md`](migration-safety.md).
 
 ## State Selection
 
@@ -158,6 +176,14 @@ Key Fixed Cycle behavior:
 - finishing requires at least one locked working set with reps, converts the
   draft to a completed session, exports it, and advances exactly once without
   creating another same-day draft
+
+For the versioned clustered program, all three current clusters are shown in one
+draft. `Complete Cluster` is the intentional whole-cluster action and may be
+used even when prescribed rows were skipped. It immediately freezes the
+occurrence and advances only that cluster. `Finish Workout` requires at least
+one completed cluster, retains only performed rows belonging to completed
+clusters, and does not use the legacy whole-day pointer. A draft containing a
+completed cluster cannot be discarded or silently replaced.
 
 `WorkoutView` remains the single user-facing Workout page. Its content mutates
 with the selected mode. While Adaptive is selected, Fixed Cycle's instance,
