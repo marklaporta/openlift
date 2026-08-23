@@ -1,10 +1,42 @@
 .DS_Store
 DerivedData/
 .build/
+build/
 .env
 .env.*
+.envrc
 *.xcuserstate
 *.xcscmblueprint
 *.xcuserdata/
 **/xcuserdata/
 Config/Local.xcconfig
+
+# Private signing and provisioning material
+*.p8
+*.p12
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+signing/
+Signing/
+secrets/
+.secrets/
+
+# App stores, container captures, backups, and personal exports
+*.store
+*.store-shm
+*.store-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.xcappdata/
+backups/
+exports/
+OpenLift/
+
+# Local archives and distributable build products
+*.xcarchive/
+*.ipa
+*.dSYM/
+*.app/

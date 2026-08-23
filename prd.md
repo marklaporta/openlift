@@ -1,5 +1,11 @@
 # Hypertrophy Rotation Tracker – Product Requirements Document (PRD)
 
+> Historical baseline: this document captures the original v1 product contract.
+> The shipped implementation has since added Adaptive Floating, readiness,
+> resistance profiles, and the V13 clustered Fixed Cycle. Use the README and
+> `docs/` for current behavior; do not treat the entity list or rotation flow
+> below as the live architecture.
+
 ## 1. Product Overview
 
 A deterministic, rotation-based hypertrophy training tracker with:

@@ -34,6 +34,12 @@ Opening a V12 store under V13 preserves all legacy rows and creates neither
 record. Schema migration never assigns a legacy workout to a new progression
 identity and never activates the clustered program.
 
+The clustered architecture has no persisted draft-context or sub-rotation
+entity. One `ClusterRotationState` owns each whole cluster. A completed cluster's
+`ClusterOccurrenceRecord` freezes its structural step, stable progression keys,
+performed/skipped status, and resistance profiles while leaving legacy
+`Session` and `SetEntry` shapes untouched.
+
 The reviewed Sherwick repair runs only after the V12 store opens successfully.
 Its frozen manifest contains the exact 19 occurrences from the reviewed
 2026-08-04 device audit. Each launch recomputes the source audit and requires an
@@ -104,6 +110,12 @@ them back.
 Re-running the flag after success validates the marker and three-pointer state
 and returns without rewinding. Rollout is intentionally fail-closed if the
 marker exists but its referenced state is incomplete.
+
+After rollout, all three states must resolve to position zero and a normal
+argument-free relaunch must preserve the marker, template, cycle, and states.
+The pre-rollout backup and completed-history counts are the recovery baseline.
+No fake occurrence is created by activation; the first occurrence appears only
+after the user intentionally completes a cluster.
 
 ## July 27 Adaptive Incline Curl one-time repair
 
@@ -180,27 +192,22 @@ Adaptive persistence uses explicit parallel records, including
 `GeneratedWorkoutPlan` and `AdaptiveSetOccurrenceLink`. Adaptive must never be
 represented by fake cycle IDs or sentinel day indices.
 
-## Current synthetic-gate evidence
+## Current migration gates
 
-- Baseline commit `14878dca` passed on an iPhone 17 simulator running iOS 26.4.1:
-  40 tests passed and the opt-in real-device iCloud test was skipped.
-- The Milestone 0 branch passed on the same simulator: 47 tests passed and the
-  same opt-in iCloud test was skipped.
-- The final suite includes unversioned-store recognition, full entity readback,
-  rollback readback, deliberate migration failure with unchanged file hashes,
-  a Rotation finish/next-draft smoke, and ad hoc exercise creation.
-- After schema V2 and the explicit mode boundary, the full suite passed 51 tests;
-  the separately opt-in real-device iCloud export smoke was the only skipped test.
+The maintained suite covers unversioned-store recognition, every additive schema
+stage through V13, full legacy-entity readback, rollback readback, deliberate
+migration failure with unchanged file hashes, clustered rollout idempotency,
+three-state hydration, immutable occurrence recovery, progression-key isolation,
+and completed-cluster export filtering. The real-store migration helper works on
+a scratch copy and verifies that its supplied backup remains unchanged.
 
-This closes G0 for synthetic development. A read-only copy of the device app
-container, local Documents mirror, and iCloud Drive mirror was subsequently
-backed up on the development Mac and archive/store integrity was verified. No
-candidate app was installed and the live container was not mutated.
+Do not encode transient simulator versions or historical test totals here. The
+authoritative gate is the current green result from:
 
-Before accepting schema V3, an opt-in simulator test copied the backed-up device
-store trio into simulator Documents, made separate legacy-readback and migration
-working copies, and compared counts for every V1 entity after migration. The V3
-copy matched all legacy counts, every new Adaptive entity was empty, missing
-mode resolved to Fixed Cycle, and the
-simulator-local supplied copy's file manifest was unchanged. The archived source
-and live device store were never opened by the migration test.
+```bash
+xcodebuild test -scheme OpenLift -destination 'platform=iOS Simulator,name=iPhone 17'
+```
+
+For a verified store backup, run [`test-real-store-migration.sh`](../scripts/test-real-store-migration.sh)
+against the backup archive or directory. The script stages a separate working
+copy and never opens the source store in place.

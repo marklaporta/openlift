@@ -39,6 +39,11 @@ With the right local setup, an agent can:
 - read and write published cycle files
 - inspect exported workout JSON
 
+OpenClaw's headless System security session cannot use Keychain-backed automatic
+code signing. In that environment, use the canonical workspace deployment
+scripts, whose signing inputs remain outside this repository. The repo-local
+`scripts/testflight-deploy.sh` is for an interactive Xcode/Aqua session.
+
 ## Good Agent Task Types
 
 - "add a built-in starter template and tests"
@@ -99,6 +104,7 @@ For ongoing development:
 
 1. keep product-safe defaults in tracked config and docs
 2. keep personal Apple settings in `Config/Local.xcconfig`
-3. use agents for code and test loops
+3. keep signing material, stores, exports, archives, and device-specific
+   deployment configuration outside the repo
 4. use published JSON for template experimentation
 5. touch real stored history only when necessary and with backups
