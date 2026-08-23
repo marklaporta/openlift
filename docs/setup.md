@@ -31,6 +31,7 @@ Official starting points:
 3. Replace the placeholder values:
    - `OPENLIFT_APP_BUNDLE_ID`
    - `OPENLIFT_TEST_BUNDLE_ID`
+   - `OPENLIFT_UI_TEST_BUNDLE_ID`
    - `OPENLIFT_ICLOUD_CONTAINER`
    - `OPENLIFT_KVSTORE_ID`
    - `OPENLIFT_DEVELOPMENT_TEAM`
@@ -40,7 +41,10 @@ Official starting points:
 
 ## Why The Config Is Split
 
-Tracked config files under [`Config`](../Config) keep the public repo safe.
+Tracked config files under [`Config`](../Config) contain public app identifiers,
+entitlement names, and build settings. Apple bundle, team, issuer, and key IDs
+are identifiers rather than credentials, but private keys, signing certificates,
+bearer tokens, and private endpoints do not belong in tracked files.
 
 The ignored local override:
 
@@ -88,6 +92,15 @@ scripts/testflight-deploy.sh
 The script assigns a UTC timestamp build number, keeps generated archives under
 `.build/testflight/`, and refuses to deploy a dirty worktree by default.
 
+This repository script uses Xcode's automatic-signing archive path. It works in
+an interactive Aqua/Xcode login session with the signing identity available in
+Keychain. It does **not** work from OpenClaw's headless System security session,
+where Keychain signing identities are unavailable. Headless OpenClaw deployment
+must use the canonical workspace device/TestFlight deployment scripts, which
+build unsigned and sign from private material stored outside this repository.
+Those scripts and their private configuration are intentionally not copied or
+documented here.
+
 It can use the Apple account saved in Xcode. For unattended deployment, create
 an App Store Connect API key and provide all three values:
 
@@ -117,9 +130,16 @@ If iCloud is unavailable, workout exports fall back to the app's local documents
 Do not commit:
 
 - `Config/Local.xcconfig`
+- `.p8`, `.p12`, `.pem`, or `.key` signing material
+- provisioning profiles
 - app container dumps
+- SwiftData/SQLite stores and their `-wal`/`-shm` sidecars
 - exported workout JSON from your own usage
 - Xcode user-state files
-- random `DerivedData` output
+- archives, IPAs, dSYMs, and local build output
 
-The repo already ignores the usual local-only files via [`.gitignore`](../.gitignore).
+The repo ignores these classes via [`.gitignore`](../.gitignore), but keep
+credential and personal-data artifacts outside the checkout as the primary
+boundary. Before publishing, scan both the current tree and reachable history;
+GitHub secret scanning and push protection are a second line of defense, not a
+replacement for local hygiene.

@@ -102,11 +102,39 @@ than a general editable template. The Cycle tab disables editing and cloning it,
 and rejects a published import that tries to replace its reserved name. Its
 three cluster state rows and stable progression identities are created only by
 the explicit backup-gated rollout described in
-[`migration-safety.md`](migration-safety.md). The template defaults to three
-rows; qualifying history carries the actual prior row count, so non-leg lanes
-can be reduced manually without adding an authoritative prescription system.
-The two newly introduced cable-wrist exercises start with the approved VOLTRA
-profile of 70% inverse chains and 30% eccentric.
+[`migration-safety.md`](migration-safety.md).
+
+The reserved template has 15 structural days but the Workout tab never presents
+them as one global day rotation. It presents the current selection from all
+three clusters together. Each table column advances independently; rows are
+identity mappings, not synchronized whole-workout days:
+
+| Identity | Cluster 1: chest + back | Cluster 2: legs + triceps + biceps | Cluster 3: shoulders + calves/forearms |
+|---|---|---|---|
+| A | Incline Dumbbell Press; Lat Pulldown | Belt Squat; Overhead Cable Extension; Incline Curl | Super ROM Dumbbell Lateral Raise; Stair Calves |
+| B | Flat Dumbbell Press; Lat Prayer | Stiff-Leg Deadlift; Cable Pushdown; Dumbbell Preacher Curl | Cable Lateral Raise; Bench-Supported Cable Wrist Curl (Supinated) |
+| C | Incline Press-Flye; Chest Supported Row | Sumo Belt Squat; Dumbbell Skullcrusher; Bayesian Curl | Super ROM Dumbbell Lateral Raise; Stair Calves |
+| D | repeats A | Back Extension; Overhead Cable Extension; Incline Curl | Cable Lateral Raise; Bench-Supported Cable Wrist Extension (Pronated) |
+| E | repeats B | Bulgarian Split Squat; Cable Pushdown; Dumbbell Preacher Curl | Super ROM Dumbbell Lateral Raise; Stair Calves |
+| F | repeats C | Leg Curl; Dumbbell Skullcrusher; Bayesian Curl | Cable Lateral Raise; Captain of Crush |
+
+Cluster 1 therefore has a three-step rotation; Clusters 2 and 3 each have six.
+Cluster 2 derives three-step arm identities inside its six-step leg rotation.
+Cluster 3 derives a two-step shoulder identity inside its six-step
+calves/forearms rotation. One whole-cluster state advances atomically; there is
+no pointer or completion action for an internal lane.
+
+Every slot defaults to three rows. A qualifying prior performance for the exact
+progression identity replaces that default with its literal completed row count,
+weights, and reps. Removing row three and completing that lane therefore makes
+the next matching occurrence a two-row draft without changing the immutable
+template. The two newly introduced cable-wrist exercises start with the approved
+VOLTRA profile of 70% inverse chains and 30% eccentric.
+
+`Complete Cluster` records every prescribed movement as performed or skipped and
+advances that cluster even if all of its rows were skipped. `Finish Workout`
+requires at least one completed cluster and persists only performed work from
+completed occurrences. Partial-cluster advancement is intentionally unsupported.
 
 ## Where To Change The Default Starter
 

@@ -1,124 +1,138 @@
 # Repository Guidelines
 
 ## Project Overview
-OpenLift is a fully implemented iOS app for hypertrophy rotation tracking. Built with SwiftUI and SwiftData, targeting iOS 17.0+. No external dependencies — pure Apple frameworks only.
+
+OpenLift is a local-first iOS hypertrophy tracker built with SwiftUI, SwiftData,
+and Apple frameworks only. It supports Fixed Cycle, the V13 independently
+advancing clustered program, Adaptive Floating, ad hoc logging, resistance
+profiles, and export-backed recovery. The deployment target is iOS 17+.
 
 ## Project Structure
-```
-Sources/          application source (SwiftUI views + services)
-Tests/            unit tests mirroring service logic
-Config/           build configuration
-  Shared.xcconfig   safe public defaults (committed)
-  Local.xcconfig    personal Apple team/bundle ID (gitignored)
-docs/             architecture and workflow documentation
-Resources/        reference exercise notes
+
+```text
+Sources/    application code and assets
+Tests/      unit, migration, and regression tests
+UITests/    simulator UI flows
+Config/     tracked public build settings plus a gitignored local override
+docs/       current architecture and operating documentation
+Resources/ reference exercise notes
+scripts/   repo-safe migration and interactive deployment helpers
 ```
 
-### Sources files
+Key source files:
+
 | File | Responsibility |
 |---|---|
-| `OpenLiftApp.swift` | App entry; SwiftData container init with resilient in-memory fallback |
-| `Models.swift` | All SwiftData models and supporting enums |
-| `RootTabView.swift` | Four-tab navigation root (Log / Workout / History / Cycle) |
-| `WorkoutView.swift` | Draft session, set entry, prefill, workout completion, draft export |
-| `HistoryView.swift` | Completed session display, deduplication, export recovery |
-| `CycleView.swift` | Template listing, editing, cloning, activation, published import |
-| `ImportView.swift` | Legacy, non-tab import UI retained while import guidance lives in `docs/` |
-| `OpenLiftStateResolver.swift` | Centralised active-template / cycle / draft selection logic |
-| `OpenLiftValidator.swift` | Model validation for all SwiftData types |
-| `CycleOrdering.swift` | Day/slot ordering by position, with legacy label-based fallback |
-| `BootstrapDataService.swift` | Exercise catalog seeding, starter template, history hydration from exports |
-| `PublishedCycleService.swift` | iCloud cycle JSON discovery, parsing, fuzzy exercise name resolution |
-| `SessionExportService.swift` | Writes completed workouts and draft snapshots to iCloud / local Documents |
+| `OpenLiftApp.swift` | App entry, V13 container startup, explicit rollout/repair gates |
+| `OpenLiftSchema.swift` | Additive V1-V13 schemas and migration plan |
+| `Models.swift` | SwiftData models and supporting value types |
+| `BootstrapDataService.swift` | Catalog/template seeding, hydration, repairs, clustered program/rollout |
+| `WorkoutView.swift` | Fixed Cycle draft entry, clustered completion, prefill, finish/export |
+| `AdaptiveWorkoutView.swift` | Adaptive readiness, design, execution, and completion |
+| `AdaptivePlanningServices.swift` | Planning, repeat-last lookup, progression/profile isolation |
+| `HistoryView.swift` | Completed history, occurrence-backed display, export retry |
+| `CycleView.swift` | Mode/template selection, editing, activation, published import |
+| `ResistanceProfileService.swift` | Per-occurrence cable/stack/VOLTRA profiles |
+| `SessionExportService.swift` | Completed/draft JSON, hydration metadata, fail-closed filtering |
+| `StoreBackupService.swift` | Local store backup snapshots |
+| `DirectExportService.swift` | Optional best-effort private HTTPS delivery |
 
-## Data Models
-All models use SwiftData `@Model` with `@Attribute(.unique) var id: UUID`.
+## Current Clustered Fixed Cycle
 
-| Model | Key fields |
-|---|---|
-| `Exercise` | `name`, `primaryMuscle`, `type`, `equipment`, `isActive` |
-| `CycleTemplate` | `name`, `days: [CycleDay]`, `rotationPools: [RotationPool]` |
-| `CycleDay` | `position`, `label`, `slots: [CycleSlot]` |
-| `CycleSlot` | `position`, `muscle`, `exerciseId`, `defaultSetCount` |
-| `RotationPool` | `key`, `entries` — quad compound rotation |
-| `RotationIndex` | `key`, `value` — tracks rotation position per cycle instance |
-| `ActiveCycleInstance` | `templateId`, `currentDayIndex`, `rotationIndices` |
-| `Session` | `cycleInstanceId`, `cycleDayIndex`, `cycleNameSnapshot`, `dayLabelSnapshot`, `status`, `exportStatus` |
-| `SetEntry` | `sessionId`, `exerciseId`, `setIndex`, `weight`, `reps`, `isLocked` |
-| `SessionSlotOverride` | `sessionId`, `slotPosition`, `exerciseId` |
+V13 adds exactly two parallel entities without changing legacy session/set
+shapes:
 
-## Build & Test Commands
+- mutable `ClusterRotationState`: one authoritative next-position state for each
+  whole cluster
+- immutable `ClusterOccurrenceRecord`: one completed-cluster snapshot containing
+  structural step, stable progression keys, performed/skipped status, and
+  resistance profiles
 
-**Run tests (simulator):**
-```
+All three current clusters appear in one draft. Their rotation lengths are
+3/6/6. Completing a cluster advances only its own state; skipped rows do not
+block advancement; no movement or internal lane advances independently.
+`Finish Workout` requires at least one completed cluster and retains/exports
+only locked positive-rep rows backed by performed occurrence snapshots.
+
+The reserved template defaults every slot to three rows. A qualifying previous
+performance for the same progression identity supplies its literal row count,
+weights, and reps, so a completed manual reduction carries forward. Cluster 2
+derives three-step arm identities inside its six-step leg rotation; Cluster 3
+derives a two-step shoulder identity inside its six-step calves/forearms lane.
+Do not add sub-rotation state.
+
+## Build And Test
+
+Full simulator suite:
+
+```bash
 xcodebuild test -scheme OpenLift -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
 
-**Build for connected device:**
-```
-xcodebuild -scheme OpenLift -destination 'id=<DEVICE_UDID>' -configuration Debug build
-```
+Useful diagnostics:
 
-**Install on connected device (after build):**
-```
-xcrun devicectl device install app --device <DEVICE_UDID> <path-to-.app>
-```
-
-**Find device UDID:**
-```
+```bash
+xcodebuild -scheme OpenLift -showdestinations
+xcrun simctl list
 xcrun devicectl list devices
 ```
 
-**List available destinations:**
-```
-xcodebuild -scheme OpenLift -showdestinations
-```
+Tests include service tests, copied-store migration gates, clustered
+progression/export/hydration regressions, and UI flows. Add a regression test for
+each behavior fix. Do not claim the full suite passed unless the UI runner also
+finished.
 
-No Makefile. No npm. All build config lives in `Config/Shared.xcconfig`; personal Apple team ID and bundle ID override go in `Config/Local.xcconfig` (gitignored).
+## Architecture Rules
 
-## Architecture Patterns
-- **Static enum services** — `BootstrapDataService`, `SessionExportService`, `PublishedCycleService`, `OpenLiftValidator`, `CycleOrdering`, `OpenLiftStateResolver` are all caseless enums with only static functions. No stored state.
-- **SwiftUI `@Query`** — views fetch all models reactively; derived state flows through `OpenLiftStateResolver`.
-- **SwiftData `@Environment(\.modelContext)`** — views inject the model context for writes and deletes.
-- **UserDefaults** — stores `openlift.lastActivatedTemplateId` and `openlift.lastActivatedTemplateName`.
-- **iCloud + local fallback** — exports write to `OpenLift/exports/` in iCloud Drive; fall back to local Documents if iCloud is unavailable.
-- **Snapshot resilience** — `Session` stores `cycleNameSnapshot` and `dayLabelSnapshot` so history survives template deletion or renaming.
+- Keep schemas additive. Never alter a shipped model checksum to simplify a new
+  feature.
+- Preserve legacy V1-V12 history. Do not guess or backfill V13 progression keys.
+- Treat stable progression identity as stronger than current template position.
+- For clustered prefill: exact key/profile first, then same key with another
+  profile, then only safe legacy/unkeyed global history. Never let another
+  versioned identity enter the fallback.
+- Freeze completed structural/profile evidence in occurrences; retries and
+  hydration must not rederive it from a mutable live template.
+- SwiftData is primary; JSON is the recovery layer. Real-store work requires a
+  verified backup and scratch-copy migration testing.
+- Keep explicit rollout/repair operations separate from normal schema migration
+  and normal startup.
 
-## Testing Guidelines
-Tests live in `Tests/` and cover service logic only — no UI tests.
+## Security And Local Configuration
 
-Current test suites:
-- `BootstrapDataServiceTests` — template preference, day inference, history hydration, draft selection
-- `CycleOrderingTests` — position-based and semantic (Upper/Lower) day ordering
-- `PublishedCycleServiceTests` — JSON parsing, exercise name aliases
-- `OpenLiftStateResolverTests` — active cycle/template/draft resolution
-- `WorkoutDraftSelectionTests` — draft session preference rules
-- `WorkoutEntryEditingTests` — set add/delete/reentry, weight prefill, entry repair
+Tracked config contains public app identifiers and placeholders, not signing
+credentials. Copy `Config/Local.example.xcconfig` to the ignored
+`Config/Local.xcconfig` for local Apple-team settings and optional direct-export
+configuration.
 
-Expectations for new logic:
-- Unit tests for happy path + edge cases
-- Regression test for each bug fix
-- Test service functions directly; don't test SwiftUI views
+Never commit:
 
-## Commit & Pull Request Guidelines
-Use Conventional Commits:
-- `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`
+- signing keys/certificates or provisioning profiles
+- bearer tokens, passwords, private endpoints, or `.env` files
+- SwiftData/SQLite stores or `-wal`/`-shm` sidecars
+- personal backups, workout exports, or app-container captures
+- archives, IPAs, dSYMs, apps, DerivedData, or local build output
 
-PRs should include:
-- Concise summary of behaviour changes
-- Test evidence (command + result)
-- Sample payload or screenshot when export output or UI changes
+The repo-local TestFlight script uses Xcode automatic signing and is suitable for
+an interactive Aqua/Xcode login session. OpenClaw's headless System security
+session cannot access Keychain signing identities; use the canonical workspace
+headless deployment scripts, whose credentials and device configuration remain
+outside this repository.
 
-## Security & Configuration
-- `Config/Local.xcconfig` is gitignored — it holds your personal Apple Team ID and real bundle ID. Never commit it.
-- Do not commit `.env` files, personal exports, or training data JSONs.
-- The tracked bundle ID in `Shared.xcconfig` is a placeholder (`com.example.openlift`). Your real bundle ID lives only in `Local.xcconfig`.
-- iCloud container: `iCloud.com.example.openlift` (mirrored from real bundle ID in local config).
+## Commits And Documentation
 
-## Documentation
-Detailed design notes live in `docs/`:
-- `architecture.md` — code-path map, data model intent, debugging hotspots
-- `setup.md` — local dev environment, Apple account requirements
-- `templates.md` — built-in starter template, published JSON format
-- `data-and-history.md` — storage model, export paths, history recovery rules
-- `ai-workflows.md` — what AI agents can/cannot do, recommended task types
+Use Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`,
+`chore:`). Before pushing, review the diff, run `git diff --check`, and run tests
+in proportion to the files changed.
+
+Current documentation:
+
+- `docs/architecture.md`
+- `docs/data-and-history.md`
+- `docs/migration-safety.md`
+- `docs/templates.md`
+- `docs/setup.md`
+- `docs/adaptive-floating.md`
+- `docs/ai-workflows.md`
+
+`prd.md` is the historical v1 requirements baseline, not the live architecture.

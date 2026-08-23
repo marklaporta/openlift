@@ -54,9 +54,14 @@ Design intent:
 - occurrence links keep duplicate uses of one exercise distinct without adding
   migration-sensitive fields to legacy `SetEntry`
 - `CycleTemplate` describes programming structure
-- `ActiveCycleInstance` tracks where the user currently is in a cycle
+- `ActiveCycleInstance` tracks the active legacy cycle. Its whole-day pointer
+  remains for backward compatibility but does not select a clustered workout.
 - `Session` is the workout occurrence
 - `SetEntry` stores logged sets for a session
+- `ClusterRotationState` is the one mutable next-position record for each
+  independently advancing cluster
+- `ClusterOccurrenceRecord` is immutable completion evidence for one whole
+  cluster and references the unchanged legacy `Session` by UUID
 
 ### Cable Resistance Profiles (V12)
 
@@ -100,6 +105,11 @@ future structural edits require a new program version. Normal startup and V13
 migration do not activate this program; the explicit rollout is documented in
 [`migration-safety.md`](migration-safety.md).
 
+The current program has a 3/6/6 structure: torso rotates A-C; legs rotate A-F
+while arms repeat A-C inside the same six-step cluster; shoulders repeat A-B
+while the calves/forearms lane rotates A-F. The app derives those shorter
+identities with modulo arithmetic but persists only one state per cluster.
+
 ## State Selection
 
 The app used to spread active-cycle logic across views. That is now centralized in [`OpenLiftStateResolver.swift`](../Sources/OpenLiftStateResolver.swift).
@@ -128,8 +138,9 @@ The bootstrap path does this:
 6. resolve the active template and cycle
 7. create or reconcile the active cycle
 8. hydrate missing completed sessions from export files
-9. ensure a draft session exists unless a Fixed Cycle workout was already
-   completed on the current local calendar day
+9. ensure the correct draft exists. Legacy Fixed Cycle suppresses a second
+   same-day draft after completion; the clustered program creates one draft
+   containing all three current cluster selections.
 
 Important files:
 
@@ -182,10 +193,20 @@ Key Fixed Cycle behavior:
 For the versioned clustered program, all three current clusters are shown in one
 draft. `Complete Cluster` is the intentional whole-cluster action and may be
 used even when prescribed rows were skipped. It immediately freezes the
-occurrence and advances only that cluster. `Finish Workout` requires at least
-one completed cluster, retains only performed rows belonging to completed
-clusters, and does not use the legacy whole-day pointer. A draft containing a
-completed cluster cannot be discarded or silently replaced.
+occurrence, including progression keys, performed/skipped status, and the
+selected resistance profile, then advances only that cluster. `Finish Workout`
+requires at least one completed cluster. Completion, History, and export retain
+only locked positive-rep rows backed by a performed snapshot in an immutable
+occurrence; untouched clusters and skipped exercises are omitted. Export applies
+the same fail-closed filter independently. The legacy whole-day pointer is not
+used, and a draft containing a completed cluster cannot be discarded or silently
+replaced. Partial-cluster advancement does not exist.
+
+Each reserved template slot defaults to three draft rows. If a comparable prior
+performance exists, draft creation copies its literal row count, weights, and
+reps instead. This is why manually completing two rows for a non-leg progression
+lane causes the next occurrence of that same lane to open with two rows; the
+template itself remains immutable.
 
 `WorkoutView` remains the single user-facing Workout page. Its content mutates
 with the selected mode. While Adaptive is selected, Fixed Cycle's instance,
@@ -295,11 +316,17 @@ Public-safe defaults live in tracked config:
 - [`Config/OpenLift.xcconfig`](../Config/OpenLift.xcconfig)
 - [`Config/OpenLiftTests.xcconfig`](../Config/OpenLiftTests.xcconfig)
 
-Local-only Apple settings live in:
+The tracked files contain public identifiers and placeholders, never private
+keys. Local-only Apple settings and optional direct-export credentials live in:
 
 - `Config/Local.xcconfig`
 
 That file is intentionally ignored by git.
+
+Private signing keys and provisioning profiles, SwiftData stores and sidecars,
+container captures, personal backups/exports, archives, IPAs, dSYMs, and local
+build output are also ignored. Keep them outside the repository whenever
+practical.
 
 ## Where Bugs Usually Cluster
 
@@ -325,7 +352,11 @@ Regression coverage is concentrated in:
 - [`CycleOrderingTests.swift`](../Tests/CycleOrderingTests.swift)
 - [`PublishedCycleServiceTests.swift`](../Tests/PublishedCycleServiceTests.swift)
 - [`AdaptiveProgramServiceTests.swift`](../Tests/AdaptiveProgramServiceTests.swift)
+- [`ClusteredProgramTests.swift`](../Tests/ClusteredProgramTests.swift)
 - [`MigrationSafetyTests.swift`](../Tests/MigrationSafetyTests.swift)
+
+UI coverage lives under [`UITests`](../UITests), including the Fixed Cycle
+cluster-completion flow.
 
 Run:
 
