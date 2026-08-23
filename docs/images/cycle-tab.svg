@@ -1,44 +1,49 @@
 <svg width="390" height="844" viewBox="0 0 390 844" fill="none" xmlns="http://www.w3.org/2000/svg">
   <rect width="390" height="844" rx="36" fill="#F4F1EA"/>
   <rect x="16" y="20" width="358" height="804" rx="28" fill="#FFFDF9" stroke="#D8D1C3"/>
+
+  <text x="44" y="58" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#466054">Refresh</text>
   <text x="195" y="62" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#1E2A24">Cycle</text>
+  <text x="342" y="60" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" font-weight="400" fill="#466054">+</text>
 
-  <text x="36" y="102" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#5A6B63">ACTIVE CYCLE</text>
-  <rect x="28" y="116" width="334" height="58" rx="16" fill="#EEF4EF" stroke="#C8D7CC"/>
-  <text x="44" y="152" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#203029">4D Upper/Lower</text>
+  <text x="36" y="92" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#5A6B63">TRAINING MODE</text>
+  <rect x="28" y="102" width="334" height="36" rx="10" fill="#E7E4DD"/>
+  <rect x="31" y="105" width="163" height="30" rx="8" fill="#FFFFFF" stroke="#D8D1C3"/>
+  <text x="112" y="125" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#203029">Fixed Cycle</text>
+  <text x="278" y="125" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#66766E">Adaptive Floating</text>
 
-  <text x="36" y="212" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#5A6B63">TEMPLATES</text>
+  <text x="36" y="170" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#5A6B63">ACTIVE CYCLE</text>
+  <rect x="28" y="180" width="334" height="54" rx="16" fill="#EEF4EF" stroke="#C8D7CC"/>
+  <text x="44" y="213" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#203029">Clustered Hypertrophy v1</text>
 
-  <rect x="28" y="226" width="334" height="126" rx="18" fill="#F6F3EC" stroke="#DDD3C0"/>
-  <text x="44" y="256" font-family="Arial, sans-serif" font-size="19" font-weight="700" fill="#203029">4D Upper/Lower</text>
-  <rect x="273" y="238" width="69" height="24" rx="12" fill="#D9EFE0"/>
-  <text x="307" y="254" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#245238">Active</text>
-  <text x="44" y="282" font-family="Arial, sans-serif" font-size="13" fill="#6C7E75">4 day(s)</text>
-  <rect x="44" y="300" width="68" height="28" rx="10" fill="#FFFFFF" stroke="#D8D1C3"/>
-  <text x="78" y="318" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#203029">Edit</text>
-  <rect x="122" y="300" width="68" height="28" rx="10" fill="#FFFFFF" stroke="#D8D1C3"/>
-  <text x="156" y="318" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#203029">Clone</text>
-  <rect x="200" y="300" width="104" height="28" rx="10" fill="#203029"/>
-  <text x="252" y="318" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#FFFDF9">Activate</text>
+  <text x="36" y="266" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#5A6B63">TEMPLATES</text>
 
-  <rect x="28" y="368" width="334" height="126" rx="18" fill="#EEF4EF" stroke="#C8D7CC"/>
-  <text x="44" y="398" font-family="Arial, sans-serif" font-size="19" font-weight="700" fill="#203029">FB 2D</text>
-  <text x="44" y="424" font-family="Arial, sans-serif" font-size="13" fill="#6C7E75">2 day(s)</text>
-  <rect x="44" y="442" width="68" height="28" rx="10" fill="#FFFFFF" stroke="#C8D7CC"/>
-  <text x="78" y="460" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#203029">Edit</text>
-  <rect x="122" y="442" width="68" height="28" rx="10" fill="#FFFFFF" stroke="#C8D7CC"/>
-  <text x="156" y="460" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#203029">Clone</text>
-  <rect x="200" y="442" width="104" height="28" rx="10" fill="#203029"/>
-  <text x="252" y="460" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#FFFDF9">Activate</text>
+  <rect x="28" y="276" width="334" height="128" rx="18" fill="#F6F3EC" stroke="#DDD3C0"/>
+  <text x="44" y="304" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#203029">Clustered Hypertrophy v1</text>
+  <rect x="282" y="289" width="60" height="23" rx="11.5" fill="#D9EFE0"/>
+  <text x="312" y="305" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#245238">Active</text>
+  <text x="44" y="328" font-family="Arial, sans-serif" font-size="12.5" fill="#6C7E75">15 day(s) · reserved versioned program</text>
+  <rect x="44" y="346" width="66" height="30" rx="10" fill="#ECE9E2" stroke="#D8D1C3"/>
+  <text x="77" y="366" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#AAA49A">Edit</text>
+  <rect x="120" y="346" width="66" height="30" rx="10" fill="#ECE9E2" stroke="#D8D1C3"/>
+  <text x="153" y="366" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#AAA49A">Clone</text>
+  <rect x="196" y="346" width="112" height="30" rx="10" fill="#203029"/>
+  <text x="252" y="366" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#FFFDF9">Activate</text>
+  <text x="44" y="393" font-family="Arial, sans-serif" font-size="11.5" fill="#6C7E75">Three independently advancing cluster rotations</text>
 
-  <text x="36" y="538" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#5A6B63">PUBLISHED CYCLES (ICLOUD)</text>
-  <rect x="28" y="552" width="334" height="104" rx="18" fill="#F6F3EC" stroke="#DDD3C0"/>
-  <text x="44" y="582" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#203029">4d-upper-lower.json</text>
-  <text x="44" y="608" font-family="Arial, sans-serif" font-size="13" fill="#6C7E75">Last refresh: Mar 14, 2026 · 1 file(s)</text>
-  <rect x="44" y="620" width="74" height="28" rx="10" fill="#FFFFFF" stroke="#D8D1C3"/>
-  <text x="81" y="638" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#203029">Import</text>
-  <rect x="128" y="620" width="136" height="28" rx="10" fill="#203029"/>
-  <text x="196" y="638" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#FFFDF9">Import + Activate</text>
+  <rect x="28" y="418" width="334" height="116" rx="18" fill="#EEF4EF" stroke="#C8D7CC"/>
+  <text x="44" y="447" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#203029">4D Upper/Lower</text>
+  <text x="44" y="471" font-family="Arial, sans-serif" font-size="12.5" fill="#6C7E75">4 day(s)</text>
+  <rect x="44" y="486" width="66" height="30" rx="10" fill="#FFFFFF" stroke="#C8D7CC"/>
+  <text x="77" y="506" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#203029">Edit</text>
+  <rect x="120" y="486" width="66" height="30" rx="10" fill="#FFFFFF" stroke="#C8D7CC"/>
+  <text x="153" y="506" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#203029">Clone</text>
+  <rect x="196" y="486" width="112" height="30" rx="10" fill="#203029"/>
+  <text x="252" y="506" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#FFFDF9">Activate</text>
+
+  <text x="36" y="570" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#5A6B63">PUBLISHED CYCLES (ICLOUD)</text>
+  <rect x="28" y="580" width="334" height="56" rx="16" fill="#F6F3EC" stroke="#DDD3C0"/>
+  <text x="44" y="614" font-family="Arial, sans-serif" font-size="14" fill="#6C7E75">No published cycles</text>
 
   <rect x="28" y="750" width="334" height="52" rx="18" fill="#1E2A24"/>
   <text x="78" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#B8C4BD">Log</text>

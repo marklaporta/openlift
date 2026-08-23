@@ -1,39 +1,42 @@
 <svg width="390" height="844" viewBox="0 0 390 844" fill="none" xmlns="http://www.w3.org/2000/svg">
   <rect width="390" height="844" rx="36" fill="#F4F1EA"/>
   <rect x="16" y="20" width="358" height="804" rx="28" fill="#FFFDF9" stroke="#D8D1C3"/>
+
   <text x="195" y="62" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#1E2A24">History</text>
 
-  <rect x="28" y="96" width="334" height="104" rx="18" fill="#EEF4EF" stroke="#C8D7CC"/>
-  <text x="44" y="128" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#203029">Mar 14, 2026</text>
-  <text x="44" y="154" font-family="Arial, sans-serif" font-size="15" fill="#5B6E64">4D Upper/Lower</text>
-  <text x="44" y="176" font-family="Arial, sans-serif" font-size="13" fill="#6C7E75">Upper A</text>
-  <rect x="274" y="114" width="68" height="24" rx="12" fill="#D9EFE0"/>
-  <text x="308" y="130" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#245238">success</text>
-  <text x="287" y="176" font-family="Arial, sans-serif" font-size="13" fill="#4D5F57">6 exercises</text>
+  <rect x="28" y="84" width="334" height="40" rx="12" fill="#EEECE7"/>
+  <circle cx="48" cy="103" r="7" stroke="#718078" stroke-width="2"/>
+  <path d="M53 108L58 113" stroke="#718078" stroke-width="2" stroke-linecap="round"/>
+  <text x="68" y="109" font-family="Arial, sans-serif" font-size="14" fill="#718078">Search exercises</text>
 
-  <rect x="28" y="214" width="334" height="104" rx="18" fill="#F6F3EC" stroke="#DDD3C0"/>
-  <text x="44" y="246" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#203029">Mar 12, 2026</text>
-  <text x="44" y="272" font-family="Arial, sans-serif" font-size="15" fill="#5B6E64">4D Upper/Lower</text>
-  <text x="44" y="294" font-family="Arial, sans-serif" font-size="13" fill="#6C7E75">Upper A</text>
-  <rect x="274" y="232" width="68" height="24" rx="12" fill="#D9EFE0"/>
-  <text x="308" y="248" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#245238">success</text>
-  <text x="287" y="294" font-family="Arial, sans-serif" font-size="13" fill="#4D5F57">6 exercises</text>
+  <rect x="28" y="144" width="334" height="116" rx="18" fill="#EEF4EF" stroke="#C8D7CC"/>
+  <text x="44" y="174" font-family="Arial, sans-serif" font-size="19" font-weight="700" fill="#203029">Aug 22, 2026</text>
+  <text x="44" y="199" font-family="Arial, sans-serif" font-size="14" fill="#5B6E64">Clustered Hypertrophy v1</text>
+  <text x="44" y="222" font-family="Arial, sans-serif" font-size="12.5" fill="#6C7E75">Cluster 1 + Cluster 2 + Cluster 3</text>
+  <text x="324" y="176" text-anchor="end" font-family="Arial, sans-serif" font-size="12" fill="#4D5F57">7 exercises</text>
+  <path d="M338 200L343 205L338 210" stroke="#8A938E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="44" y="244" font-family="Arial, sans-serif" font-size="11.5" fill="#6C7E75">Detail: readiness, skips, sets and export status</text>
 
-  <rect x="28" y="332" width="334" height="104" rx="18" fill="#EEF4EF" stroke="#C8D7CC"/>
-  <text x="44" y="364" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#203029">Mar 4, 2026</text>
-  <text x="44" y="390" font-family="Arial, sans-serif" font-size="15" fill="#5B6E64">4D Upper/Lower</text>
-  <text x="44" y="412" font-family="Arial, sans-serif" font-size="13" fill="#6C7E75">Lower A</text>
-  <rect x="274" y="350" width="68" height="24" rx="12" fill="#D9EFE0"/>
-  <text x="308" y="366" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#245238">success</text>
-  <text x="287" y="412" font-family="Arial, sans-serif" font-size="13" fill="#4D5F57">4 exercises</text>
+  <rect x="28" y="274" width="334" height="116" rx="18" fill="#F6F3EC" stroke="#DDD3C0"/>
+  <text x="44" y="304" font-family="Arial, sans-serif" font-size="19" font-weight="700" fill="#203029">Aug 20, 2026</text>
+  <text x="44" y="329" font-family="Arial, sans-serif" font-size="14" fill="#5B6E64">Clustered Hypertrophy v1</text>
+  <text x="44" y="352" font-family="Arial, sans-serif" font-size="12.5" fill="#6C7E75">Cluster 1 + Cluster 3</text>
+  <text x="324" y="306" text-anchor="end" font-family="Arial, sans-serif" font-size="12" fill="#4D5F57">4 exercises</text>
+  <path d="M338 330L343 335L338 340" stroke="#8A938E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="44" y="374" font-family="Arial, sans-serif" font-size="11.5" fill="#6C7E75">Only completed clusters are retained in history</text>
 
-  <rect x="28" y="450" width="334" height="104" rx="18" fill="#F6F3EC" stroke="#DDD3C0"/>
-  <text x="44" y="482" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#203029">Mar 2, 2026</text>
-  <text x="44" y="508" font-family="Arial, sans-serif" font-size="15" fill="#5B6E64">4D Upper/Lower</text>
-  <text x="44" y="530" font-family="Arial, sans-serif" font-size="13" fill="#6C7E75">Upper B</text>
-  <rect x="274" y="468" width="68" height="24" rx="12" fill="#D9EFE0"/>
-  <text x="308" y="484" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#245238">success</text>
-  <text x="287" y="530" font-family="Arial, sans-serif" font-size="13" fill="#4D5F57">6 exercises</text>
+  <rect x="28" y="404" width="334" height="116" rx="18" fill="#EEF4EF" stroke="#C8D7CC"/>
+  <text x="44" y="434" font-family="Arial, sans-serif" font-size="19" font-weight="700" fill="#203029">Aug 18, 2026</text>
+  <text x="44" y="459" font-family="Arial, sans-serif" font-size="14" fill="#5B6E64">Clustered Hypertrophy v1</text>
+  <text x="44" y="482" font-family="Arial, sans-serif" font-size="12.5" fill="#6C7E75">Cluster 2</text>
+  <text x="324" y="436" text-anchor="end" font-family="Arial, sans-serif" font-size="12" fill="#4D5F57">3 exercises</text>
+  <path d="M338 460L343 465L338 470" stroke="#8A938E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="44" y="504" font-family="Arial, sans-serif" font-size="11.5" fill="#6C7E75">Tap to inspect the completed occurrence</text>
+
+  <rect x="28" y="544" width="334" height="78" rx="16" fill="#F6F3EC" stroke="#DDD3C0"/>
+  <text x="44" y="571" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#41574C">EXERCISE SEARCH</text>
+  <text x="44" y="595" font-family="Arial, sans-serif" font-size="12.5" fill="#6C7E75">Results show each date, workout, load and reps.</text>
+  <text x="44" y="613" font-family="Arial, sans-serif" font-size="11.5" fill="#6C7E75">Fixed Cycle and Adaptive Floating share one timeline.</text>
 
   <rect x="28" y="750" width="334" height="52" rx="18" fill="#1E2A24"/>
   <text x="78" y="782" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#B8C4BD">Log</text>
