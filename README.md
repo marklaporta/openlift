@@ -4,19 +4,22 @@ OpenLift is a local-first hypertrophy workout tracker for rotating training cycl
 
 License: [MIT](LICENSE)
 
-## Example Screens
+## Interface Mockups
+
+These hand-authored mockups illustrate the current interface and behavior; they
+are not device screenshots.
 
 ### Workout
 
-![Workout tab example](docs/images/workout-tab.svg)
+![Workout tab mockup](docs/images/workout-tab.svg)
 
 ### History
 
-![History tab example](docs/images/history-tab.svg)
+![History tab mockup](docs/images/history-tab.svg)
 
 ### Cycle
 
-![Cycle tab example](docs/images/cycle-tab.svg)
+![Cycle tab mockup](docs/images/cycle-tab.svg)
 
 This repository is set up for two audiences:
 
