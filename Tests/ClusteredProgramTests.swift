@@ -235,8 +235,13 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertEqual(selections.map(\.day.position), [2, 7, 14])
     }
 
-    func testCompletedClusterEvidenceRetainsOnlyPerformedExerciseRows() throws {
+    func testClusteredFinishRejectsEnteredWorkInUncompletedClusterBeforeDiscardingIt() throws {
         let (exercises, template, cycle, states) = try program()
+        let selections = try FixedCycleClusterProgramService.selections(
+            template: template,
+            cycleInstanceId: cycle.id,
+            states: states
+        )
         let selection = try FixedCycleClusterProgramService.selection(
             cluster: .cluster2,
             template: template,
@@ -275,6 +280,43 @@ final class ClusteredProgramTests: XCTestCase {
             entries: [performedEntry, strayUncompletedEntry],
             resistanceProfiles: []
         )
+        _ = try FixedCycleClusterProgramService.advanceCompletedCluster(
+            selection: selection,
+            occurrence: occurrence,
+            states: states
+        )
+
+        XCTAssertTrue(FixedCycleWorkoutService.canIntentionallyComplete(
+            sessionId: session.id,
+            entries: [performedEntry, strayUncompletedEntry],
+            isClusteredProgram: true,
+            hasCompletedCluster: true
+        ))
+        let pointerPositions = states.map(\.positionIndex)
+        XCTAssertThrowsError(try FixedCycleWorkoutService.validateClusteredFinish(
+            sessionId: session.id,
+            entries: [performedEntry, strayUncompletedEntry],
+            selections: selections,
+            occurrences: [occurrence]
+        )) { error in
+            XCTAssertEqual(
+                error as? FixedCycleWorkoutError,
+                .uncompletedClusterWork([.cluster3])
+            )
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Complete or clear the entered work in Cluster 3 before finishing the workout."
+            )
+        }
+
+        XCTAssertEqual(session.status, .draft)
+        XCTAssertNil(session.finishedAt)
+        XCTAssertEqual(performedEntry.reps, 10)
+        XCTAssertTrue(performedEntry.isLocked)
+        XCTAssertEqual(strayUncompletedEntry.reps, 12)
+        XCTAssertTrue(strayUncompletedEntry.isLocked)
+        XCTAssertEqual(states.map(\.positionIndex), pointerPositions)
+        XCTAssertEqual(states.map(\.positionIndex), [0, 1, 0])
 
         XCTAssertEqual(
             FixedCycleWorkoutService.completedClusterExerciseIds(
@@ -292,13 +334,109 @@ final class ClusteredProgramTests: XCTestCase {
             ).map(\.id),
             [performedEntry.id]
         )
+    }
+
+    func testClusteredFinishAllowsUntouchedClustersAndUnlockedPrefills() throws {
+        let (exercises, template, cycle, states) = try program()
+        let selections = try FixedCycleClusterProgramService.selections(
+            template: template,
+            cycleInstanceId: cycle.id,
+            states: states
+        )
+        let completedSelection = try XCTUnwrap(
+            selections.first { $0.cluster == .cluster1 }
+        )
+        let untouchedSelection = try XCTUnwrap(
+            selections.first { $0.cluster == .cluster3 }
+        )
+        let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
+        let unlockedPrefill = SetEntry(
+            sessionId: session.id,
+            exerciseId: try XCTUnwrap(untouchedSelection.day.slots.first?.exerciseId),
+            setIndex: 1,
+            weight: 25,
+            reps: 12,
+            isLocked: false
+        )
+        let occurrence = try FixedCycleClusterProgramService.makeOccurrence(
+            session: session,
+            selection: completedSelection,
+            exercises: exercises,
+            entries: [unlockedPrefill],
+            resistanceProfiles: []
+        )
+
+        XCTAssertNoThrow(try FixedCycleWorkoutService.validateClusteredFinish(
+            sessionId: session.id,
+            entries: [unlockedPrefill],
+            selections: selections,
+            occurrences: [occurrence]
+        ))
+        XCTAssertEqual(
+            FixedCycleWorkoutService.uncompletedClustersWithEnteredWork(
+                sessionId: session.id,
+                entries: [unlockedPrefill],
+                selections: selections,
+                occurrences: [occurrence]
+            ),
+            []
+        )
+    }
+
+    func testClusteredFinishAcceptsEnteredWorkAfterClusterOccurrenceAndDoesNotReadvance() throws {
+        let (exercises, template, cycle, states) = try program()
+        let selections = try FixedCycleClusterProgramService.selections(
+            template: template,
+            cycleInstanceId: cycle.id,
+            states: states
+        )
+        let selection = try XCTUnwrap(
+            selections.first { $0.cluster == .cluster3 }
+        )
+        let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
+        let entry = SetEntry(
+            sessionId: session.id,
+            exerciseId: try XCTUnwrap(selection.day.slots.first?.exerciseId),
+            setIndex: 1,
+            weight: 25,
+            reps: 12,
+            isLocked: true
+        )
+        let occurrence = try FixedCycleClusterProgramService.makeOccurrence(
+            session: session,
+            selection: selection,
+            exercises: exercises,
+            entries: [entry],
+            resistanceProfiles: []
+        )
+        _ = try FixedCycleClusterProgramService.advanceCompletedCluster(
+            selection: selection,
+            occurrence: occurrence,
+            states: states
+        )
+
+        XCTAssertNoThrow(try FixedCycleWorkoutService.validateClusteredFinish(
+            sessionId: session.id,
+            entries: [entry],
+            selections: selections,
+            occurrences: [occurrence]
+        ))
+        XCTAssertEqual(
+            FixedCycleWorkoutService.retainedCompletedClusterEntries(
+                sessionId: session.id,
+                entries: [entry],
+                occurrences: [occurrence]
+            ).map(\.id),
+            [entry.id]
+        )
+        XCTAssertEqual(states.map(\.positionIndex), [0, 0, 1])
 
         let metadata = SessionExportService.fixedCycleMetadata(
             session: session,
             template: template,
             day: selection.day,
             exercises: exercises,
-            setEntries: [performedEntry, strayUncompletedEntry],
+            setEntries: [entry],
             readiness: [],
             overrides: [],
             clusterOccurrences: [occurrence],
@@ -306,10 +444,10 @@ final class ClusteredProgramTests: XCTestCase {
         )
         XCTAssertEqual(
             SessionExportService.exportableSetEntries(
-                [performedEntry, strayUncompletedEntry],
+                [entry],
                 fixedCycleMetadata: metadata
             ).map(\.id),
-            [performedEntry.id]
+            [entry.id]
         )
     }
 
