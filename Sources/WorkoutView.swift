@@ -5,6 +5,7 @@ enum FixedCycleWorkoutError: LocalizedError, Equatable {
     case incompleteReadiness(MuscleGroup)
     case readinessRequired
     case qualifyingSetRequired
+    case uncompletedClusterWork([FixedCycleClusterProgramService.Cluster])
     case exerciseAlreadyExists
     case cannotReplacePerformedExercise
     case completedClusterDraftCannotBeDiscarded
@@ -17,6 +18,9 @@ enum FixedCycleWorkoutError: LocalizedError, Equatable {
             return "Submit today's readiness before editing or finishing this workout."
         case .qualifyingSetRequired:
             return "Complete and lock at least one working set before finishing the workout."
+        case .uncompletedClusterWork(let clusters):
+            let names = clusters.map(\.displayName).joined(separator: ", ")
+            return "Complete or clear the entered work in \(names) before finishing the workout."
         case .exerciseAlreadyExists:
             return "That exercise is already configured in this muscle block."
         case .cannotReplacePerformedExercise:
@@ -269,6 +273,49 @@ enum FixedCycleWorkoutService {
         isClusteredProgram
             ? hasCompletedCluster
             : hasQualifyingSet(sessionId: sessionId, entries: entries)
+    }
+
+    static func uncompletedClustersWithEnteredWork(
+        sessionId: UUID,
+        entries: [SetEntry],
+        selections: [FixedCycleClusterProgramService.Selection],
+        occurrences: [ClusterOccurrenceRecord]
+    ) -> [FixedCycleClusterProgramService.Cluster] {
+        let completedClusterIDs: Set<String> = Set(
+            occurrences.compactMap { occurrence in
+                guard occurrence.sessionId == sessionId,
+                      occurrence.programVersionID == FixedCycleClusterProgramService.programVersionID else {
+                    return nil
+                }
+                return occurrence.clusterID
+            }
+        )
+        return selections.compactMap { selection in
+            guard !completedClusterIDs.contains(selection.cluster.rawValue) else { return nil }
+            let exerciseIDs = Set(selection.day.slots.map(\.exerciseId))
+            return hasQualifyingSet(
+                sessionId: sessionId,
+                exerciseIds: exerciseIDs,
+                entries: entries
+            ) ? selection.cluster : nil
+        }
+    }
+
+    static func validateClusteredFinish(
+        sessionId: UUID,
+        entries: [SetEntry],
+        selections: [FixedCycleClusterProgramService.Selection],
+        occurrences: [ClusterOccurrenceRecord]
+    ) throws {
+        let clusters = uncompletedClustersWithEnteredWork(
+            sessionId: sessionId,
+            entries: entries,
+            selections: selections,
+            occurrences: occurrences
+        )
+        guard clusters.isEmpty else {
+            throw FixedCycleWorkoutError.uncompletedClusterWork(clusters)
+        }
     }
 
     static func completedClusterExerciseIds(
@@ -1494,6 +1541,22 @@ struct WorkoutView: View {
             ) else {
                 throw FixedCycleWorkoutError.qualifyingSetRequired
             }
+            let currentClusterSelections: [FixedCycleClusterProgramService.Selection]
+            if isClustered {
+                currentClusterSelections = try FixedCycleClusterProgramService.selections(
+                    template: template,
+                    cycleInstanceId: cycle.id,
+                    states: clusterRotationStates
+                )
+                try FixedCycleWorkoutService.validateClusteredFinish(
+                    sessionId: session.id,
+                    entries: setEntries,
+                    selections: currentClusterSelections,
+                    occurrences: clusterOccurrences
+                )
+            } else {
+                currentClusterSelections = []
+            }
             draftExportTask?.cancel()
             draftExportTask = nil
             let dayIndex = session.cycleDayIndex
@@ -1506,11 +1569,7 @@ struct WorkoutView: View {
                     occurrence.sessionId == session.id ? occurrence.clusterID : nil
                 })
                 let uncompletedExerciseIDs = Set(
-                    try FixedCycleClusterProgramService.selections(
-                        template: template,
-                        cycleInstanceId: cycle.id,
-                        states: clusterRotationStates
-                    )
+                    currentClusterSelections
                     .filter { !completedClusterIDs.contains($0.cluster.rawValue) }
                     .flatMap { $0.day.slots.map(\.exerciseId) }
                 )
