@@ -721,12 +721,14 @@ enum HistoricalResistanceProfileMigration {
         let status: Status
         let auditedCandidateCount: Int
         let createdProfileCount: Int
+        let correctedProfileCount: Int
         let repairedSessionCount: Int
         let repairedSessionIds: Set<UUID>
     }
 
-    /// Frozen from the reviewed device audits on 2026-08-04. Do not add an
-    /// occurrence here without a separately reviewed device audit.
+    /// Frozen from the reviewed device audits on 2026-08-04, plus the user's
+    /// 2026-08-29 correction of the final Lat Pulldown input. Do not add an
+    /// occurrence here without separately reviewed evidence.
     static let reviewedManifest: [ManifestEntry] = [
         manifestEntry(.adaptive, "08476AD8-9550-4A33-94DF-55B12E6161F2", "87A21249-FE4B-4C3E-8F5B-E02944C57263", "ED4C9952-8F7D-42A1-9928-8FF5265463D8", "Chest Supported Cable Row", 3),
         manifestEntry(.adaptive, "0DADB7CE-573E-477E-8838-E6D69A27ED3C", "17BC2F9D-F0A2-4604-AA41-33ADD79ED16B", "D9C9805E-A95A-45F8-B674-7A1FCF639626", "Overhead Single-Arm Cable Extension", 2),
@@ -751,7 +753,7 @@ enum HistoricalResistanceProfileMigration {
         manifestEntry(.adaptive, "D21627D8-34D5-4044-990A-6B7C036E230F", "54214942-679D-4CBB-9B27-F78601897BA2", "4AACD4E1-DB9F-4BB4-B918-E51415CE3D95", "Lat Pulldown", 3),
         manifestEntry(.adaptive, "08476AD8-9550-4A33-94DF-55B12E6161F2", "54214942-679D-4CBB-9B27-F78601897BA2", "F77E334D-C843-45C1-84AD-68762C87DA4D", "Lat Pulldown", 3),
         manifestEntry(.fixed, "FBE13920-FF2C-437F-8A38-C09CF1409C09", "54214942-679D-4CBB-9B27-F78601897BA2", nil, "Lat Pulldown", 3),
-        manifestEntry(.fixed, "317EE106-323C-405B-A110-260870F22993", "54214942-679D-4CBB-9B27-F78601897BA2", nil, "Lat Pulldown", 3, chainPercent: 30, eccentricPercent: 70)
+        manifestEntry(.fixed, "317EE106-323C-405B-A110-260870F22993", "54214942-679D-4CBB-9B27-F78601897BA2", nil, "Lat Pulldown", 3, chainPercent: 70, eccentricPercent: 30)
     ]
 
     private static func manifestEntry(
@@ -792,7 +794,7 @@ enum HistoricalResistanceProfileMigration {
         let exerciseById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
         func intended(_ id: UUID) -> ResistanceProfileValue {
             id == latestLatPulldownSessionId
-                ? .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 70)
+                ? .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
                 : id == august3SessionId
                 ? .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
                 : .voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
@@ -928,6 +930,9 @@ enum HistoricalResistanceProfileMigration {
                 in: existingProfiles
             ) else { return nil }
             guard ResistanceProfileService.value(existing) == item.profile else {
+                if isCorrectableLatestLatPulldownInputError(existing, manifestItem: item) {
+                    return nil
+                }
                 throw ResistanceProfileError.conflictingExistingProfile
             }
         }
@@ -935,6 +940,7 @@ enum HistoricalResistanceProfileMigration {
             status: .alreadyApplied,
             auditedCandidateCount: expectedCandidateCount,
             createdProfileCount: 0,
+            correctedProfileCount: 0,
             repairedSessionCount: 0,
             repairedSessionIds: []
         )
@@ -977,6 +983,7 @@ enum HistoricalResistanceProfileMigration {
                       && item.profile.isComplete
               }) else { throw ResistanceProfileError.manifestMismatch }
 
+        var correctableProfiles: [ExerciseResistanceProfile] = []
         for item in manifest {
             if let existing = try ResistanceProfileService.profile(
                 workoutKind: item.key.workoutKind,
@@ -985,7 +992,9 @@ enum HistoricalResistanceProfileMigration {
                 occurrenceId: item.key.occurrenceId,
                 in: existingProfiles
             ) {
-                guard ResistanceProfileService.value(existing) == item.profile else {
+                if isCorrectableLatestLatPulldownInputError(existing, manifestItem: item) {
+                    correctableProfiles.append(existing)
+                } else if ResistanceProfileService.value(existing) != item.profile {
                     throw ResistanceProfileError.conflictingExistingProfile
                 }
             }
@@ -999,17 +1008,24 @@ enum HistoricalResistanceProfileMigration {
                     && $0.occurrenceId == item.key.occurrenceId
             })
         }
-        guard !missingItems.isEmpty else {
+        guard !missingItems.isEmpty || !correctableProfiles.isEmpty else {
             return ApplicationResult(
                 status: .alreadyApplied,
                 auditedCandidateCount: report.candidates.count,
                 createdProfileCount: 0,
+                correctedProfileCount: 0,
                 repairedSessionCount: 0,
                 repairedSessionIds: []
             )
         }
 
         do {
+            for profile in correctableProfiles {
+                profile.chainPercent = 70
+                profile.eccentricPercent = 30
+                profile.frozenAt = now
+                profile.updatedAt = now
+            }
             for item in missingItems {
                 let profileNow = item.key.sessionId == latestLatPulldownSessionId
                     ? now
@@ -1027,6 +1043,7 @@ enum HistoricalResistanceProfileMigration {
                 created.frozenAt = now
             }
             let repairedSessionIds = Set(missingItems.map { $0.key.sessionId })
+                .union(correctableProfiles.map(\.sessionId))
             for session in try modelContext.fetch(FetchDescriptor<Session>())
             where repairedSessionIds.contains(session.id) && session.status == .completed {
                 session.exportStatus = .pending
@@ -1040,6 +1057,7 @@ enum HistoricalResistanceProfileMigration {
                 status: .applied,
                 auditedCandidateCount: report.candidates.count,
                 createdProfileCount: missingItems.count,
+                correctedProfileCount: correctableProfiles.count,
                 repairedSessionCount: repairedSessionIds.count,
                 repairedSessionIds: repairedSessionIds
             )
@@ -1047,5 +1065,28 @@ enum HistoricalResistanceProfileMigration {
             modelContext.rollback()
             throw error
         }
+    }
+
+    /// The reviewed August 4 Pull A Lat Pulldown profile was initially entered
+    /// with its two percentages reversed. Accept only that exact persisted
+    /// value for that exact reviewed occurrence as a one-time correction.
+    private static func isCorrectableLatestLatPulldownInputError(
+        _ existing: ExerciseResistanceProfile,
+        manifestItem: ManifestEntry
+    ) -> Bool {
+        manifestItem.key.workoutKind == .fixed
+            && manifestItem.key.sessionId == latestLatPulldownSessionId
+            && manifestItem.key.exerciseId == latPulldownExerciseId
+            && manifestItem.key.occurrenceId == nil
+            && manifestItem.profile == .voltra(
+                chainType: .inverseChains,
+                chainPercent: 70,
+                eccentricPercent: 30
+            )
+            && ResistanceProfileService.value(existing) == .voltra(
+                chainType: .inverseChains,
+                chainPercent: 30,
+                eccentricPercent: 70
+            )
     }
 }

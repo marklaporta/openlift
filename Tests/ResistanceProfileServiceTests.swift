@@ -676,7 +676,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         })
         XCTAssertEqual(
             manifest.last?.profile,
-            .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 70)
+            .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
         )
         XCTAssertEqual(
             manifest.map(\.exerciseName),
@@ -784,6 +784,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         XCTAssertEqual(first.status, .applied)
         XCTAssertEqual(first.auditedCandidateCount, 24)
         XCTAssertEqual(first.createdProfileCount, 24)
+        XCTAssertEqual(first.correctedProfileCount, 0)
         XCTAssertEqual(first.repairedSessionCount, 12)
         XCTAssertEqual(first.repairedSessionIds.count, 12)
         let profiles = try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
@@ -805,11 +806,94 @@ final class ResistanceProfileServiceTests: XCTestCase {
         XCTAssertEqual(second.status, .alreadyApplied)
         XCTAssertEqual(second.auditedCandidateCount, 24)
         XCTAssertEqual(second.createdProfileCount, 0)
+        XCTAssertEqual(second.correctedProfileCount, 0)
         XCTAssertEqual(second.repairedSessionCount, 0)
         XCTAssertTrue(second.repairedSessionIds.isEmpty)
         XCTAssertTrue(fixedSessions.allSatisfy { $0.exportStatus == .success })
         XCTAssertTrue(adaptiveSessions.allSatisfy { $0.exportStatus == .success })
         XCTAssertEqual(try context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).count, 24)
+    }
+
+    @MainActor
+    func testStartupCorrectsOnlyTheExactReversedAugust4LatPulldownProfile() throws {
+        let (context, _) = makeContext()
+        try insertExactAuditedHistory(into: context)
+        let originalDate = Date(timeIntervalSince1970: 1_786_000_000)
+        for item in HistoricalResistanceProfileMigration.reviewedManifest {
+            let isTarget = item.key.sessionId
+                == HistoricalResistanceProfileMigration.latestLatPulldownSessionId
+            let value: ResistanceProfileValue = isTarget
+                ? .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 70)
+                : item.profile
+            context.insert(
+                ExerciseResistanceProfile(
+                    workoutKind: item.key.workoutKind,
+                    sessionId: item.key.sessionId,
+                    exerciseId: item.key.exerciseId,
+                    occurrenceId: item.key.occurrenceId,
+                    resistanceSource: value.resistanceSource,
+                    chainType: value.chainType,
+                    chainPercent: value.chainPercent,
+                    eccentricPercent: value.eccentricPercent,
+                    frozenAt: originalDate,
+                    createdAt: originalDate,
+                    updatedAt: originalDate
+                )
+            )
+        }
+        try context.save()
+
+        let repairedAt = originalDate.addingTimeInterval(100)
+        let first = try HistoricalResistanceProfileMigration.runAtStartup(
+            modelContext: context,
+            now: repairedAt
+        )
+
+        XCTAssertEqual(first.status, .applied)
+        XCTAssertEqual(first.createdProfileCount, 0)
+        XCTAssertEqual(first.correctedProfileCount, 1)
+        XCTAssertEqual(first.repairedSessionCount, 1)
+        XCTAssertEqual(
+            first.repairedSessionIds,
+            [HistoricalResistanceProfileMigration.latestLatPulldownSessionId]
+        )
+        let profiles = try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        let target = try XCTUnwrap(profiles.first {
+            $0.sessionId == HistoricalResistanceProfileMigration.latestLatPulldownSessionId
+                && $0.exerciseId == HistoricalResistanceProfileMigration.latPulldownExerciseId
+        })
+        XCTAssertEqual(
+            ResistanceProfileService.value(target),
+            .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
+        )
+        XCTAssertEqual(target.createdAt, originalDate)
+        XCTAssertEqual(target.updatedAt, repairedAt)
+        XCTAssertEqual(target.frozenAt, repairedAt)
+
+        let fixedSessions = try context.fetch(FetchDescriptor<Session>())
+        XCTAssertEqual(
+            Set(fixedSessions.filter { $0.exportStatus == .pending }.map(\.id)),
+            [HistoricalResistanceProfileMigration.latestLatPulldownSessionId]
+        )
+        fixedSessions.first {
+            $0.id == HistoricalResistanceProfileMigration.latestLatPulldownSessionId
+        }?.exportStatus = .success
+        try context.save()
+
+        let second = try HistoricalResistanceProfileMigration.runAtStartup(
+            modelContext: context,
+            now: repairedAt.addingTimeInterval(100)
+        )
+        XCTAssertEqual(second.status, .alreadyApplied)
+        XCTAssertEqual(second.createdProfileCount, 0)
+        XCTAssertEqual(second.correctedProfileCount, 0)
+        XCTAssertEqual(second.repairedSessionCount, 0)
+        XCTAssertEqual(
+            fixedSessions.first {
+                $0.id == HistoricalResistanceProfileMigration.latestLatPulldownSessionId
+            }?.exportStatus,
+            .success
+        )
     }
 
     @MainActor
@@ -845,6 +929,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         )
         XCTAssertEqual(result.status, .applied)
         XCTAssertEqual(result.createdProfileCount, 5)
+        XCTAssertEqual(result.correctedProfileCount, 0)
         XCTAssertEqual(result.repairedSessionCount, 5)
         XCTAssertEqual(result.repairedSessionIds, expectedRepaired)
 
@@ -872,7 +957,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
                 exerciseId: HistoricalResistanceProfileMigration.latPulldownExerciseId,
                 profiles: profiles
             ),
-            .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 70)
+            .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30)
         )
 
         let fixedSessions = try context.fetch(FetchDescriptor<Session>())

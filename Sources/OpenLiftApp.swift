@@ -104,7 +104,7 @@ struct OpenLiftApp: App {
                     modelContext: modelContext
                 )
                 print(
-                    "OPENLIFT_VOLTRA_BACKFILL_RESULT status=\(result.status.rawValue) candidates=\(result.auditedCandidateCount) profiles=\(result.createdProfileCount) sessions=\(result.repairedSessionCount)"
+                    "OPENLIFT_VOLTRA_BACKFILL_RESULT status=\(result.status.rawValue) candidates=\(result.auditedCandidateCount) created=\(result.createdProfileCount) corrected=\(result.correctedProfileCount) sessions=\(result.repairedSessionCount)"
                 )
                 if result.status == .applied {
                     let adaptiveIds = Set(
