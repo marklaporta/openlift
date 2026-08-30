@@ -694,19 +694,27 @@ enum AdaptiveWorkoutService {
     static func currentPlan(
         plans: [GeneratedWorkoutPlan],
         programs: [AdaptiveProgram],
+        adaptiveSessions: [AdaptiveWorkoutSession],
         localDateKey: String,
-        activeProgram: AdaptiveProgram
+        activeProgram: AdaptiveProgram,
+        timeZone: TimeZone = .current
     ) -> GeneratedWorkoutPlan? {
         let lineageProgramIds = Set(
             programs.lazy
                 .filter { $0.lineageId == activeProgram.lineageId }
                 .map(\.id)
         ).union([activeProgram.id])
+        let sessionsByPlan = Dictionary(grouping: adaptiveSessions, by: \.generatedPlanId)
+            .compactMapValues { completionSession(from: $0) }
 
         return plans
             .filter { plan in
                 guard lineageProgramIds.contains(plan.adaptiveProgramId) else { return false }
-                return plan.status != .completed || plan.localDateKey == localDateKey
+                guard plan.status == .completed else { return true }
+                guard let finishedAt = sessionsByPlan[plan.id]?.finishedAt else {
+                    return plan.localDateKey == localDateKey
+                }
+                return self.localDateKey(for: finishedAt, timeZone: timeZone) == localDateKey
             }
             .sorted {
                 let leftRank = statusRank($0.status)
@@ -716,6 +724,21 @@ enum AdaptiveWorkoutService {
                 return $0.id.uuidString > $1.id.uuidString
             }
             .first
+    }
+
+    private static func completionSession(
+        from sessions: [AdaptiveWorkoutSession]
+    ) -> AdaptiveWorkoutSession? {
+        sessions.sorted {
+            if ($0.finishedAt != nil) != ($1.finishedAt != nil) {
+                return $0.finishedAt != nil
+            }
+            if $0.finishedAt != $1.finishedAt {
+                return ($0.finishedAt ?? .distantPast) > ($1.finishedAt ?? .distantPast)
+            }
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.id.uuidString > $1.id.uuidString
+        }.first
     }
 
     static func makeReadinessCheck(
