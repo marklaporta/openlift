@@ -693,16 +693,27 @@ enum AdaptiveWorkoutService {
 
     static func currentPlan(
         plans: [GeneratedWorkoutPlan],
+        programs: [AdaptiveProgram],
         localDateKey: String,
-        programId: UUID
+        activeProgram: AdaptiveProgram
     ) -> GeneratedWorkoutPlan? {
-        plans
-            .filter { $0.localDateKey == localDateKey && $0.adaptiveProgramId == programId }
+        let lineageProgramIds = Set(
+            programs.lazy
+                .filter { $0.lineageId == activeProgram.lineageId }
+                .map(\.id)
+        ).union([activeProgram.id])
+
+        return plans
+            .filter { plan in
+                guard lineageProgramIds.contains(plan.adaptiveProgramId) else { return false }
+                return plan.status != .completed || plan.localDateKey == localDateKey
+            }
             .sorted {
                 let leftRank = statusRank($0.status)
                 let rightRank = statusRank($1.status)
                 if leftRank != rightRank { return leftRank < rightRank }
-                return $0.createdAt > $1.createdAt
+                if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+                return $0.id.uuidString > $1.id.uuidString
             }
             .first
     }

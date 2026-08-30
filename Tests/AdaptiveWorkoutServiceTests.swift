@@ -3,6 +3,132 @@ import XCTest
 @testable import OpenLift
 
 final class AdaptiveWorkoutServiceTests: XCTestCase {
+    func testCurrentPlanKeepsOpenPlanAcrossLocalMidnight() {
+        let program = makeResolverProgram(version: 1)
+        let plan = makeResolverPlan(
+            program: program,
+            localDateKey: "2026-07-20",
+            status: .inProgress
+        )
+
+        let resolved = AdaptiveWorkoutService.currentPlan(
+            plans: [plan],
+            programs: [program],
+            localDateKey: "2026-07-21",
+            activeProgram: program
+        )
+
+        XCTAssertEqual(resolved?.id, plan.id)
+    }
+
+    func testCurrentPlanKeepsOpenPlanAcrossProfileVersionSave() {
+        let lineageId = UUID()
+        let previous = makeResolverProgram(lineageId: lineageId, version: 1, isActiveVersion: false)
+        let active = makeResolverProgram(lineageId: lineageId, version: 2)
+        let plan = makeResolverPlan(
+            program: previous,
+            localDateKey: "2026-07-20",
+            status: .frozen
+        )
+
+        let resolved = AdaptiveWorkoutService.currentPlan(
+            plans: [plan],
+            programs: [previous, active],
+            localDateKey: "2026-07-21",
+            activeProgram: active
+        )
+
+        XCTAssertEqual(resolved?.id, plan.id)
+    }
+
+    func testCurrentPlanKeepsSameDayCompletedPlanAcrossProfileVersionSave() {
+        let lineageId = UUID()
+        let previous = makeResolverProgram(lineageId: lineageId, version: 1, isActiveVersion: false)
+        let active = makeResolverProgram(lineageId: lineageId, version: 2)
+        let completed = makeResolverPlan(
+            program: previous,
+            localDateKey: "2026-07-21",
+            status: .completed
+        )
+
+        let resolved = AdaptiveWorkoutService.currentPlan(
+            plans: [completed],
+            programs: [previous, active],
+            localDateKey: "2026-07-21",
+            activeProgram: active
+        )
+
+        XCTAssertEqual(resolved?.id, completed.id)
+    }
+
+    func testCurrentPlanDoesNotCarryCompletedPlanAcrossLocalMidnight() {
+        let program = makeResolverProgram(version: 1)
+        let completed = makeResolverPlan(
+            program: program,
+            localDateKey: "2026-07-20",
+            status: .completed
+        )
+
+        let resolved = AdaptiveWorkoutService.currentPlan(
+            plans: [completed],
+            programs: [program],
+            localDateKey: "2026-07-21",
+            activeProgram: program
+        )
+
+        XCTAssertNil(resolved)
+    }
+
+    func testCurrentPlanExcludesPlansFromUnrelatedProgramLineages() {
+        let active = makeResolverProgram(version: 1)
+        let unrelated = makeResolverProgram(version: 1)
+        let plan = makeResolverPlan(
+            program: unrelated,
+            localDateKey: "2026-07-21",
+            status: .inProgress
+        )
+
+        let resolved = AdaptiveWorkoutService.currentPlan(
+            plans: [plan],
+            programs: [active, unrelated],
+            localDateKey: "2026-07-21",
+            activeProgram: active
+        )
+
+        XCTAssertNil(resolved)
+    }
+
+    func testCurrentPlanSelectionRemainsDeterministicAcrossLineageCandidates() {
+        let lineageId = UUID()
+        let previous = makeResolverProgram(lineageId: lineageId, version: 1, isActiveVersion: false)
+        let active = makeResolverProgram(lineageId: lineageId, version: 2)
+        let olderId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let newerId = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let older = makeResolverPlan(
+            id: olderId,
+            program: previous,
+            localDateKey: "2026-07-20",
+            createdAt: Date(timeIntervalSince1970: 100),
+            status: .inProgress
+        )
+        let newer = makeResolverPlan(
+            id: newerId,
+            program: active,
+            localDateKey: "2026-07-21",
+            createdAt: Date(timeIntervalSince1970: 100),
+            status: .inProgress
+        )
+
+        let resolved = AdaptiveWorkoutService.currentPlan(
+            plans: [older, newer],
+            programs: [previous, active],
+            localDateKey: "2026-07-21",
+            activeProgram: active
+        )
+
+        XCTAssertEqual(resolved?.id, newer.id)
+    }
+
     func testReadinessTracksOnlyEnabledMuscles() throws {
         let (program, _) = makeProgram()
         let chestInput = MuscleReadinessInput(
@@ -1550,6 +1676,46 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         Dictionary(uniqueKeysWithValues: MuscleGroup.allCases.map {
             ($0, MuscleReadinessInput(soreness: .none, connectiveTissuePain: .none, eagerness: .neutral))
         })
+    }
+
+    private func makeResolverProgram(
+        lineageId: UUID = UUID(),
+        version: Int,
+        isActiveVersion: Bool = true
+    ) -> AdaptiveProgram {
+        AdaptiveProgram(
+            lineageId: lineageId,
+            version: version,
+            name: "Resolver Test",
+            isActiveVersion: isActiveVersion,
+            isReviewedForUse: true,
+            globalMaxMovements: 4,
+            maxDifficultyCost: 8,
+            muscleRules: [],
+            complexes: []
+        )
+    }
+
+    private func makeResolverPlan(
+        id: UUID = UUID(),
+        program: AdaptiveProgram,
+        localDateKey: String,
+        createdAt: Date = Date(timeIntervalSince1970: 100),
+        status: AdaptivePlanStatus
+    ) -> GeneratedWorkoutPlan {
+        GeneratedWorkoutPlan(
+            id: id,
+            localDateKey: localDateKey,
+            timeZoneIdentifier: "America/Los_Angeles",
+            createdAt: createdAt,
+            status: status,
+            adaptiveProgramId: program.id,
+            adaptiveProgramVersion: program.version,
+            readinessCheckId: UUID(),
+            plannerVersion: 1,
+            reasonCodes: [],
+            complexes: []
+        )
     }
 
     private func makeProgram() -> (AdaptiveProgram, Exercise) {
