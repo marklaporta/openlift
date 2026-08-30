@@ -130,6 +130,17 @@ enum BootstrapDataService {
         }
     }
 
+    enum WorkoutImportError: LocalizedError, Equatable {
+        case pendingModelChanges
+
+        var errorDescription: String? {
+            switch self {
+            case .pendingModelChanges:
+                return "Workout recovery requires all pending app changes to be saved or discarded before importing exports."
+            }
+        }
+    }
+
     struct ClusteredProgramRolloutResult: Equatable {
         let templateId: UUID
         let cycleId: UUID
@@ -424,7 +435,31 @@ enum BootstrapDataService {
         cycle: ActiveCycleInstance,
         modelContext: ModelContext
     ) throws -> WorkoutImportResult {
-        var catalog = try ensureExerciseCatalog(modelContext: modelContext)
+        guard !modelContext.hasChanges else {
+            throw WorkoutImportError.pendingModelChanges
+        }
+
+        do {
+            return try reconcileWorkoutExportsInCleanContext(
+                exports,
+                cycle: cycle,
+                modelContext: modelContext
+            )
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    private static func reconcileWorkoutExportsInCleanContext(
+        _ exports: [SessionExportService.ExportPayload],
+        cycle: ActiveCycleInstance,
+        modelContext: ModelContext
+    ) throws -> WorkoutImportResult {
+        var catalog = try ensureExerciseCatalog(
+            modelContext: modelContext,
+            saveChanges: false
+        )
         var exercisesByName = Dictionary(uniqueKeysWithValues: catalog.map { ($0.name.lowercased(), $0) })
         var exercisesById = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
         var sessionsById: [UUID: Session] = [:]

@@ -1595,6 +1595,9 @@ struct WorkoutView: View {
             preferredTemplateId: UserDefaults.standard.string(forKey: "openlift.lastActivatedTemplateId")
                 .flatMap(UUID.init(uuidString:))
         ) {
+            if modelContext.hasChanges {
+                try modelContext.save()
+            }
             try hydrateMissingCompletedSessionsFromExports(cycle: cycle)
         }
 
