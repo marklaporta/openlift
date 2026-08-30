@@ -46,8 +46,9 @@ struct AdaptiveWorkoutView: View {
         guard let program = activeProgram else { return nil }
         return AdaptiveWorkoutService.currentPlan(
             plans: generatedPlans,
+            programs: adaptivePrograms,
             localDateKey: todayKey,
-            programId: program.id
+            activeProgram: program
         )
     }
 
