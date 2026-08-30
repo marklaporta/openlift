@@ -1545,6 +1545,97 @@ final class ClusterRotationState {
     }
 }
 
+/// A user-selected replacement for one exact slot in the reserved clustered
+/// program. The canonical template remains immutable; this overlay is resolved
+/// whenever that exact program-version/day/slot appears again.
+@Model
+final class ClusterExercisePreference {
+    @Attribute(.unique) var id: UUID
+    @Attribute(.unique) var key: String
+    var programVersionID: String
+    var templateDayPosition: Int
+    var slotPosition: Int
+    var exerciseId: UUID
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        programVersionID: String,
+        templateDayPosition: Int,
+        slotPosition: Int,
+        exerciseId: UUID,
+        updatedAt: Date = .now
+    ) {
+        self.id = id
+        self.key = Self.key(
+            programVersionID: programVersionID,
+            templateDayPosition: templateDayPosition,
+            slotPosition: slotPosition
+        )
+        self.programVersionID = programVersionID
+        self.templateDayPosition = templateDayPosition
+        self.slotPosition = slotPosition
+        self.exerciseId = exerciseId
+        self.updatedAt = updatedAt
+    }
+
+    static func key(
+        programVersionID: String,
+        templateDayPosition: Int,
+        slotPosition: Int
+    ) -> String {
+        "\(programVersionID)|\(templateDayPosition)|\(slotPosition)"
+    }
+}
+
+/// A replacement scoped only to one draft occurrence. It is retained through
+/// completion/export so recovery can reconstruct an unfinished draft without
+/// consulting mutable UI state.
+@Model
+final class ClusterExerciseOccurrenceOverride {
+    @Attribute(.unique) var id: UUID
+    @Attribute(.unique) var key: String
+    var sessionId: UUID
+    var programVersionID: String
+    var templateDayPosition: Int
+    var slotPosition: Int
+    var exerciseId: UUID
+    var createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        sessionId: UUID,
+        programVersionID: String,
+        templateDayPosition: Int,
+        slotPosition: Int,
+        exerciseId: UUID,
+        createdAt: Date = .now
+    ) {
+        self.id = id
+        self.key = Self.key(
+            sessionId: sessionId,
+            programVersionID: programVersionID,
+            templateDayPosition: templateDayPosition,
+            slotPosition: slotPosition
+        )
+        self.sessionId = sessionId
+        self.programVersionID = programVersionID
+        self.templateDayPosition = templateDayPosition
+        self.slotPosition = slotPosition
+        self.exerciseId = exerciseId
+        self.createdAt = createdAt
+    }
+
+    static func key(
+        sessionId: UUID,
+        programVersionID: String,
+        templateDayPosition: Int,
+        slotPosition: Int
+    ) -> String {
+        "\(sessionId.uuidString)|\(programVersionID)|\(templateDayPosition)|\(slotPosition)"
+    }
+}
+
 /// Immutable completion evidence for exactly one whole cluster. It references
 /// the legacy Session by UUID so V12's Session shape remains untouched.
 @Model

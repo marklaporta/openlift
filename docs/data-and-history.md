@@ -22,6 +22,8 @@ Core models live in [`Models.swift`](../Sources/Models.swift):
 - append-only Fixed Cycle readiness revisions and occurrence-level skip records
 - V13 clustered Fixed Cycle state and immutable completed-cluster occurrences:
   exactly `ClusterRotationState` and `ClusterOccurrenceRecord`
+- V14 clustered exercise overlays: exact-slot `ClusterExercisePreference` and
+  session-scoped `ClusterExerciseOccurrenceOverride`
 
 ## What Counts As History
 
@@ -196,6 +198,11 @@ rechecks that every set row is locked, positive-rep, and backed by a performed
 occurrence snapshot, so a retry cannot leak rows from an untouched cluster.
 Hydration restores explicit exported states when present and otherwise derives a
 state only from gap-free, non-conflicting occurrence steps.
+The same optional metadata exports the current durable exact-slot preferences
+and active session overrides, including exercise descriptors needed for
+recovery. Hydration restores preferences from the newest clustered snapshot and
+session overrides by stable identity. Completed occurrence snapshots remain the
+immutable source of truth for what was actually performed.
 
 Adaptive workouts use additive schema v2 JSON. The payload records
 `workout_kind: adaptive`, the session UUID, raw readiness/version, planner

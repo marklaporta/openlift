@@ -364,6 +364,18 @@ enum OpenLiftSchemaV13: VersionedSchema {
     ]
 }
 
+/// Adds exact-slot clustered exercise preferences and occurrence overrides as
+/// parallel overlays. The reserved V13 template and completed evidence remain
+/// byte-for-byte unchanged.
+enum OpenLiftSchemaV14: VersionedSchema {
+    static let versionIdentifier = Schema.Version(14, 0, 0)
+
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV13.models + [
+        ClusterExercisePreference.self,
+        ClusterExerciseOccurrenceOverride.self
+    ]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
@@ -378,7 +390,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV10.self,
         OpenLiftSchemaV11.self,
         OpenLiftSchemaV12.self,
-        OpenLiftSchemaV13.self
+        OpenLiftSchemaV13.self,
+        OpenLiftSchemaV14.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -429,6 +442,10 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV12.self,
             toVersion: OpenLiftSchemaV13.self
+        ),
+        .lightweight(
+            fromVersion: OpenLiftSchemaV13.self,
+            toVersion: OpenLiftSchemaV14.self
         )
     ]
 }
