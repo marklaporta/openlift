@@ -47,6 +47,7 @@ struct AdaptiveWorkoutView: View {
         return AdaptiveWorkoutService.currentPlan(
             plans: generatedPlans,
             programs: adaptivePrograms,
+            adaptiveSessions: adaptiveSessions,
             localDateKey: todayKey,
             activeProgram: program
         )
@@ -56,9 +57,7 @@ struct AdaptiveWorkoutView: View {
         NavigationStack {
             List {
                 if let program = activeProgram {
-                    if !program.isReviewedForUse {
-                        unreviewedProfileContent(program)
-                    } else if let plan = currentPlan {
+                    if let plan = currentPlan {
                         switch plan.status {
                         case .proposed:
                             if isEditingReadiness {
@@ -71,6 +70,8 @@ struct AdaptiveWorkoutView: View {
                         case .completed:
                             completedContent(plan: plan)
                         }
+                    } else if !program.isReviewedForUse {
+                        unreviewedProfileContent(program)
                     } else {
                         readinessContent(program: program, editingPlan: nil)
                     }

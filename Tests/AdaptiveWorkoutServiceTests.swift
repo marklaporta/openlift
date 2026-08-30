@@ -14,6 +14,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let resolved = AdaptiveWorkoutService.currentPlan(
             plans: [plan],
             programs: [program],
+            adaptiveSessions: [],
             localDateKey: "2026-07-21",
             activeProgram: program
         )
@@ -34,6 +35,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let resolved = AdaptiveWorkoutService.currentPlan(
             plans: [plan],
             programs: [previous, active],
+            adaptiveSessions: [],
             localDateKey: "2026-07-21",
             activeProgram: active
         )
@@ -41,7 +43,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(resolved?.id, plan.id)
     }
 
-    func testCurrentPlanKeepsSameDayCompletedPlanAcrossProfileVersionSave() {
+    func testCurrentPlanFallsBackToPlanDateForSameDayCompletionWhenSessionIsMissing() {
         let lineageId = UUID()
         let previous = makeResolverProgram(lineageId: lineageId, version: 1, isActiveVersion: false)
         let active = makeResolverProgram(lineageId: lineageId, version: 2)
@@ -54,6 +56,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let resolved = AdaptiveWorkoutService.currentPlan(
             plans: [completed],
             programs: [previous, active],
+            adaptiveSessions: [],
             localDateKey: "2026-07-21",
             activeProgram: active
         )
@@ -61,7 +64,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(resolved?.id, completed.id)
     }
 
-    func testCurrentPlanDoesNotCarryCompletedPlanAcrossLocalMidnight() {
+    func testCurrentPlanFallbackDoesNotCarryCompletedPlanAcrossMidnightWhenSessionIsMissing() {
         let program = makeResolverProgram(version: 1)
         let completed = makeResolverPlan(
             program: program,
@@ -72,11 +75,51 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let resolved = AdaptiveWorkoutService.currentPlan(
             plans: [completed],
             programs: [program],
+            adaptiveSessions: [],
             localDateKey: "2026-07-21",
             activeProgram: program
         )
 
         XCTAssertNil(resolved)
+    }
+
+    func testCurrentPlanRemainsVisibleWhenCrossMidnightPlanCompletesToday() {
+        let timeZone = TimeZone(secondsFromGMT: 0)!
+        let program = makeResolverProgram(version: 1)
+        let plan = makeResolverPlan(
+            program: program,
+            localDateKey: "1970-01-01",
+            status: .inProgress
+        )
+        let session = AdaptiveWorkoutSession(
+            generatedPlanId: plan.id,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            status: .draft
+        )
+
+        let openResolution = AdaptiveWorkoutService.currentPlan(
+            plans: [plan],
+            programs: [program],
+            adaptiveSessions: [session],
+            localDateKey: "1970-01-02",
+            activeProgram: program,
+            timeZone: timeZone
+        )
+        XCTAssertEqual(openResolution?.id, plan.id)
+
+        plan.status = .completed
+        session.status = .completed
+        session.finishedAt = Date(timeIntervalSince1970: 90_000)
+
+        let completedResolution = AdaptiveWorkoutService.currentPlan(
+            plans: [plan],
+            programs: [program],
+            adaptiveSessions: [session],
+            localDateKey: "1970-01-02",
+            activeProgram: program,
+            timeZone: timeZone
+        )
+        XCTAssertEqual(completedResolution?.id, plan.id)
     }
 
     func testCurrentPlanExcludesPlansFromUnrelatedProgramLineages() {
@@ -91,6 +134,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let resolved = AdaptiveWorkoutService.currentPlan(
             plans: [plan],
             programs: [active, unrelated],
+            adaptiveSessions: [],
             localDateKey: "2026-07-21",
             activeProgram: active
         )
@@ -122,6 +166,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let resolved = AdaptiveWorkoutService.currentPlan(
             plans: [older, newer],
             programs: [previous, active],
+            adaptiveSessions: [],
             localDateKey: "2026-07-21",
             activeProgram: active
         )
