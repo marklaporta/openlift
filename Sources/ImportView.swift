@@ -41,6 +41,12 @@ struct ImportView: View {
                         if importResult.skippedUnknownExercises > 0 {
                             LabeledContent("Unknown Exercises", value: "\(importResult.skippedUnknownExercises)")
                         }
+                        if importResult.resetInvalidClusterExercisePreferences > 0 {
+                            LabeledContent(
+                                "Reset Invalid Cluster Choices",
+                                value: "\(importResult.resetInvalidClusterExercisePreferences)"
+                            )
+                        }
                     }
                 }
 

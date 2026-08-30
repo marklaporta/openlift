@@ -151,6 +151,7 @@ enum BootstrapDataService {
         var imported = 0
         var skippedExisting = 0
         var skippedUnknownExercises = 0
+        var resetInvalidClusterExercisePreferences = 0
     }
 
     private struct ImportedSetKey: Hashable {
@@ -1103,6 +1104,38 @@ enum BootstrapDataService {
                 )
                 modelContext.insert(derived)
                 rotationStatesByKey[key] = derived
+            }
+        }
+
+        if latestClusterPreferenceExport != nil {
+            let recoveredPreferenceExerciseIDs = FixedCycleClusterProgramService
+                .persistentExerciseIDsByKey(
+                    preferences: Array(clusterPreferencesByKey.values)
+                )
+            let clusteredTemplates = availableTemplates.filter {
+                FixedCycleClusterProgramService.isProgramTemplate($0)
+            }
+            let preferencesAreValid = !clusteredTemplates.isEmpty && clusteredTemplates.allSatisfy {
+                clusteredTemplate in
+                do {
+                    try FixedCycleClusterProgramService.validatePersistentExercisePreferences(
+                        template: clusteredTemplate,
+                        exerciseIDsByPreferenceKey: recoveredPreferenceExerciseIDs
+                    )
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            if !preferencesAreValid {
+                let invalidOverlay = clusterPreferencesByKey.values.filter {
+                    $0.programVersionID == FixedCycleClusterProgramService.programVersionID
+                }
+                result.resetInvalidClusterExercisePreferences += invalidOverlay.count
+                for preference in invalidOverlay {
+                    modelContext.delete(preference)
+                    clusterPreferencesByKey.removeValue(forKey: preference.key)
+                }
             }
         }
 
@@ -2295,6 +2328,7 @@ enum FixedCycleClusterProgramService {
         case requiredExerciseMissing(String)
         case missingClusterPointer(Cluster)
         case invalidClusterContext
+        case exerciseCollision
 
         var errorDescription: String? {
             switch self {
@@ -2304,6 +2338,8 @@ enum FixedCycleClusterProgramService {
                 return "The independent pointer for \(cluster.displayName) is missing."
             case .invalidClusterContext:
                 return "The workout's versioned cluster context is invalid."
+            case .exerciseCollision:
+                return "A clustered exercise would occupy multiple slots in a reachable workout."
             }
         }
     }
@@ -2613,6 +2649,71 @@ enum FixedCycleClusterProgramService {
             slotPosition: slotPosition
         )
         return overrides.first { $0.key == key }
+    }
+
+    /// Persistent clustered substitutions must remain safe for every workout
+    /// that the three independently advancing cluster pointers can produce.
+    /// Repeated exercises across different days of one cluster are intentional
+    /// because those days cannot co-occur. Every resolved day must still be
+    /// internally unique, and the effective exercise sets of separate clusters
+    /// must be disjoint because any pair of their days can co-occur.
+    static func validatePersistentExercisePreferences(
+        template: CycleTemplate,
+        exerciseIDsByPreferenceKey: [String: UUID]
+    ) throws {
+        guard isProgramTemplate(template) else {
+            throw ProgramError.invalidClusterContext
+        }
+
+        var exerciseIDsByCluster: [Cluster: Set<UUID>] = [:]
+        var validPreferenceKeys = Set<String>()
+        for cluster in Cluster.allCases {
+            var clusterExerciseIDs = Set<UUID>()
+            for step in 0..<cluster.rotationLength {
+                let dayPosition = cluster.templateBasePosition + step
+                guard let day = template.days.first(where: { $0.position == dayPosition }) else {
+                    throw ProgramError.invalidClusterContext
+                }
+                let resolvedExerciseIDs = CycleOrdering.sortedSlots(day.slots).map { slot in
+                    let key = ClusterExercisePreference.key(
+                        programVersionID: programVersionID,
+                        templateDayPosition: day.position,
+                        slotPosition: slot.position
+                    )
+                    validPreferenceKeys.insert(key)
+                    return exerciseIDsByPreferenceKey[key] ?? slot.exerciseId
+                }
+                guard Set(resolvedExerciseIDs).count == resolvedExerciseIDs.count else {
+                    throw ProgramError.exerciseCollision
+                }
+                clusterExerciseIDs.formUnion(resolvedExerciseIDs)
+            }
+            exerciseIDsByCluster[cluster] = clusterExerciseIDs
+        }
+
+        guard exerciseIDsByPreferenceKey.keys.allSatisfy(validPreferenceKeys.contains) else {
+            throw ProgramError.invalidClusterContext
+        }
+        for (index, cluster) in Cluster.allCases.enumerated() {
+            for otherCluster in Cluster.allCases.dropFirst(index + 1) {
+                guard exerciseIDsByCluster[cluster, default: []].isDisjoint(
+                    with: exerciseIDsByCluster[otherCluster, default: []]
+                ) else {
+                    throw ProgramError.exerciseCollision
+                }
+            }
+        }
+    }
+
+    static func persistentExerciseIDsByKey(
+        preferences: [ClusterExercisePreference]
+    ) -> [String: UUID] {
+        Dictionary(
+            preferences
+                .filter { $0.programVersionID == programVersionID }
+                .map { ($0.key, $0.exerciseId) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     /// Occurrence overrides deliberately outrank persistent preferences. This

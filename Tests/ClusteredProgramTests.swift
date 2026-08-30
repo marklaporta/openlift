@@ -326,6 +326,12 @@ final class ClusteredProgramTests: XCTestCase {
         try FixedCycleWorkoutService.applyClusterSubstitution(
             scope: .exactSlotGoingForward,
             sessionId: session.id,
+            template: template,
+            activeSelections: try FixedCycleClusterProgramService.selections(
+                template: template,
+                cycleInstanceId: cycle.id,
+                states: states
+            ),
             selection: selection,
             slot: slot,
             currentExerciseId: slot.exerciseId,
@@ -352,6 +358,12 @@ final class ClusteredProgramTests: XCTestCase {
         context.insert(locked)
         XCTAssertThrowsError(try FixedCycleWorkoutService.resetClusterSlotToProgramDefault(
             sessionId: session.id,
+            template: template,
+            activeSelections: try FixedCycleClusterProgramService.selections(
+                template: template,
+                cycleInstanceId: cycle.id,
+                states: states
+            ),
             selection: selection,
             slot: slot,
             currentExerciseId: replacement.id,
@@ -366,6 +378,12 @@ final class ClusteredProgramTests: XCTestCase {
         try context.save()
         try FixedCycleWorkoutService.resetClusterSlotToProgramDefault(
             sessionId: session.id,
+            template: template,
+            activeSelections: try FixedCycleClusterProgramService.selections(
+                template: template,
+                cycleInstanceId: cycle.id,
+                states: states
+            ),
             selection: selection,
             slot: slot,
             currentExerciseId: replacement.id,
@@ -380,6 +398,12 @@ final class ClusteredProgramTests: XCTestCase {
         try FixedCycleWorkoutService.applyClusterSubstitution(
             scope: .workoutOnly,
             sessionId: session.id,
+            template: template,
+            activeSelections: try FixedCycleClusterProgramService.selections(
+                template: template,
+                cycleInstanceId: cycle.id,
+                states: states
+            ),
             selection: selection,
             slot: slot,
             currentExerciseId: slot.exerciseId,
@@ -396,6 +420,12 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertEqual(occurrenceOverrides.first?.exerciseId, replacement.id)
         try FixedCycleWorkoutService.resetClusterSlotToProgramDefault(
             sessionId: session.id,
+            template: template,
+            activeSelections: try FixedCycleClusterProgramService.selections(
+                template: template,
+                cycleInstanceId: cycle.id,
+                states: states
+            ),
             selection: selection,
             slot: slot,
             currentExerciseId: replacement.id,
@@ -407,6 +437,123 @@ final class ClusteredProgramTests: XCTestCase {
         try context.save()
         XCTAssertTrue(
             try context.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>()).isEmpty
+        )
+    }
+
+    func testPersistentClusterSwapRefusesCollisionWithFutureIndependentClusterDay() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let exercises = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let template = try FixedCycleClusterProgramService.makeTemplate(exercises: exercises)
+        let cycle = ActiveCycleInstance(templateId: template.id)
+        let states = FixedCycleClusterProgramService.makeRotationStates(
+            cycleInstanceId: cycle.id,
+            templateId: template.id
+        )
+        let selections = try FixedCycleClusterProgramService.selections(
+            template: template,
+            cycleInstanceId: cycle.id,
+            states: states
+        )
+        let selection = try XCTUnwrap(selections.first { $0.cluster == .cluster1 })
+        let slot = try XCTUnwrap(CycleOrdering.sortedSlots(selection.day.slots).first)
+        let futureCluster2Exercise = try XCTUnwrap(
+            exercises.first { $0.name == "Stiff-Leg Deadlift" }
+        )
+        let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
+        context.insert(template)
+        context.insert(cycle)
+        context.insert(session)
+        states.forEach(context.insert)
+        try context.save()
+
+        XCTAssertThrowsError(try FixedCycleWorkoutService.applyClusterSubstitution(
+            scope: .exactSlotGoingForward,
+            sessionId: session.id,
+            template: template,
+            activeSelections: selections,
+            selection: selection,
+            slot: slot,
+            currentExerciseId: slot.exerciseId,
+            replacementExerciseId: futureCluster2Exercise.id,
+            entries: [],
+            preferences: [],
+            overrides: [],
+            modelContext: context
+        )) { error in
+            XCTAssertEqual(error as? FixedCycleWorkoutError, .exerciseAlreadyExists)
+        }
+        XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterExercisePreference>()).isEmpty)
+    }
+
+    func testResetPersistentClusterSwapRefusesReintroducedFutureCollision() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let context = ModelContext(container)
+        let exercises = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let template = try FixedCycleClusterProgramService.makeTemplate(exercises: exercises)
+        let cycle = ActiveCycleInstance(templateId: template.id)
+        let states = FixedCycleClusterProgramService.makeRotationStates(
+            cycleInstanceId: cycle.id,
+            templateId: template.id
+        )
+        let selections = try FixedCycleClusterProgramService.selections(
+            template: template,
+            cycleInstanceId: cycle.id,
+            states: states
+        )
+        let selection = try XCTUnwrap(selections.first { $0.cluster == .cluster1 })
+        let slot = try XCTUnwrap(CycleOrdering.sortedSlots(selection.day.slots).first)
+        let canonicalExerciseID = slot.exerciseId
+        let sameClusterReplacement = try XCTUnwrap(
+            exercises.first { $0.name == "Flat Dumbbell Press" }
+        )
+        let cluster2FutureDay = try XCTUnwrap(template.days.first { $0.position == 4 })
+        let cluster2FutureSlot = try XCTUnwrap(
+            CycleOrdering.sortedSlots(cluster2FutureDay.slots).first
+        )
+        let maskingPreference = ClusterExercisePreference(
+            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            templateDayPosition: selection.day.position,
+            slotPosition: slot.position,
+            exerciseId: sameClusterReplacement.id
+        )
+        let futureCollisionPreference = ClusterExercisePreference(
+            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            templateDayPosition: cluster2FutureDay.position,
+            slotPosition: cluster2FutureSlot.position,
+            exerciseId: canonicalExerciseID
+        )
+        let preferences = [maskingPreference, futureCollisionPreference]
+        context.insert(template)
+        context.insert(cycle)
+        preferences.forEach(context.insert)
+        states.forEach(context.insert)
+        try context.save()
+
+        XCTAssertNoThrow(try FixedCycleClusterProgramService.validatePersistentExercisePreferences(
+            template: template,
+            exerciseIDsByPreferenceKey: FixedCycleClusterProgramService
+                .persistentExerciseIDsByKey(preferences: preferences)
+        ))
+        XCTAssertThrowsError(try FixedCycleWorkoutService.resetClusterSlotToProgramDefault(
+            sessionId: UUID(),
+            template: template,
+            activeSelections: selections,
+            selection: selection,
+            slot: slot,
+            currentExerciseId: sameClusterReplacement.id,
+            entries: [],
+            preferences: preferences,
+            overrides: [],
+            modelContext: context
+        )) { error in
+            XCTAssertEqual(error as? FixedCycleWorkoutError, .exerciseAlreadyExists)
+        }
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<ClusterExercisePreference>()),
+            2
         )
     }
 
@@ -1347,6 +1494,159 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertEqual(hydratedPreferences.first?.exerciseId, destinationDurableExercise.id)
         XCTAssertEqual(hydratedPreferences.first?.templateDayPosition, 1)
         XCTAssertEqual(hydratedOverrides.first?.exerciseId, destinationDurableExercise.id)
+    }
+
+    func testRecoveryResetsInvalidPersistentClusterCollisionAndKeepsHistory() throws {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let sourceContainer = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let sourceContext = ModelContext(sourceContainer)
+        let sourceCatalog = try BootstrapDataService.ensureExerciseCatalog(
+            modelContext: sourceContext
+        )
+        let sourceTemplate = try FixedCycleClusterProgramService.makeTemplate(
+            exercises: sourceCatalog
+        )
+        let sourceCycle = ActiveCycleInstance(templateId: sourceTemplate.id)
+        let states = FixedCycleClusterProgramService.makeRotationStates(
+            cycleInstanceId: sourceCycle.id,
+            templateId: sourceTemplate.id
+        )
+        let selection = try FixedCycleClusterProgramService.selection(
+            cluster: .cluster1,
+            template: sourceTemplate,
+            cycleInstanceId: sourceCycle.id,
+            states: states
+        )
+        let slot = try XCTUnwrap(CycleOrdering.sortedSlots(selection.day.slots).first)
+        let futureCluster2Exercise = try XCTUnwrap(
+            sourceCatalog.first { $0.name == "Stiff-Leg Deadlift" }
+        )
+        let sourceCanonicalExercise = try XCTUnwrap(
+            sourceCatalog.first { $0.id == slot.exerciseId }
+        )
+        let preference = ClusterExercisePreference(
+            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            templateDayPosition: selection.day.position,
+            slotPosition: slot.position,
+            exerciseId: futureCluster2Exercise.id,
+            updatedAt: Date(timeIntervalSince1970: 900)
+        )
+        let finishedAt = Date(timeIntervalSince1970: 1_000)
+        let sourceSession = Session(
+            cycleInstanceId: sourceCycle.id,
+            cycleDayIndex: selection.day.position,
+            cycleNameSnapshot: sourceTemplate.name,
+            dayLabelSnapshot: selection.day.label,
+            finishedAt: finishedAt,
+            status: .completed
+        )
+        let completedSet = SetEntry(
+            sessionId: sourceSession.id,
+            exerciseId: slot.exerciseId,
+            setIndex: 1,
+            weight: 55,
+            reps: 9,
+            isLocked: true
+        )
+        let metadata = SessionExportService.fixedCycleMetadata(
+            session: sourceSession,
+            template: sourceTemplate,
+            day: selection.day,
+            exercises: sourceCatalog,
+            setEntries: [completedSet],
+            readiness: [],
+            overrides: [],
+            clusterExercisePreferences: [preference]
+        )
+        let payload = SessionExportService.ExportPayload(
+            session_id: sourceSession.id.uuidString,
+            cycle_name: sourceTemplate.name,
+            cycle_day_index: selection.day.position,
+            date: ISO8601DateFormatter().string(from: finishedAt),
+            exercises: [
+                .init(
+                    exercise_id: slot.exerciseId.uuidString,
+                    exercise_name: sourceCanonicalExercise.name,
+                    muscle: slot.muscle.rawValue,
+                    sets: [.init(set_index: 1, weight: 55, reps: 9)]
+                )
+            ],
+            workout_kind: "rotation",
+            fixed_cycle: metadata
+        )
+
+        let destinationContainer = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        let destinationContext = ModelContext(destinationContainer)
+        let destinationCatalog = try BootstrapDataService.ensureExerciseCatalog(
+            modelContext: destinationContext
+        )
+        let destinationTemplate = try FixedCycleClusterProgramService.makeTemplate(
+            exercises: destinationCatalog
+        )
+        let destinationCanonicalExercise = try XCTUnwrap(
+            destinationCatalog.first { $0.name == sourceCanonicalExercise.name }
+        )
+        destinationTemplate.id = sourceTemplate.id
+        let destinationCycle = ActiveCycleInstance(
+            id: sourceCycle.id,
+            templateId: destinationTemplate.id
+        )
+        let unrelatedVersionPreference = ClusterExercisePreference(
+            programVersionID: "unrelated-program.v9",
+            templateDayPosition: 99,
+            slotPosition: 99,
+            exerciseId: futureCluster2Exercise.id
+        )
+        let newerOrphanedCurrentPreference = ClusterExercisePreference(
+            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            templateDayPosition: 99,
+            slotPosition: 99,
+            exerciseId: destinationCanonicalExercise.id,
+            updatedAt: finishedAt.addingTimeInterval(100)
+        )
+        destinationContext.insert(destinationTemplate)
+        destinationContext.insert(destinationCycle)
+        destinationContext.insert(unrelatedVersionPreference)
+        destinationContext.insert(newerOrphanedCurrentPreference)
+        try destinationContext.save()
+
+        let result = try BootstrapDataService.reconcileWorkoutExports(
+            [payload],
+            cycle: destinationCycle,
+            modelContext: destinationContext
+        )
+        XCTAssertEqual(result.imported, 1)
+        XCTAssertEqual(result.resetInvalidClusterExercisePreferences, 2)
+        XCTAssertEqual(
+            try destinationContext.fetchCount(FetchDescriptor<Session>()),
+            1
+        )
+        let recoveredSet = try XCTUnwrap(
+            try destinationContext.fetch(FetchDescriptor<SetEntry>()).first {
+                $0.sessionId == sourceSession.id
+                    && $0.exerciseId == destinationCanonicalExercise.id
+            }
+        )
+        XCTAssertEqual(recoveredSet.weight, 55)
+        XCTAssertEqual(recoveredSet.reps, 9)
+        XCTAssertTrue(recoveredSet.isLocked)
+        let recoveredPreferences = try destinationContext.fetch(
+            FetchDescriptor<ClusterExercisePreference>()
+        )
+        XCTAssertFalse(recoveredPreferences.contains {
+            $0.programVersionID == FixedCycleClusterProgramService.programVersionID
+        })
+        XCTAssertEqual(
+            recoveredPreferences.first {
+                $0.programVersionID == unrelatedVersionPreference.programVersionID
+            }?.id,
+            unrelatedVersionPreference.id
+        )
+        XCTAssertNoThrow(try FixedCycleClusterProgramService.validatePersistentExercisePreferences(
+            template: destinationTemplate,
+            exerciseIDsByPreferenceKey: [:]
+        ))
+        XCTAssertFalse(destinationContext.hasChanges)
     }
 
     func testRecoveryIngestsOldCustomSwapDefinitionAfterNewerResetSnapshot() throws {

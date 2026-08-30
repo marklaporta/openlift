@@ -516,6 +516,8 @@ enum FixedCycleWorkoutService {
     static func applyClusterSubstitution(
         scope: ClusterExerciseSwapScope,
         sessionId: UUID,
+        template: CycleTemplate,
+        activeSelections: [FixedCycleClusterProgramService.Selection],
         selection: FixedCycleClusterProgramService.Selection,
         slot: CycleSlot,
         currentExerciseId: UUID,
@@ -533,8 +535,6 @@ enum FixedCycleWorkoutService {
         guard !currentEntries.contains(where: { $0.isLocked && $0.reps > 0 }) else {
             throw FixedCycleWorkoutError.cannotReplacePerformedExercise
         }
-        currentEntries.forEach(modelContext.delete)
-
         let preferenceKey = ClusterExercisePreference.key(
             programVersionID: FixedCycleClusterProgramService.programVersionID,
             templateDayPosition: selection.day.position,
@@ -546,6 +546,35 @@ enum FixedCycleWorkoutService {
             templateDayPosition: selection.day.position,
             slotPosition: slot.position
         )
+        var projectedPreferences = FixedCycleClusterProgramService
+            .persistentExerciseIDsByKey(preferences: preferences)
+        var projectedOverrides = exerciseIDsByOverrideKey(
+            sessionId: sessionId,
+            overrides: overrides
+        )
+        switch scope {
+        case .workoutOnly:
+            projectedOverrides[overrideKey] = replacementExerciseId
+        case .exactSlotGoingForward:
+            projectedPreferences[preferenceKey] = replacementExerciseId
+            projectedOverrides.removeValue(forKey: overrideKey)
+            do {
+                try FixedCycleClusterProgramService.validatePersistentExercisePreferences(
+                    template: template,
+                    exerciseIDsByPreferenceKey: projectedPreferences
+                )
+            } catch FixedCycleClusterProgramService.ProgramError.exerciseCollision {
+                throw FixedCycleWorkoutError.exerciseAlreadyExists
+            }
+        }
+        try validateActiveClusterExerciseIDs(
+            selections: activeSelections,
+            sessionId: sessionId,
+            preferenceExerciseIDsByKey: projectedPreferences,
+            overrideExerciseIDsByKey: projectedOverrides
+        )
+
+        currentEntries.forEach(modelContext.delete)
 
         switch scope {
         case .workoutOnly:
@@ -585,6 +614,8 @@ enum FixedCycleWorkoutService {
 
     static func resetClusterSlotToProgramDefault(
         sessionId: UUID,
+        template: CycleTemplate,
+        activeSelections: [FixedCycleClusterProgramService.Selection],
         selection: FixedCycleClusterProgramService.Selection,
         slot: CycleSlot,
         currentExerciseId: UUID,
@@ -599,7 +630,6 @@ enum FixedCycleWorkoutService {
         guard !currentEntries.contains(where: { $0.isLocked && $0.reps > 0 }) else {
             throw FixedCycleWorkoutError.cannotReplacePerformedExercise
         }
-        currentEntries.forEach(modelContext.delete)
         let preferenceKey = ClusterExercisePreference.key(
             programVersionID: FixedCycleClusterProgramService.programVersionID,
             templateDayPosition: selection.day.position,
@@ -611,8 +641,83 @@ enum FixedCycleWorkoutService {
             templateDayPosition: selection.day.position,
             slotPosition: slot.position
         )
+        var projectedPreferences = FixedCycleClusterProgramService
+            .persistentExerciseIDsByKey(preferences: preferences)
+        var projectedOverrides = exerciseIDsByOverrideKey(
+            sessionId: sessionId,
+            overrides: overrides
+        )
+        projectedPreferences.removeValue(forKey: preferenceKey)
+        projectedOverrides.removeValue(forKey: overrideKey)
+        do {
+            try FixedCycleClusterProgramService.validatePersistentExercisePreferences(
+                template: template,
+                exerciseIDsByPreferenceKey: projectedPreferences
+            )
+        } catch FixedCycleClusterProgramService.ProgramError.exerciseCollision {
+            throw FixedCycleWorkoutError.exerciseAlreadyExists
+        }
+        try validateActiveClusterExerciseIDs(
+            selections: activeSelections,
+            sessionId: sessionId,
+            preferenceExerciseIDsByKey: projectedPreferences,
+            overrideExerciseIDsByKey: projectedOverrides
+        )
+
+        currentEntries.forEach(modelContext.delete)
         preferences.filter { $0.key == preferenceKey }.forEach(modelContext.delete)
         overrides.filter { $0.key == overrideKey }.forEach(modelContext.delete)
+    }
+
+    private static func exerciseIDsByOverrideKey(
+        sessionId: UUID,
+        overrides: [ClusterExerciseOccurrenceOverride]
+    ) -> [String: UUID] {
+        Dictionary(
+            overrides
+                .filter {
+                    $0.sessionId == sessionId
+                        && $0.programVersionID
+                            == FixedCycleClusterProgramService.programVersionID
+                }
+                .map { ($0.key, $0.exerciseId) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    private static func validateActiveClusterExerciseIDs(
+        selections: [FixedCycleClusterProgramService.Selection],
+        sessionId: UUID,
+        preferenceExerciseIDsByKey: [String: UUID],
+        overrideExerciseIDsByKey: [String: UUID]
+    ) throws {
+        guard selections.count == FixedCycleClusterProgramService.Cluster.allCases.count,
+              Set(selections.map(\.cluster)) == Set(
+                  FixedCycleClusterProgramService.Cluster.allCases
+              ) else {
+            throw FixedCycleClusterProgramService.ProgramError.invalidClusterContext
+        }
+        let exerciseIDs = selections.flatMap { selection in
+            CycleOrdering.sortedSlots(selection.day.slots).map { slot in
+                let preferenceKey = ClusterExercisePreference.key(
+                    programVersionID: FixedCycleClusterProgramService.programVersionID,
+                    templateDayPosition: selection.day.position,
+                    slotPosition: slot.position
+                )
+                let overrideKey = ClusterExerciseOccurrenceOverride.key(
+                    sessionId: sessionId,
+                    programVersionID: FixedCycleClusterProgramService.programVersionID,
+                    templateDayPosition: selection.day.position,
+                    slotPosition: slot.position
+                )
+                return overrideExerciseIDsByKey[overrideKey]
+                    ?? preferenceExerciseIDsByKey[preferenceKey]
+                    ?? slot.exerciseId
+            }
+        }
+        guard Set(exerciseIDs).count == exerciseIDs.count else {
+            throw FixedCycleWorkoutError.exerciseAlreadyExists
+        }
     }
 
     @discardableResult
@@ -2350,6 +2455,7 @@ struct WorkoutView: View {
             }
             guard entryBufferCoordinator.flushAll() else { return }
             guard let session = sessions.first(where: { $0.id == pending.sessionId }),
+                  let template = activeTemplate,
                   let replacement = exercises.first(where: {
                       $0.id == pending.replacementExerciseId
                   }) else { return }
@@ -2375,6 +2481,8 @@ struct WorkoutView: View {
             try FixedCycleWorkoutService.applyClusterSubstitution(
                 scope: scope,
                 sessionId: pending.sessionId,
+                template: template,
+                activeSelections: clusterSelections,
                 selection: pending.selection,
                 slot: pending.slot,
                 currentExerciseId: pending.currentExerciseId,
@@ -2416,12 +2524,15 @@ struct WorkoutView: View {
             }
             guard entryBufferCoordinator.flushAll() else { return }
             guard let session = sessions.first(where: { $0.id == sessionId }),
+                  let template = activeTemplate,
                   let canonical = exercises.first(where: { $0.id == slot.exerciseId }) else {
                 return
             }
             let oldCount = max(1, entries(for: currentExerciseId, sessionId: sessionId).count)
             try FixedCycleWorkoutService.resetClusterSlotToProgramDefault(
                 sessionId: sessionId,
+                template: template,
+                activeSelections: clusterSelections,
                 selection: selection,
                 slot: slot,
                 currentExerciseId: currentExerciseId,
