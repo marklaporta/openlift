@@ -2198,6 +2198,61 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).count, 1)
     }
 
+    func testWorkoutExportReconciliationRefusesDirtyCallerContextWithoutMutation() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(
+            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+        )
+        let context = ModelContext(container)
+        let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let template = try FixedCycleClusterProgramService.makeTemplate(exercises: catalog)
+        let cycle = ActiveCycleInstance(templateId: template.id)
+        context.insert(template)
+        context.insert(cycle)
+        try context.save()
+
+        let exercise = try XCTUnwrap(catalog.first { $0.primaryMuscle == .chest })
+        let sessionID = UUID()
+        cycle.currentDayIndex = 4
+
+        XCTAssertThrowsError(try BootstrapDataService.reconcileWorkoutExports(
+            [clusteredExport(
+                sessionID: sessionID,
+                template: template,
+                cycle: cycle,
+                exercise: exercise,
+                absoluteStep: 0,
+                pointerCount: 1,
+                date: Date(timeIntervalSince1970: 1_050)
+            )],
+            cycle: cycle,
+            modelContext: context
+        )) { error in
+            XCTAssertEqual(
+                error as? BootstrapDataService.WorkoutImportError,
+                .pendingModelChanges
+            )
+        }
+
+        XCTAssertTrue(context.hasChanges)
+        XCTAssertEqual(cycle.currentDayIndex, 4)
+        XCTAssertTrue(
+            try context.fetch(FetchDescriptor<Session>()).allSatisfy { $0.id != sessionID }
+        )
+
+        let verificationContext = ModelContext(container)
+        XCTAssertEqual(
+            try verificationContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+                .first { $0.id == cycle.id }?.currentDayIndex,
+            0
+        )
+        XCTAssertTrue(
+            try verificationContext.fetch(FetchDescriptor<Session>()).allSatisfy {
+                $0.id != sessionID
+            }
+        )
+        context.rollback()
+    }
+
     func testV4HydrationRejectsOccurrenceGapsAndConflicts() throws {
         func fixture() throws -> (
             ModelContext, [Exercise], CycleTemplate, ActiveCycleInstance
@@ -2218,8 +2273,16 @@ final class ClusteredProgramTests: XCTestCase {
         do {
             let (context, catalog, template, cycle) = try fixture()
             let exercise = try XCTUnwrap(catalog.first { $0.primaryMuscle == .chest })
+            let sessionID = UUID()
+            let occurrenceID = UUID()
+            cycle.currentDayIndex = 4
+            XCTAssertTrue(context.hasChanges)
+            try context.save()
+            XCTAssertFalse(context.hasChanges)
             XCTAssertThrowsError(try BootstrapDataService.reconcileWorkoutExports(
                 [clusteredExport(
+                    sessionID: sessionID,
+                    occurrenceID: occurrenceID,
                     template: template,
                     cycle: cycle,
                     exercise: exercise,
@@ -2234,13 +2297,74 @@ final class ClusteredProgramTests: XCTestCase {
                     return XCTFail("Unexpected error: \(error)")
                 }
             }
+
+            XCTAssertFalse(context.hasChanges)
+            XCTAssertEqual(cycle.currentDayIndex, 4)
+            XCTAssertTrue(
+                try context.fetch(FetchDescriptor<Session>()).allSatisfy { $0.id != sessionID }
+            )
+            XCTAssertTrue(
+                try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).allSatisfy {
+                    $0.id != occurrenceID
+                }
+            )
+            XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterRotationState>()).isEmpty)
+
+            let verificationContext = ModelContext(context.container)
+            XCTAssertEqual(
+                try verificationContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+                    .first { $0.id == cycle.id }?.currentDayIndex,
+                4
+            )
+            XCTAssertTrue(
+                try verificationContext.fetch(FetchDescriptor<Session>()).allSatisfy {
+                    $0.id != sessionID
+                }
+            )
+
+            let retryResult = try BootstrapDataService.reconcileWorkoutExports(
+                [clusteredExport(
+                    sessionID: sessionID,
+                    occurrenceID: occurrenceID,
+                    template: template,
+                    cycle: cycle,
+                    exercise: exercise,
+                    absoluteStep: 0,
+                    pointerCount: 1,
+                    date: Date(timeIntervalSince1970: 1_101)
+                )],
+                cycle: cycle,
+                modelContext: context
+            )
+            XCTAssertEqual(retryResult.imported, 1)
+            XCTAssertFalse(context.hasChanges)
+            XCTAssertEqual(
+                try context.fetch(FetchDescriptor<Session>()).filter { $0.id == sessionID }.count,
+                1
+            )
+            XCTAssertEqual(
+                try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+                    .filter { $0.id == occurrenceID }.count,
+                1
+            )
+            XCTAssertEqual(
+                try context.fetch(FetchDescriptor<ClusterRotationState>())
+                    .first { $0.clusterID == "cluster-1" }?.positionIndex,
+                1
+            )
         }
 
         do {
             let (context, catalog, template, cycle) = try fixture()
             let exercise = try XCTUnwrap(catalog.first { $0.primaryMuscle == .chest })
+            let firstSessionID = UUID()
+            let secondSessionID = UUID()
+            let firstOccurrenceID = UUID()
+            let secondOccurrenceID = UUID()
             let exports = [
                 clusteredExport(
+                    sessionID: firstSessionID,
+                    occurrenceID: firstOccurrenceID,
                     template: template,
                     cycle: cycle,
                     exercise: exercise,
@@ -2249,6 +2373,8 @@ final class ClusteredProgramTests: XCTestCase {
                     date: Date(timeIntervalSince1970: 1_200)
                 ),
                 clusteredExport(
+                    sessionID: secondSessionID,
+                    occurrenceID: secondOccurrenceID,
                     template: template,
                     cycle: cycle,
                     exercise: exercise,
@@ -2266,7 +2392,202 @@ final class ClusteredProgramTests: XCTestCase {
                     return XCTFail("Unexpected error: \(error)")
                 }
             }
+            XCTAssertFalse(context.hasChanges)
+            XCTAssertTrue(
+                try context.fetch(FetchDescriptor<Session>()).allSatisfy {
+                    $0.id != firstSessionID && $0.id != secondSessionID
+                }
+            )
+            XCTAssertTrue(
+                try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).allSatisfy {
+                    $0.id != firstOccurrenceID && $0.id != secondOccurrenceID
+                }
+            )
+            XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterRotationState>()).isEmpty)
         }
+    }
+
+    func testExplicitBootstrapChangesSurviveRecoveryFailureWithoutImportRows() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(
+            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+        )
+        let context = ModelContext(container)
+        let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let oldTemplate = CycleTemplate(name: "Legacy Bootstrap Template", days: [])
+        let replacementTemplate = try FixedCycleClusterProgramService.makeTemplate(
+            exercises: catalog
+        )
+        let cycle = ActiveCycleInstance(templateId: oldTemplate.id)
+        let draft = Session(
+            cycleInstanceId: cycle.id,
+            cycleDayIndex: 0,
+            createdAt: Date(timeIntervalSince1970: 900),
+            status: .draft
+        )
+        let oldPointer = ClusterRotationState(
+            cycleInstanceId: cycle.id,
+            templateId: oldTemplate.id,
+            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            clusterID: FixedCycleClusterProgramService.Cluster.cluster1.rawValue,
+            positionIndex: 5,
+            isDerived: false
+        )
+        context.insert(oldTemplate)
+        context.insert(replacementTemplate)
+        context.insert(cycle)
+        context.insert(draft)
+        context.insert(oldPointer)
+        try context.save()
+
+        context.delete(draft)
+        context.delete(oldPointer)
+        cycle.templateId = replacementTemplate.id
+        let replacementPointers = FixedCycleClusterProgramService.makeRotationStates(
+            cycleInstanceId: cycle.id,
+            templateId: replacementTemplate.id
+        )
+        replacementPointers.forEach(context.insert)
+        XCTAssertTrue(context.hasChanges)
+        try context.save()
+        XCTAssertFalse(context.hasChanges)
+
+        let exercise = try XCTUnwrap(catalog.first { $0.primaryMuscle == .chest })
+        let importedSessionID = UUID()
+        let importedOccurrenceID = UUID()
+        XCTAssertThrowsError(try BootstrapDataService.reconcileWorkoutExports(
+            [clusteredExport(
+                sessionID: importedSessionID,
+                occurrenceID: importedOccurrenceID,
+                template: replacementTemplate,
+                cycle: cycle,
+                exercise: exercise,
+                absoluteStep: 1,
+                pointerCount: 2,
+                date: Date(timeIntervalSince1970: 1_250)
+            )],
+            cycle: cycle,
+            modelContext: context
+        )) { error in
+            guard case .occurrenceGap = error as? BootstrapDataService.ClusteredProgramRecoveryError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertFalse(context.hasChanges)
+        let verificationContext = ModelContext(container)
+        XCTAssertEqual(
+            try verificationContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+                .first { $0.id == cycle.id }?.templateId,
+            replacementTemplate.id
+        )
+        XCTAssertTrue(
+            try verificationContext.fetch(FetchDescriptor<Session>()).allSatisfy {
+                $0.id != draft.id && $0.id != importedSessionID
+            }
+        )
+        XCTAssertTrue(
+            try verificationContext.fetch(FetchDescriptor<ClusterRotationState>())
+                .allSatisfy { $0.id != oldPointer.id }
+        )
+        XCTAssertEqual(
+            try verificationContext.fetch(FetchDescriptor<ClusterRotationState>())
+                .filter { $0.cycleInstanceId == cycle.id }.count,
+            3
+        )
+        XCTAssertTrue(
+            try verificationContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+                .allSatisfy { $0.id != importedOccurrenceID }
+        )
+    }
+
+    func testWorkoutExportReconciliationRollsBackAfterFinalSaveFailure() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openlift-atomic-recovery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let storeURL = root.appendingPathComponent("default.store")
+        let configurationName = "AtomicRecoverySaveFailure"
+        let cycleID: UUID
+        let exerciseID: UUID
+        let exerciseName: String
+
+        do {
+            let writableConfiguration = ModelConfiguration(
+                configurationName,
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+            let writableContainer = try ModelContainer(
+                for: schema,
+                configurations: [writableConfiguration]
+            )
+            let writableContext = ModelContext(writableContainer)
+            let catalog = try BootstrapDataService.ensureExerciseCatalog(
+                modelContext: writableContext
+            )
+            let exercise = try XCTUnwrap(catalog.first { $0.primaryMuscle == .chest })
+            let cycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 0)
+            writableContext.insert(cycle)
+            try writableContext.save()
+            cycleID = cycle.id
+            exerciseID = exercise.id
+            exerciseName = exercise.name
+        }
+
+        let readOnlyConfiguration = ModelConfiguration(
+            configurationName,
+            schema: schema,
+            url: storeURL,
+            allowsSave: false,
+            cloudKitDatabase: .none
+        )
+        let readOnlyContainer = try ModelContainer(
+            for: schema,
+            configurations: [readOnlyConfiguration]
+        )
+
+        let context = ModelContext(readOnlyContainer)
+        let cycle = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<ActiveCycleInstance>()).first { $0.id == cycleID }
+        )
+        let sessionID = UUID()
+        let payload = SessionExportService.ExportPayload(
+            session_id: sessionID.uuidString,
+            cycle_name: "Atomic Recovery Fixture",
+            cycle_day_index: 0,
+            date: "2026-08-30T12:00:00Z",
+            exercises: [
+                .init(
+                    exercise_id: exerciseID.uuidString,
+                    exercise_name: exerciseName,
+                    muscle: MuscleGroup.chest.rawValue,
+                    sets: [.init(set_index: 1, weight: 50, reps: 10)]
+                )
+            ],
+            workout_kind: "ad_hoc"
+        )
+
+        XCTAssertThrowsError(try BootstrapDataService.reconcileWorkoutExports(
+            [payload],
+            cycle: cycle,
+            modelContext: context
+        ))
+        XCTAssertFalse(context.hasChanges)
+
+        let verificationContext = ModelContext(readOnlyContainer)
+        XCTAssertTrue(
+            try verificationContext.fetch(FetchDescriptor<Session>()).allSatisfy {
+                $0.id != sessionID
+            }
+        )
+        XCTAssertTrue(
+            try verificationContext.fetch(FetchDescriptor<SetEntry>()).allSatisfy {
+                $0.sessionId != sessionID
+            }
+        )
     }
 
     func testLegacyV3ExportCannotInventClusterIdentityOrPointers() throws {

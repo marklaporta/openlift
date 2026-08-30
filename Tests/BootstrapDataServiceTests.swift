@@ -589,6 +589,7 @@ final class BootstrapDataServiceTests: XCTestCase {
         let context = ModelContext(container)
         let cycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 0)
         context.insert(cycle)
+        try context.save()
 
         let result = try BootstrapDataService.reconcileWorkoutExports(
             [payload],
