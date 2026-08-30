@@ -109,6 +109,13 @@ them as one global day rotation. It presents the current selection from all
 three clusters together. Each table column advances independently; rows are
 identity mappings, not synchronized whole-workout days:
 
+The Workout tab may replace a movement for only the current workout or for that
+exact rotation slot going forward. The latter scope means program version plus
+canonical template-day position plus slot position; it does not spill into a
+different raw day that happens to share a shortened progression identity.
+These choices are overlays, not template edits. Resetting a durable preference
+restores the canonical movement, and locked positive-rep work blocks replacement.
+
 | Identity | Cluster 1: chest + back | Cluster 2: legs + triceps + biceps | Cluster 3: shoulders + calves/forearms |
 |---|---|---|---|
 | A | Incline Dumbbell Press; Lat Pulldown | Belt Squat; Overhead Cable Extension; Incline Curl | Super ROM Dumbbell Lateral Raise; Stair Calves |

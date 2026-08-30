@@ -1203,6 +1203,78 @@ final class WorkoutEntryEditingTests: XCTestCase {
         XCTAssertEqual(WorkoutEntryEditing.displayWeight(entries[0].weight), 22.6)
     }
 
+    func testRapidNumericEditsKeepTheLastDecimalAndRepValues() {
+        var entries = [
+            WorkoutEntryEditing.EntryState(setIndex: 1, weight: 0, reps: 0, isLocked: false),
+            WorkoutEntryEditing.EntryState(setIndex: 2, weight: 0, reps: 0, isLocked: false)
+        ]
+
+        for value in [2.0, 22.0, 22.5] {
+            WorkoutEntryEditing.applyWeightEdit(to: &entries, setIndex: 1, newWeight: value)
+        }
+        for value in [1, 12] {
+            WorkoutEntryEditing.applyRepsEdit(to: &entries, setIndex: 1, newReps: value)
+        }
+
+        XCTAssertEqual(entries[0].weight, 22.5)
+        XCTAssertEqual(entries[0].reps, 12)
+        XCTAssertEqual(entries[1].weight, 22.5, "Sibling autofill follows the final buffered weight")
+    }
+
+    @MainActor
+    func testStructuralActionCoordinatorFlushesEveryRegisteredEntryBuffer() {
+        let coordinator = FixedCycleEntryBufferCoordinator()
+        var flushed: [String] = []
+        coordinator.register(key: "first") {
+            flushed.append("first")
+            return true
+        }
+        coordinator.register(key: "second") {
+            flushed.append("second")
+            return true
+        }
+
+        XCTAssertTrue(coordinator.flushAll())
+        XCTAssertEqual(Set(flushed), Set(["first", "second"]))
+
+        coordinator.register(key: "second") { false }
+        XCTAssertFalse(coordinator.flushAll())
+        coordinator.unregister(key: "second")
+        XCTAssertTrue(coordinator.flushAll())
+    }
+
+    func testDraftExportEligibilityRejectsCanceledStaleOrFinishedSessionWrites() {
+        let sessionID = UUID()
+        XCTAssertTrue(FixedCycleDraftExportEligibility.canWrite(
+            scheduledGeneration: 3,
+            currentGeneration: 3,
+            scheduledSessionId: sessionID,
+            currentDraftSessionId: sessionID,
+            isCancelled: false
+        ))
+        XCTAssertFalse(FixedCycleDraftExportEligibility.canWrite(
+            scheduledGeneration: 2,
+            currentGeneration: 3,
+            scheduledSessionId: sessionID,
+            currentDraftSessionId: sessionID,
+            isCancelled: false
+        ))
+        XCTAssertFalse(FixedCycleDraftExportEligibility.canWrite(
+            scheduledGeneration: 3,
+            currentGeneration: 3,
+            scheduledSessionId: sessionID,
+            currentDraftSessionId: nil,
+            isCancelled: false
+        ))
+        XCTAssertFalse(FixedCycleDraftExportEligibility.canWrite(
+            scheduledGeneration: 3,
+            currentGeneration: 3,
+            scheduledSessionId: sessionID,
+            currentDraftSessionId: sessionID,
+            isCancelled: true
+        ))
+    }
+
     func testWeightEditCarriesForwardFromLatestOverrideOnly() {
         var entries = [
             WorkoutEntryEditing.EntryState(setIndex: 1, weight: 0, reps: 0, isLocked: false),

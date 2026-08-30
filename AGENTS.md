@@ -3,7 +3,7 @@
 ## Project Overview
 
 OpenLift is a local-first iOS hypertrophy tracker built with SwiftUI, SwiftData,
-and Apple frameworks only. It supports Fixed Cycle, the V13 independently
+and Apple frameworks only. It supports Fixed Cycle, the V14 independently
 advancing clustered program, Adaptive Floating, ad hoc logging, resistance
 profiles, and export-backed recovery. The deployment target is iOS 17+.
 
@@ -23,8 +23,8 @@ Key source files:
 
 | File | Responsibility |
 |---|---|
-| `OpenLiftApp.swift` | App entry, V13 container startup, explicit rollout/repair gates |
-| `OpenLiftSchema.swift` | Additive V1-V13 schemas and migration plan |
+| `OpenLiftApp.swift` | App entry, V14 container startup, explicit rollout/repair gates |
+| `OpenLiftSchema.swift` | Additive V1-V14 schemas and migration plan |
 | `Models.swift` | SwiftData models and supporting value types |
 | `BootstrapDataService.swift` | Catalog/template seeding, hydration, repairs, clustered program/rollout |
 | `WorkoutView.swift` | Fixed Cycle draft entry, clustered completion, prefill, finish/export |
@@ -39,14 +39,19 @@ Key source files:
 
 ## Current Clustered Fixed Cycle
 
-V13 adds exactly two parallel entities without changing legacy session/set
-shapes:
+V13 adds two parallel state/evidence entities without changing legacy
+session/set shapes:
 
 - mutable `ClusterRotationState`: one authoritative next-position state for each
   whole cluster
 - immutable `ClusterOccurrenceRecord`: one completed-cluster snapshot containing
   structural step, stable progression keys, performed/skipped status, and
   resistance profiles
+
+V14 adds exact-slot substitution overlays without changing the reserved
+template: durable `ClusterExercisePreference` rows and session-scoped
+`ClusterExerciseOccurrenceOverride` rows. Resolution is occurrence override,
+then exact program-version/day/slot preference, then canonical exercise.
 
 All three current clusters appear in one draft. Their rotation lengths are
 3/6/6. Completing a cluster advances only its own state; skipped rows do not

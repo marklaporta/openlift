@@ -43,7 +43,8 @@ The main SwiftData models are defined in [`Models.swift`](../Sources/Models.swif
 - `FixedCycleReadinessObservation`, `FixedCycleReadinessResponse`
 - `FixedCycleOccurrenceOverride`
 - `ExerciseResistanceProfile`
-- `ClusterRotationState` and `ClusterOccurrenceRecord`
+- `ClusterRotationState`, `ClusterOccurrenceRecord`,
+  `ClusterExercisePreference`, and `ClusterExerciseOccurrenceOverride`
 
 Design intent:
 
@@ -98,6 +99,17 @@ keys, performed/skipped status, and resistance profiles, then advances only
 that cluster's state. The reserved program template is immutable, skipped sets
 do not prevent advancement, and no subsection inside a cluster advances
 independently.
+
+### Clustered Exercise Overlays (V14)
+
+V14 keeps the reserved clustered template immutable and adds two parallel
+overlays. `ClusterExercisePreference` applies to one exact program version,
+canonical template-day position, and slot position across future sessions.
+`ClusterExerciseOccurrenceOverride` applies only to one session and the same
+exact day/slot identity. Resolution order is occurrence override, persistent
+preference, then canonical exercise. The structural progression key never
+changes, while prefill/history remain filtered by the resolved exercise ID.
+Completed occurrences freeze the actual resolved exercise as evidence.
 
 Progression keys are versioned structural identities, not template-day lookup
 heuristics. Shorter internal rotations are derived from the cluster step, while
@@ -158,6 +170,12 @@ The Workout tab owns:
 - workout completion
 - draft export snapshots
 - malformed-entry repair logic
+
+Fixed Cycle numeric fields edit stable local buffers. A roughly 200 ms idle
+coalescer, focus loss, lock, disappearance, and app backgrounding flush one
+SwiftData save; lock always flushes before validation. Draft export sleeps
+before constructing its immutable snapshot, then serializes JSON and performs
+local/iCloud file I/O on a serial actor rather than the main actor.
 
 Relevant code:
 

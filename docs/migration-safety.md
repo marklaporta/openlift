@@ -34,6 +34,12 @@ Opening a V12 store under V13 preserves all legacy rows and creates neither
 record. Schema migration never assigns a legacy workout to a new progression
 identity and never activates the clustered program.
 
+V14 is additive as well. It adds `ClusterExercisePreference` and
+`ClusterExerciseOccurrenceOverride` as parallel overlay entities. Opening a V13
+store preserves rotation state and occurrence history and creates no inferred
+substitutions. The persistent key is exact program version + canonical template
+day position + slot position; it is deliberately not a progression key.
+
 The clustered architecture has no persisted draft-context or sub-rotation
 entity. One `ClusterRotationState` owns each whole cluster. A completed cluster's
 `ClusterOccurrenceRecord` freezes its structural step, stable progression keys,
@@ -80,7 +86,7 @@ or upgrading the app never runs either path.
 ## Clustered Hypertrophy one-time rollout
 
 `BootstrapDataService.prepareClusteredProgramRollout` is a separate explicit,
-backup-gated operation. Merely installing or launching a V13 build performs only
+backup-gated operation. Merely installing or launching a V14 build performs only
 the additive schema migration. The clustered template is created and selected
 only when the app launches with
 `OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT`.
@@ -195,7 +201,7 @@ represented by fake cycle IDs or sentinel day indices.
 ## Current migration gates
 
 The maintained suite covers unversioned-store recognition, every additive schema
-stage through V13, full legacy-entity readback, rollback readback, deliberate
+stage through V14, full legacy-entity readback, rollback readback, deliberate
 migration failure with unchanged file hashes, clustered rollout idempotency,
 three-state hydration, immutable occurrence recovery, progression-key isolation,
 and completed-cluster export filtering. The real-store migration helper works on

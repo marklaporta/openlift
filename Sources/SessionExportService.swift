@@ -89,6 +89,8 @@ enum SessionExportService {
         let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
         let clusterOccurrences = try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
         let clusterRotationStates = try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
+        let clusterExercisePreferences = try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>())
+        let clusterExerciseOverrides = try modelContext.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>())
         let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
 
         for session in retryableSessions {
@@ -107,7 +109,9 @@ enum SessionExportService {
                 overrides: fixedOverrides,
                 snapshots: fixedSnapshots,
                 clusterOccurrences: clusterOccurrences,
-                clusterRotationStates: clusterRotationStates
+                clusterRotationStates: clusterRotationStates,
+                clusterExercisePreferences: clusterExercisePreferences,
+                clusterExerciseOverrides: clusterExerciseOverrides
             )
             do {
                 _ = try exportAndTrack(
@@ -167,6 +171,8 @@ enum SessionExportService {
         let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
         let clusterOccurrences = try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
         let clusterRotationStates = try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
+        let clusterExercisePreferences = try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>())
+        let clusterExerciseOverrides = try modelContext.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>())
         let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
         let cycleName = exportCycleName(
             for: session,
@@ -183,7 +189,9 @@ enum SessionExportService {
             overrides: fixedOverrides,
             snapshots: fixedSnapshots,
             clusterOccurrences: clusterOccurrences,
-            clusterRotationStates: clusterRotationStates
+            clusterRotationStates: clusterRotationStates,
+            clusterExercisePreferences: clusterExercisePreferences,
+            clusterExerciseOverrides: clusterExerciseOverrides
         )
         return try exportAndTrack(
             session: session,
@@ -368,6 +376,32 @@ enum SessionExportService {
         let is_derived: Bool
     }
 
+    struct ClusterExercisePreferencePayload: Codable, Equatable, Sendable {
+        let program_version_id: String
+        let template_day_position: Int
+        let slot_position: Int
+        let exercise_id: String
+        let exercise_name: String
+        let muscle: String
+        let exercise_type: String
+        let equipment: String
+        let updated_at: String
+    }
+
+    struct ClusterExerciseOverridePayload: Codable, Equatable, Sendable {
+        let override_id: String
+        let session_id: String
+        let program_version_id: String
+        let template_day_position: Int
+        let slot_position: Int
+        let exercise_id: String
+        let exercise_name: String
+        let muscle: String
+        let exercise_type: String
+        let equipment: String
+        let created_at: String
+    }
+
     struct FixedCycleMetadata: Codable, Equatable, Sendable {
         let schema_version: Int
         let template_id: String
@@ -382,6 +416,42 @@ enum SessionExportService {
         let absolute_cluster_step: Int?
         let cluster_occurrences: [ClusterOccurrencePayload]?
         let cluster_rotation_states: [ClusterRotationStatePayload]?
+        let cluster_exercise_preferences: [ClusterExercisePreferencePayload]?
+        let cluster_exercise_overrides: [ClusterExerciseOverridePayload]?
+
+        init(
+            schema_version: Int,
+            template_id: String,
+            cycle_instance_id: String?,
+            day_label: String,
+            ordered_exercises: [FixedOccurrencePayload],
+            readiness: [FixedReadinessPayload],
+            skips: [FixedSkipPayload],
+            program_identifier: String?,
+            program_version: Int?,
+            cluster_key: String?,
+            absolute_cluster_step: Int?,
+            cluster_occurrences: [ClusterOccurrencePayload]?,
+            cluster_rotation_states: [ClusterRotationStatePayload]?,
+            cluster_exercise_preferences: [ClusterExercisePreferencePayload]? = nil,
+            cluster_exercise_overrides: [ClusterExerciseOverridePayload]? = nil
+        ) {
+            self.schema_version = schema_version
+            self.template_id = template_id
+            self.cycle_instance_id = cycle_instance_id
+            self.day_label = day_label
+            self.ordered_exercises = ordered_exercises
+            self.readiness = readiness
+            self.skips = skips
+            self.program_identifier = program_identifier
+            self.program_version = program_version
+            self.cluster_key = cluster_key
+            self.absolute_cluster_step = absolute_cluster_step
+            self.cluster_occurrences = cluster_occurrences
+            self.cluster_rotation_states = cluster_rotation_states
+            self.cluster_exercise_preferences = cluster_exercise_preferences
+            self.cluster_exercise_overrides = cluster_exercise_overrides
+        }
     }
 
     struct ExportPayload: Codable {
@@ -516,7 +586,9 @@ enum SessionExportService {
         overrides: [FixedCycleOccurrenceOverride],
         snapshots: [FixedCycleExerciseSnapshot] = [],
         clusterOccurrences: [ClusterOccurrenceRecord] = [],
-        clusterRotationStates: [ClusterRotationState] = []
+        clusterRotationStates: [ClusterRotationState] = [],
+        clusterExercisePreferences: [ClusterExercisePreference] = [],
+        clusterExerciseOverrides: [ClusterExerciseOccurrenceOverride] = []
     ) -> FixedCycleMetadata {
         let exerciseById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
         let sessionOverrides = overrides.filter { $0.sessionId == session.id }
@@ -745,7 +817,43 @@ enum SessionExportService {
             cluster_key: nil,
             absolute_cluster_step: nil,
             cluster_occurrences: isClustered ? clusterPayloads : nil,
-            cluster_rotation_states: isClustered ? statePayloads : nil
+            cluster_rotation_states: isClustered ? statePayloads : nil,
+            cluster_exercise_preferences: isClustered ? clusterExercisePreferences
+                .filter { $0.programVersionID == FixedCycleClusterProgramService.programVersionID }
+                .sorted { $0.key < $1.key }
+                .compactMap {
+                    guard let exercise = exerciseById[$0.exerciseId] else { return nil }
+                    return ClusterExercisePreferencePayload(
+                        program_version_id: $0.programVersionID,
+                        template_day_position: $0.templateDayPosition,
+                        slot_position: $0.slotPosition,
+                        exercise_id: $0.exerciseId.uuidString,
+                        exercise_name: exercise.name,
+                        muscle: exercise.primaryMuscle.rawValue,
+                        exercise_type: exercise.type.rawValue,
+                        equipment: exercise.equipment.rawValue,
+                        updated_at: iso.string(from: $0.updatedAt)
+                    )
+                } : nil,
+            cluster_exercise_overrides: isClustered ? clusterExerciseOverrides
+                .filter { $0.sessionId == session.id }
+                .sorted { $0.key < $1.key }
+                .compactMap {
+                    guard let exercise = exerciseById[$0.exerciseId] else { return nil }
+                    return ClusterExerciseOverridePayload(
+                        override_id: $0.id.uuidString,
+                        session_id: $0.sessionId.uuidString,
+                        program_version_id: $0.programVersionID,
+                        template_day_position: $0.templateDayPosition,
+                        slot_position: $0.slotPosition,
+                        exercise_id: $0.exerciseId.uuidString,
+                        exercise_name: exercise.name,
+                        muscle: exercise.primaryMuscle.rawValue,
+                        exercise_type: exercise.type.rawValue,
+                        equipment: exercise.equipment.rawValue,
+                        created_at: iso.string(from: $0.createdAt)
+                    )
+                } : nil
         )
     }
 
@@ -762,7 +870,9 @@ enum SessionExportService {
         overrides: [FixedCycleOccurrenceOverride],
         snapshots: [FixedCycleExerciseSnapshot],
         clusterOccurrences: [ClusterOccurrenceRecord],
-        clusterRotationStates: [ClusterRotationState]
+        clusterRotationStates: [ClusterRotationState],
+        clusterExercisePreferences: [ClusterExercisePreference] = [],
+        clusterExerciseOverrides: [ClusterExerciseOccurrenceOverride] = []
     ) -> FixedCycleMetadata? {
         guard session.dayLabelSnapshot != "Off-Schedule" else { return nil }
         let cycle = activeCycles.first { $0.id == session.cycleInstanceId }
@@ -797,7 +907,9 @@ enum SessionExportService {
                 overrides: overrides,
                 snapshots: snapshots,
                 clusterOccurrences: sessionOccurrences,
-                clusterRotationStates: clusterRotationStates
+                clusterRotationStates: clusterRotationStates,
+                clusterExercisePreferences: clusterExercisePreferences,
+                clusterExerciseOverrides: clusterExerciseOverrides
             )
         }
         guard let template else { return nil }
@@ -813,7 +925,9 @@ enum SessionExportService {
             overrides: overrides,
             snapshots: snapshots,
             clusterOccurrences: [],
-            clusterRotationStates: clusterRotationStates
+            clusterRotationStates: clusterRotationStates,
+            clusterExercisePreferences: clusterExercisePreferences,
+            clusterExerciseOverrides: clusterExerciseOverrides
         )
     }
 

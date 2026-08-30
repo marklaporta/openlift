@@ -45,6 +45,55 @@ struct FixedCycleCompletedExerciseRecap: Identifiable, Equatable {
     let sets: [FixedCycleCompletedSetRecap]
 }
 
+enum ClusterExerciseSwapScope: String, Codable, CaseIterable, Equatable {
+    case workoutOnly
+    case exactSlotGoingForward
+}
+
+private actor FixedCycleDraftExportWriter {
+    static let shared = FixedCycleDraftExportWriter()
+
+    func write(_ snapshot: SessionExportService.DraftSnapshot) throws {
+        guard !Task.isCancelled else { throw CancellationError() }
+        try SessionExportService.exportDraftSnapshot(snapshot: snapshot)
+    }
+}
+
+enum FixedCycleDraftExportEligibility {
+    static func canWrite(
+        scheduledGeneration: Int,
+        currentGeneration: Int,
+        scheduledSessionId: UUID,
+        currentDraftSessionId: UUID?,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled
+            && scheduledGeneration == currentGeneration
+            && scheduledSessionId == currentDraftSessionId
+    }
+}
+
+@MainActor
+final class FixedCycleEntryBufferCoordinator {
+    private var flushers: [String: @MainActor () -> Bool] = [:]
+
+    func register(key: String, flusher: @escaping @MainActor () -> Bool) {
+        flushers[key] = flusher
+    }
+
+    func unregister(key: String) {
+        flushers.removeValue(forKey: key)
+    }
+
+    func flushAll() -> Bool {
+        var succeeded = true
+        for flusher in Array(flushers.values) where !flusher() {
+            succeeded = false
+        }
+        return succeeded
+    }
+}
+
 enum FixedCycleWorkoutService {
     static let allClear = MuscleReadinessInput(
         soreness: .none,
@@ -279,7 +328,9 @@ enum FixedCycleWorkoutService {
         sessionId: UUID,
         entries: [SetEntry],
         selections: [FixedCycleClusterProgramService.Selection],
-        occurrences: [ClusterOccurrenceRecord]
+        occurrences: [ClusterOccurrenceRecord],
+        preferences: [ClusterExercisePreference] = [],
+        clusterOverrides: [ClusterExerciseOccurrenceOverride] = []
     ) -> [FixedCycleClusterProgramService.Cluster] {
         let completedClusterIDs: Set<String> = Set(
             occurrences.compactMap { occurrence in
@@ -292,7 +343,12 @@ enum FixedCycleWorkoutService {
         )
         return selections.compactMap { selection in
             guard !completedClusterIDs.contains(selection.cluster.rawValue) else { return nil }
-            let exerciseIDs = Set(selection.day.slots.map(\.exerciseId))
+            let exerciseIDs = Set(FixedCycleClusterProgramService.resolvedSlots(
+                selection: selection,
+                sessionId: sessionId,
+                preferences: preferences,
+                overrides: clusterOverrides
+            ).map(\.exerciseId))
             return hasQualifyingSet(
                 sessionId: sessionId,
                 exerciseIds: exerciseIDs,
@@ -305,13 +361,17 @@ enum FixedCycleWorkoutService {
         sessionId: UUID,
         entries: [SetEntry],
         selections: [FixedCycleClusterProgramService.Selection],
-        occurrences: [ClusterOccurrenceRecord]
+        occurrences: [ClusterOccurrenceRecord],
+        preferences: [ClusterExercisePreference] = [],
+        clusterOverrides: [ClusterExerciseOccurrenceOverride] = []
     ) throws {
         let clusters = uncompletedClustersWithEnteredWork(
             sessionId: sessionId,
             entries: entries,
             selections: selections,
-            occurrences: occurrences
+            occurrences: occurrences,
+            preferences: preferences,
+            clusterOverrides: clusterOverrides
         )
         guard clusters.isEmpty else {
             throw FixedCycleWorkoutError.uncompletedClusterWork(clusters)
@@ -451,6 +511,108 @@ enum FixedCycleWorkoutService {
             modelContext.delete(occurrenceOverride)
         }
         slot.exerciseId = exercise.id
+    }
+
+    static func applyClusterSubstitution(
+        scope: ClusterExerciseSwapScope,
+        sessionId: UUID,
+        selection: FixedCycleClusterProgramService.Selection,
+        slot: CycleSlot,
+        currentExerciseId: UUID,
+        replacementExerciseId: UUID,
+        entries: [SetEntry],
+        preferences: [ClusterExercisePreference],
+        overrides: [ClusterExerciseOccurrenceOverride],
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        guard currentExerciseId != replacementExerciseId else { return }
+        let currentEntries = entries.filter {
+            $0.sessionId == sessionId && $0.exerciseId == currentExerciseId
+        }
+        guard !currentEntries.contains(where: { $0.isLocked && $0.reps > 0 }) else {
+            throw FixedCycleWorkoutError.cannotReplacePerformedExercise
+        }
+        currentEntries.forEach(modelContext.delete)
+
+        let preferenceKey = ClusterExercisePreference.key(
+            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            templateDayPosition: selection.day.position,
+            slotPosition: slot.position
+        )
+        let overrideKey = ClusterExerciseOccurrenceOverride.key(
+            sessionId: sessionId,
+            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            templateDayPosition: selection.day.position,
+            slotPosition: slot.position
+        )
+
+        switch scope {
+        case .workoutOnly:
+            if let existing = overrides.first(where: { $0.key == overrideKey }) {
+                existing.exerciseId = replacementExerciseId
+                existing.createdAt = now
+            } else {
+                modelContext.insert(
+                    ClusterExerciseOccurrenceOverride(
+                        sessionId: sessionId,
+                        programVersionID: FixedCycleClusterProgramService.programVersionID,
+                        templateDayPosition: selection.day.position,
+                        slotPosition: slot.position,
+                        exerciseId: replacementExerciseId,
+                        createdAt: now
+                    )
+                )
+            }
+        case .exactSlotGoingForward:
+            if let existing = preferences.first(where: { $0.key == preferenceKey }) {
+                existing.exerciseId = replacementExerciseId
+                existing.updatedAt = now
+            } else {
+                modelContext.insert(
+                    ClusterExercisePreference(
+                        programVersionID: FixedCycleClusterProgramService.programVersionID,
+                        templateDayPosition: selection.day.position,
+                        slotPosition: slot.position,
+                        exerciseId: replacementExerciseId,
+                        updatedAt: now
+                    )
+                )
+            }
+            overrides.filter { $0.key == overrideKey }.forEach(modelContext.delete)
+        }
+    }
+
+    static func resetClusterSlotToProgramDefault(
+        sessionId: UUID,
+        selection: FixedCycleClusterProgramService.Selection,
+        slot: CycleSlot,
+        currentExerciseId: UUID,
+        entries: [SetEntry],
+        preferences: [ClusterExercisePreference],
+        overrides: [ClusterExerciseOccurrenceOverride],
+        modelContext: ModelContext
+    ) throws {
+        let currentEntries = entries.filter {
+            $0.sessionId == sessionId && $0.exerciseId == currentExerciseId
+        }
+        guard !currentEntries.contains(where: { $0.isLocked && $0.reps > 0 }) else {
+            throw FixedCycleWorkoutError.cannotReplacePerformedExercise
+        }
+        currentEntries.forEach(modelContext.delete)
+        let preferenceKey = ClusterExercisePreference.key(
+            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            templateDayPosition: selection.day.position,
+            slotPosition: slot.position
+        )
+        let overrideKey = ClusterExerciseOccurrenceOverride.key(
+            sessionId: sessionId,
+            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            templateDayPosition: selection.day.position,
+            slotPosition: slot.position
+        )
+        preferences.filter { $0.key == preferenceKey }.forEach(modelContext.delete)
+        overrides.filter { $0.key == overrideKey }.forEach(modelContext.delete)
     }
 
     @discardableResult
@@ -598,11 +760,16 @@ struct WorkoutView: View {
     @Query private var fixedSnapshots: [FixedCycleExerciseSnapshot]
     @Query private var clusterRotationStates: [ClusterRotationState]
     @Query private var clusterOccurrences: [ClusterOccurrenceRecord]
+    @Query private var clusterExercisePreferences: [ClusterExercisePreference]
+    @Query private var clusterExerciseOverrides: [ClusterExerciseOccurrenceOverride]
     @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     @State private var errorMessage: String?
     @State private var draftExportTask: Task<Void, Never>?
+    @State private var draftExportGeneration = 0
+    @State private var entryBufferCoordinator = FixedCycleEntryBufferCoordinator()
     @State private var swapContext: SwapContext?
+    @State private var pendingClusterSwap: PendingClusterSwap?
     @State private var addMovementContext: AddMovementContext?
     @State private var historyContext: ExerciseHistoryContext?
     @State private var readinessInputs: [MuscleGroup: MuscleReadinessInput] = [:]
@@ -709,24 +876,48 @@ struct WorkoutView: View {
                 slotMuscle: context.slot.muscle,
                 navigationTitle: "Replace Exercise in \(context.dayLabel)",
                 onSelect: { selected in
-                    applySwap(
-                        sessionId: context.sessionId,
-                        slot: context.slot,
-                        fromExerciseId: context.currentExerciseId,
-                        toExerciseId: selected.id
-                    )
+                    if let selection = context.clusterSelection {
+                        pendingClusterSwap = PendingClusterSwap(
+                            sessionId: context.sessionId,
+                            selection: selection,
+                            slot: context.slot,
+                            currentExerciseId: context.currentExerciseId,
+                            replacementExerciseId: selected.id,
+                            replacementName: selected.name
+                        )
+                    } else {
+                        applySwap(
+                            sessionId: context.sessionId,
+                            slot: context.slot,
+                            fromExerciseId: context.currentExerciseId,
+                            toExerciseId: selected.id
+                        )
+                    }
                     swapContext = nil
                 },
                 onCreate: { name, muscle, type, equipment in
-                    createExerciseAndSwap(
-                        sessionId: context.sessionId,
-                        slot: context.slot,
-                        fromExerciseId: context.currentExerciseId,
-                        name: name,
-                        muscle: muscle,
-                        type: type,
-                        equipment: equipment
-                    )
+                    if let selection = context.clusterSelection {
+                        createExerciseForClusterSwap(
+                            sessionId: context.sessionId,
+                            selection: selection,
+                            slot: context.slot,
+                            currentExerciseId: context.currentExerciseId,
+                            name: name,
+                            muscle: muscle,
+                            type: type,
+                            equipment: equipment
+                        )
+                    } else {
+                        createExerciseAndSwap(
+                            sessionId: context.sessionId,
+                            slot: context.slot,
+                            fromExerciseId: context.currentExerciseId,
+                            name: name,
+                            muscle: muscle,
+                            type: type,
+                            equipment: equipment
+                        )
+                    }
                     swapContext = nil
                 }
             )
@@ -826,6 +1017,26 @@ struct WorkoutView: View {
         } message: {
             Text(pendingSkipContext?.message ?? "")
         }
+        .confirmationDialog(
+            pendingClusterSwap.map { "Use \($0.replacementName) where?" } ?? "Choose Swap Scope",
+            isPresented: Binding(
+                get: { pendingClusterSwap != nil },
+                set: { if !$0 { pendingClusterSwap = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pendingClusterSwap {
+                Button("This Workout Only") {
+                    applyClusterSwap(pendingClusterSwap, scope: .workoutOnly)
+                }
+                Button("This Rotation Slot Going Forward") {
+                    applyClusterSwap(pendingClusterSwap, scope: .exactSlotGoingForward)
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingClusterSwap = nil }
+        } message: {
+            Text("Going forward changes only this exact program day and slot; the reserved template stays unchanged.")
+        }
     }
 
     private var rotationWorkoutContent: some View {
@@ -894,6 +1105,7 @@ struct WorkoutView: View {
                                     resistanceProfiles
                                 ),
                                 sessionId: draftSession.id,
+                                bufferCoordinator: entryBufferCoordinator,
                                 allowsProgramEdits: true,
                                 onAddSet: { addSet(for: resolved.exerciseId, sessionId: draftSession.id) },
                                 onRemoveSet: { removeSet(for: resolved.exerciseId, sessionId: draftSession.id) },
@@ -902,7 +1114,8 @@ struct WorkoutView: View {
                                         sessionId: draftSession.id,
                                         slot: resolved.slot,
                                         currentExerciseId: resolved.exerciseId,
-                                        dayLabel: activeDay.label
+                                        dayLabel: activeDay.label,
+                                        clusterSelection: nil
                                     )
                                 },
                                 onHistory: {
@@ -1078,38 +1291,63 @@ struct WorkoutView: View {
                             .foregroundStyle(.orange)
                     }
 
-                    ForEach(CycleOrdering.sortedSlots(selection.day.slots)) { slot in
-                        let exercise = exercises.first(where: { $0.id == slot.exerciseId })
-                        let key = FixedCycleClusterProgramService.progressionKey(
-                            cluster: selection.cluster,
-                            effectiveStep: selection.effectiveStep,
-                            slotPosition: slot.position
-                        )
+                    ForEach(FixedCycleClusterProgramService.resolvedSlots(
+                        selection: selection,
+                        sessionId: session.id,
+                        preferences: clusterExercisePreferences,
+                        overrides: clusterExerciseOverrides
+                    )) { resolved in
+                        let slot = resolved.slot
+                        let exercise = exercises.first(where: { $0.id == resolved.exerciseId })
+                        let key = resolved.progressionKey
                         let source = prefillEffort(
-                            exerciseId: slot.exerciseId,
+                            exerciseId: resolved.exerciseId,
                             session: session,
                             progressionKey: key
                         )
                         let resistanceProfile = try? ResistanceProfileService.profile(
                             workoutKind: .fixed,
                             sessionId: session.id,
-                            exerciseId: slot.exerciseId,
+                            exerciseId: resolved.exerciseId,
                             occurrenceId: nil,
                             in: resistanceProfiles
                         )
+                        let hasResettableClusterOverlay =
+                            FixedCycleClusterProgramService.persistentPreference(
+                                selection: selection,
+                                slotPosition: slot.position,
+                                preferences: clusterExercisePreferences
+                            ) != nil
+                            || FixedCycleClusterProgramService.occurrenceOverride(
+                                sessionId: session.id,
+                                selection: selection,
+                                slotPosition: slot.position,
+                                overrides: clusterExerciseOverrides
+                            ) != nil
                         ExerciseSection(
                             slot: slot,
                             exercise: exercise,
-                            entries: entries(for: slot.exerciseId, sessionId: session.id),
+                            entries: entries(for: resolved.exerciseId, sessionId: session.id),
                             isExecutionEnabled: isFixedExecutionEnabled,
                             prefillSource: source.map(prefillSourceText),
                             resistanceProfile: resistanceProfile.map(ResistanceProfileService.snapshot),
                             resistanceProfiles: ResistanceProfileService.snapshots(resistanceProfiles),
                             sessionId: session.id,
+                            bufferCoordinator: entryBufferCoordinator,
                             allowsProgramEdits: false,
-                            onAddSet: { addSet(for: slot.exerciseId, sessionId: session.id) },
-                            onRemoveSet: { removeSet(for: slot.exerciseId, sessionId: session.id) },
-                            onSwap: {},
+                            allowsExerciseSwap: true,
+                            swapAccessibilityID: "workout.swap.\(selection.cluster.rawValue).\(selection.day.position).\(slot.position)",
+                            onAddSet: { addSet(for: resolved.exerciseId, sessionId: session.id) },
+                            onRemoveSet: { removeSet(for: resolved.exerciseId, sessionId: session.id) },
+                            onSwap: {
+                                swapContext = SwapContext(
+                                    sessionId: session.id,
+                                    slot: slot,
+                                    currentExerciseId: resolved.exerciseId,
+                                    dayLabel: selection.day.label,
+                                    clusterSelection: selection
+                                )
+                            },
                             onHistory: {
                                 guard let exercise else { return }
                                 historyContext = ExerciseHistoryContext(
@@ -1121,6 +1359,14 @@ struct WorkoutView: View {
                             onSkipMuscleToday: {},
                             onRemoveFuture: {},
                             onRemoveMuscleFuture: {},
+                            onResetToProgramDefault: hasResettableClusterOverlay ? {
+                                resetClusterSlot(
+                                    sessionId: session.id,
+                                    selection: selection,
+                                    slot: slot,
+                                    currentExerciseId: resolved.exerciseId
+                                )
+                            } : nil,
                             onEntryUpdated: { scheduleDraftExport() },
                             onError: { errorMessage = $0 }
                         )
@@ -1480,6 +1726,9 @@ struct WorkoutView: View {
         for override in slotOverrides where draftIds.contains(override.sessionId) {
             modelContext.delete(override)
         }
+        for override in clusterExerciseOverrides where draftIds.contains(override.sessionId) {
+            modelContext.delete(override)
+        }
         for draft in sessions where draftIds.contains(draft.id) {
             modelContext.delete(draft)
         }
@@ -1493,6 +1742,7 @@ struct WorkoutView: View {
             guard isFixedExecutionEnabled else {
                 throw FixedCycleWorkoutError.readinessRequired
             }
+            guard entryBufferCoordinator.flushAll() else { return }
             guard FixedCycleClusterProgramService.occurrence(
                 sessionID: session.id,
                 cluster: selection.cluster,
@@ -1503,9 +1753,16 @@ struct WorkoutView: View {
                 selection: selection,
                 exercises: exercises,
                 entries: setEntries,
-                resistanceProfiles: resistanceProfiles
+                resistanceProfiles: resistanceProfiles,
+                preferences: clusterExercisePreferences,
+                overrides: clusterExerciseOverrides
             )
-            let clusterExerciseIDs = Set(selection.day.slots.map(\.exerciseId))
+            let clusterExerciseIDs = Set(FixedCycleClusterProgramService.resolvedSlots(
+                selection: selection,
+                sessionId: session.id,
+                preferences: clusterExercisePreferences,
+                overrides: clusterExerciseOverrides
+            ).map(\.exerciseId))
             for entry in setEntries where
                 entry.sessionId == session.id
                     && clusterExerciseIDs.contains(entry.exerciseId)
@@ -1532,6 +1789,7 @@ struct WorkoutView: View {
             guard isFixedExecutionEnabled else {
                 throw FixedCycleWorkoutError.readinessRequired
             }
+            guard entryBufferCoordinator.flushAll() else { return }
             let isClustered = FixedCycleClusterProgramService.isProgramTemplate(template)
             guard FixedCycleWorkoutService.canIntentionallyComplete(
                 sessionId: session.id,
@@ -1552,11 +1810,14 @@ struct WorkoutView: View {
                     sessionId: session.id,
                     entries: setEntries,
                     selections: currentClusterSelections,
-                    occurrences: clusterOccurrences
+                    occurrences: clusterOccurrences,
+                    preferences: clusterExercisePreferences,
+                    clusterOverrides: clusterExerciseOverrides
                 )
             } else {
                 currentClusterSelections = []
             }
+            draftExportGeneration += 1
             draftExportTask?.cancel()
             draftExportTask = nil
             let dayIndex = session.cycleDayIndex
@@ -1571,7 +1832,14 @@ struct WorkoutView: View {
                 let uncompletedExerciseIDs = Set(
                     currentClusterSelections
                     .filter { !completedClusterIDs.contains($0.cluster.rawValue) }
-                    .flatMap { $0.day.slots.map(\.exerciseId) }
+                    .flatMap {
+                        FixedCycleClusterProgramService.resolvedSlots(
+                            selection: $0,
+                            sessionId: session.id,
+                            preferences: clusterExercisePreferences,
+                            overrides: clusterExerciseOverrides
+                        ).map(\.exerciseId)
+                    }
                 )
                 retainedSessionEntries = FixedCycleWorkoutService.retainedCompletedClusterEntries(
                     sessionId: session.id,
@@ -1630,7 +1898,9 @@ struct WorkoutView: View {
                     overrides: fixedOverrides,
                     snapshots: persistedFixedSnapshots,
                     clusterOccurrences: clusterOccurrences,
-                    clusterRotationStates: clusterRotationStates
+                    clusterRotationStates: clusterRotationStates,
+                    clusterExercisePreferences: clusterExercisePreferences,
+                    clusterExerciseOverrides: clusterExerciseOverrides
                 )
             } else if dayIndex >= 0 && dayIndex < orderedDays.count {
                 fixedMetadata = SessionExportService.fixedCycleMetadata(
@@ -1643,7 +1913,9 @@ struct WorkoutView: View {
                     overrides: fixedOverrides,
                     snapshots: persistedFixedSnapshots,
                     clusterOccurrences: [],
-                    clusterRotationStates: clusterRotationStates
+                    clusterRotationStates: clusterRotationStates,
+                    clusterExercisePreferences: clusterExercisePreferences,
+                    clusterExerciseOverrides: clusterExerciseOverrides
                 )
             } else {
                 fixedMetadata = nil
@@ -1753,16 +2025,24 @@ struct WorkoutView: View {
         day: CycleDay,
         selection: FixedCycleClusterProgramService.Selection? = nil
     ) throws {
-        for slot in CycleOrdering.sortedSlots(day.slots) {
-            let progressionKey = selection.map {
-                FixedCycleClusterProgramService.progressionKey(
-                    cluster: $0.cluster,
-                    effectiveStep: $0.effectiveStep,
-                    slotPosition: slot.position
-                )
+        let resolvedSlots: [(slot: CycleSlot, exerciseId: UUID, progressionKey: String?)]
+        if let selection {
+            resolvedSlots = FixedCycleClusterProgramService.resolvedSlots(
+                selection: selection,
+                sessionId: session.id,
+                preferences: clusterExercisePreferences,
+                overrides: clusterExerciseOverrides
+            ).map { ($0.slot, $0.exerciseId, $0.progressionKey) }
+        } else {
+            resolvedSlots = CycleOrdering.sortedSlots(day.slots).map {
+                ($0, $0.exerciseId, nil)
             }
+        }
+        for resolved in resolvedSlots {
+            let slot = resolved.slot
+            let progressionKey = resolved.progressionKey
             let effort = prefillEffort(
-                exerciseId: slot.exerciseId,
+                exerciseId: resolved.exerciseId,
                 session: session,
                 progressionKey: progressionKey
             )
@@ -1773,7 +2053,7 @@ struct WorkoutView: View {
 
             for setIndex in 1...max(1, setCount) {
                 let prefills = prefillValues(
-                    exerciseId: slot.exerciseId,
+                    exerciseId: resolved.exerciseId,
                     setIndex: setIndex,
                     effort: effort,
                     // A keyed lookup already performed its isolated legacy
@@ -1783,7 +2063,7 @@ struct WorkoutView: View {
                 )
                 let entry = SetEntry(
                     sessionId: session.id,
-                    exerciseId: slot.exerciseId,
+                    exerciseId: resolved.exerciseId,
                     setIndex: setIndex,
                     weight: prefills.weight,
                     reps: prefills.reps,
@@ -1806,6 +2086,7 @@ struct WorkoutView: View {
             guard isFixedExecutionEnabled else {
                 throw FixedCycleWorkoutError.readinessRequired
             }
+            guard entryBufferCoordinator.flushAll() else { return }
             let current = entries(for: exerciseId, sessionId: sessionId)
             let newIndex = (current.last?.setIndex ?? 0) + 1
             let prefills = prefillValues(exerciseId: exerciseId, setIndex: newIndex, preferredSessionId: sessionId)
@@ -1830,6 +2111,7 @@ struct WorkoutView: View {
             guard isFixedExecutionEnabled else {
                 throw FixedCycleWorkoutError.readinessRequired
             }
+            guard entryBufferCoordinator.flushAll() else { return }
             guard let last = entries(for: exerciseId, sessionId: sessionId).last else { return }
             modelContext.delete(last)
             try modelContext.save()
@@ -1892,6 +2174,7 @@ struct WorkoutView: View {
             guard isFixedExecutionEnabled else {
                 throw FixedCycleWorkoutError.readinessRequired
             }
+            guard entryBufferCoordinator.flushAll() else { return }
             guard let exercise = exercises.first(where: { $0.id == toExerciseId }),
                   let session = sessions.first(where: { $0.id == sessionId }) else { return }
             let oldCount = max(1, entries(for: fromExerciseId, sessionId: sessionId).count)
@@ -1998,6 +2281,240 @@ struct WorkoutView: View {
             )
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func createExerciseForClusterSwap(
+        sessionId: UUID,
+        selection: FixedCycleClusterProgramService.Selection,
+        slot: CycleSlot,
+        currentExerciseId: UUID,
+        name: String,
+        muscle: MuscleGroup,
+        type: ExerciseType,
+        equipment: EquipmentType
+    ) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            errorMessage = "Exercise name cannot be empty."
+            return
+        }
+        if let existing = exercises.first(where: {
+            $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+        }) {
+            pendingClusterSwap = PendingClusterSwap(
+                sessionId: sessionId,
+                selection: selection,
+                slot: slot,
+                currentExerciseId: currentExerciseId,
+                replacementExerciseId: existing.id,
+                replacementName: existing.name
+            )
+            return
+        }
+        do {
+            let exercise = Exercise(
+                name: trimmedName,
+                primaryMuscle: muscle,
+                type: type,
+                equipment: equipment
+            )
+            try exercise.validate()
+            modelContext.insert(exercise)
+            try modelContext.save()
+            pendingClusterSwap = PendingClusterSwap(
+                sessionId: sessionId,
+                selection: selection,
+                slot: slot,
+                currentExerciseId: currentExerciseId,
+                replacementExerciseId: exercise.id,
+                replacementName: exercise.name
+            )
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func applyClusterSwap(
+        _ pending: PendingClusterSwap,
+        scope: ClusterExerciseSwapScope
+    ) {
+        defer { pendingClusterSwap = nil }
+        do {
+            guard isFixedExecutionEnabled else {
+                throw FixedCycleWorkoutError.readinessRequired
+            }
+            guard entryBufferCoordinator.flushAll() else { return }
+            guard let session = sessions.first(where: { $0.id == pending.sessionId }),
+                  let replacement = exercises.first(where: {
+                      $0.id == pending.replacementExerciseId
+                  }) else { return }
+            let otherResolvedIDs = Set(clusterSelections.flatMap { selection in
+                FixedCycleClusterProgramService.resolvedSlots(
+                    selection: selection,
+                    sessionId: pending.sessionId,
+                    preferences: clusterExercisePreferences,
+                    overrides: clusterExerciseOverrides
+                ).compactMap { resolved in
+                    selection.cluster == pending.selection.cluster
+                        && resolved.slot.position == pending.slot.position
+                        ? nil : resolved.exerciseId
+                }
+            })
+            guard !otherResolvedIDs.contains(replacement.id) else {
+                throw FixedCycleWorkoutError.exerciseAlreadyExists
+            }
+            let oldCount = max(
+                1,
+                entries(for: pending.currentExerciseId, sessionId: pending.sessionId).count
+            )
+            try FixedCycleWorkoutService.applyClusterSubstitution(
+                scope: scope,
+                sessionId: pending.sessionId,
+                selection: pending.selection,
+                slot: pending.slot,
+                currentExerciseId: pending.currentExerciseId,
+                replacementExerciseId: replacement.id,
+                entries: setEntries,
+                preferences: clusterExercisePreferences,
+                overrides: clusterExerciseOverrides,
+                modelContext: modelContext
+            )
+            try replaceDraftResistanceProfile(
+                sessionId: pending.sessionId,
+                fromExerciseId: pending.currentExerciseId,
+                with: replacement
+            )
+            try insertClusterDraftEntries(
+                exercise: replacement,
+                session: session,
+                selection: pending.selection,
+                slot: pending.slot,
+                fallbackSetCount: oldCount
+            )
+            try modelContext.save()
+            scheduleDraftExport()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func resetClusterSlot(
+        sessionId: UUID,
+        selection: FixedCycleClusterProgramService.Selection,
+        slot: CycleSlot,
+        currentExerciseId: UUID
+    ) {
+        do {
+            guard isFixedExecutionEnabled else {
+                throw FixedCycleWorkoutError.readinessRequired
+            }
+            guard entryBufferCoordinator.flushAll() else { return }
+            guard let session = sessions.first(where: { $0.id == sessionId }),
+                  let canonical = exercises.first(where: { $0.id == slot.exerciseId }) else {
+                return
+            }
+            let oldCount = max(1, entries(for: currentExerciseId, sessionId: sessionId).count)
+            try FixedCycleWorkoutService.resetClusterSlotToProgramDefault(
+                sessionId: sessionId,
+                selection: selection,
+                slot: slot,
+                currentExerciseId: currentExerciseId,
+                entries: setEntries,
+                preferences: clusterExercisePreferences,
+                overrides: clusterExerciseOverrides,
+                modelContext: modelContext
+            )
+            try replaceDraftResistanceProfile(
+                sessionId: sessionId,
+                fromExerciseId: currentExerciseId,
+                with: canonical
+            )
+            try insertClusterDraftEntries(
+                exercise: canonical,
+                session: session,
+                selection: selection,
+                slot: slot,
+                fallbackSetCount: oldCount
+            )
+            try modelContext.save()
+            scheduleDraftExport()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func replaceDraftResistanceProfile(
+        sessionId: UUID,
+        fromExerciseId: UUID,
+        with replacement: Exercise
+    ) throws {
+        var profiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        if let old = try ResistanceProfileService.profile(
+            workoutKind: .fixed,
+            sessionId: sessionId,
+            exerciseId: fromExerciseId,
+            occurrenceId: nil,
+            in: profiles
+        ) {
+            modelContext.delete(old)
+            profiles.removeAll { $0.id == old.id }
+        }
+        guard replacement.equipment.supportsResistanceProfile,
+              let value = FixedCycleClusterProgramService.initialResistanceProfile(
+                  forExerciseNamed: replacement.name,
+                  exerciseId: replacement.id,
+                  existingProfiles: profiles
+              ) else { return }
+        _ = try ResistanceProfileService.create(
+            workoutKind: .fixed,
+            sessionId: sessionId,
+            exerciseId: replacement.id,
+            value: value,
+            profiles: profiles,
+            modelContext: modelContext
+        )
+    }
+
+    private func insertClusterDraftEntries(
+        exercise: Exercise,
+        session: Session,
+        selection: FixedCycleClusterProgramService.Selection,
+        slot: CycleSlot,
+        fallbackSetCount: Int
+    ) throws {
+        let key = FixedCycleClusterProgramService.progressionKey(
+            cluster: selection.cluster,
+            effectiveStep: selection.effectiveStep,
+            slotPosition: slot.position
+        )
+        let effort = prefillEffort(
+            exerciseId: exercise.id,
+            session: session,
+            progressionKey: key
+        )
+        let setCount = effort?.isProgressionPrefillEligible == true
+            ? max(1, effort?.rows.count ?? fallbackSetCount)
+            : max(1, fallbackSetCount)
+        for setIndex in 1...setCount {
+            let values = prefillValues(
+                exerciseId: exercise.id,
+                setIndex: setIndex,
+                effort: effort,
+                allowGlobalFallback: false
+            )
+            let entry = SetEntry(
+                sessionId: session.id,
+                exerciseId: exercise.id,
+                setIndex: setIndex,
+                weight: values.weight,
+                reps: values.reps
+            )
+            try entry.validate()
+            modelContext.insert(entry)
         }
     }
 
@@ -2300,6 +2817,7 @@ struct WorkoutView: View {
             guard isFixedExecutionEnabled else {
                 throw FixedCycleWorkoutError.readinessRequired
             }
+            guard entryBufferCoordinator.flushAll() else { return }
             let slots: [CycleSlot]
             switch item.kind {
             case .skipExercise:
@@ -2309,6 +2827,9 @@ struct WorkoutView: View {
             }
             guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
             modelContext.delete(item)
+            // Skip/restore belongs to the editable legacy Fixed Cycle path. Clustered
+            // sections never create these overrides, so the canonical slot ID is the
+            // correct bootstrap identity here rather than a clustered overlay lookup.
             for slot in slots where entries(for: slot.exerciseId, sessionId: sessionId).isEmpty {
                 let effort = FixedCycleWorkoutService.prefillEffort(
                     exerciseId: slot.exerciseId,
@@ -2430,6 +2951,7 @@ struct WorkoutView: View {
         pendingFixedMutation = nil
         do {
             guard isFixedExecutionEnabled else { throw FixedCycleWorkoutError.readinessRequired }
+            guard entryBufferCoordinator.flushAll() else { return }
             switch mutation {
             case .removeExercise(let day, let slot, let sessionId, _):
                 if FixedCycleWorkoutService.hasQualifyingSet(
@@ -2484,8 +3006,54 @@ struct WorkoutView: View {
     }
 
     private func scheduleDraftExport() {
-        guard let session = draftSession, let template = activeTemplate else { return }
+        draftExportGeneration += 1
+        let scheduledGeneration = draftExportGeneration
+        guard let scheduledSessionId = draftSession?.id else {
+            draftExportTask?.cancel()
+            draftExportTask = nil
+            return
+        }
+        draftExportTask?.cancel()
+        draftExportTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
+            }
+            let currentDraftSessionId = draftSession.flatMap {
+                $0.status == .draft ? $0.id : nil
+            }
+            guard FixedCycleDraftExportEligibility.canWrite(
+                scheduledGeneration: scheduledGeneration,
+                currentGeneration: draftExportGeneration,
+                scheduledSessionId: scheduledSessionId,
+                currentDraftSessionId: currentDraftSessionId,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            guard let snapshot = makeDraftExportSnapshot() else { return }
+            let sessionBeforeWrite = draftSession.flatMap {
+                $0.status == .draft ? $0.id : nil
+            }
+            guard FixedCycleDraftExportEligibility.canWrite(
+                scheduledGeneration: scheduledGeneration,
+                currentGeneration: draftExportGeneration,
+                scheduledSessionId: scheduledSessionId,
+                currentDraftSessionId: sessionBeforeWrite,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            do {
+                try await FixedCycleDraftExportWriter.shared.write(snapshot)
+            } catch is CancellationError {
+                return
+            } catch {
+                errorMessage = "Draft backup failed: \(error.localizedDescription)"
+            }
+        }
+    }
 
+    @MainActor
+    private func makeDraftExportSnapshot() -> SessionExportService.DraftSnapshot? {
+        guard let session = draftSession, let template = activeTemplate else { return nil }
         let exerciseSnapshots = exercises.map {
             SessionExportService.ExerciseSnapshot(
                 id: $0.id,
@@ -2503,7 +3071,7 @@ struct WorkoutView: View {
                     reps: $0.reps
                 )
             }
-        let snapshot = SessionExportService.DraftSnapshot(
+        return SessionExportService.DraftSnapshot(
             sessionId: session.id,
             cycleName: template.name,
             cycleDayIndex: session.cycleDayIndex,
@@ -2521,17 +3089,12 @@ struct WorkoutView: View {
                     overrides: fixedOverrides,
                     snapshots: fixedSnapshots,
                     clusterOccurrences: clusterOccurrences,
-                    clusterRotationStates: clusterRotationStates
+                    clusterRotationStates: clusterRotationStates,
+                    clusterExercisePreferences: clusterExercisePreferences,
+                    clusterExerciseOverrides: clusterExerciseOverrides
                 )
             }
         )
-
-        draftExportTask?.cancel()
-        draftExportTask = Task {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            guard !Task.isCancelled else { return }
-            try? SessionExportService.exportDraftSnapshot(snapshot: snapshot)
-        }
     }
 
     private func recentEfforts(exerciseId: UUID, exerciseName: String) -> [ExerciseEffort] {
@@ -2692,9 +3255,23 @@ private struct SwapContext: Identifiable {
     let slot: CycleSlot
     let currentExerciseId: UUID
     let dayLabel: String
+    let clusterSelection: FixedCycleClusterProgramService.Selection?
 
     var id: String {
         "\(sessionId.uuidString)-\(slot.position)"
+    }
+}
+
+private struct PendingClusterSwap: Identifiable {
+    let sessionId: UUID
+    let selection: FixedCycleClusterProgramService.Selection
+    let slot: CycleSlot
+    let currentExerciseId: UUID
+    let replacementExerciseId: UUID
+    let replacementName: String
+
+    var id: String {
+        "\(sessionId.uuidString)-\(selection.day.position)-\(slot.position)-\(replacementExerciseId.uuidString)"
     }
 }
 
@@ -2823,7 +3400,10 @@ private struct ExerciseSection: View {
     let resistanceProfile: ResistanceProfileSnapshot?
     let resistanceProfiles: [ResistanceProfileSnapshot]
     let sessionId: UUID
+    let bufferCoordinator: FixedCycleEntryBufferCoordinator
     let allowsProgramEdits: Bool
+    var allowsExerciseSwap: Bool = false
+    var swapAccessibilityID: String? = nil
     let onAddSet: () -> Void
     let onRemoveSet: () -> Void
     let onSwap: () -> Void
@@ -2832,17 +3412,24 @@ private struct ExerciseSection: View {
     let onSkipMuscleToday: () -> Void
     let onRemoveFuture: () -> Void
     let onRemoveMuscleFuture: () -> Void
+    var onResetToProgramDefault: (() -> Void)? = nil
     let onEntryUpdated: () -> Void
     let onError: (String) -> Void
     private let actionButtonSize: CGFloat = 30
     private var usesAssistanceLoad: Bool {
         exercise?.usesAssistanceLoad ?? false
     }
+    private var bufferRegistrationKey: String {
+        "\(sessionId.uuidString)|\(String(describing: slot.persistentModelID))"
+    }
 
     private enum RowField: Hashable {
         case weight(UUID), reps(UUID)
     }
     @FocusState private var focusedField: RowField?
+    @State private var bufferedEntries: [Int: WorkoutEntryEditing.EntryState] = [:]
+    @State private var pendingCommitTask: Task<Void, Never>?
+    @State private var registeredBufferKey: String?
 
     var body: some View {
         Section {
@@ -2875,24 +3462,25 @@ private struct ExerciseSection: View {
                     TextField(
                         usesAssistanceLoad ? "Assist" : "Weight",
                         value: Binding<Double?>(
-                            get: { WorkoutEntryEditing.displayWeight(entry.weight) },
+                            get: {
+                                WorkoutEntryEditing.displayWeight(
+                                    bufferedEntries[entry.setIndex]?.weight ?? entry.weight
+                                )
+                            },
                             set: { newWeight in
                                 guard !entry.isLocked else { return }
-                                var states = entries.map(WorkoutEntryEditing.EntryState.init)
+                                var states = currentBufferedStates()
                                 WorkoutEntryEditing.applyWeightEdit(
                                     to: &states,
                                     setIndex: entry.setIndex,
                                     newWeight: newWeight
                                 )
 
-                                for sibling in entries {
-                                    guard let state = states.first(where: { $0.setIndex == sibling.setIndex }) else { continue }
-                                    sibling.weight = state.weight
-                                    sibling.reps = state.reps
-                                    sibling.isLocked = state.isLocked
-                                }
-                                try? modelContext.save()
-                                onEntryUpdated()
+                                bufferedEntries = Dictionary(
+                                    states.map { ($0.setIndex, $0) },
+                                    uniquingKeysWith: { _, latest in latest }
+                                )
+                                scheduleBufferedCommit()
                             }
                         ),
                         format: WeightFormatting.style
@@ -2914,24 +3502,25 @@ private struct ExerciseSection: View {
                     TextField(
                         "Reps",
                         value: Binding<Int?>(
-                            get: { WorkoutEntryEditing.displayReps(entry.reps) },
+                            get: {
+                                WorkoutEntryEditing.displayReps(
+                                    bufferedEntries[entry.setIndex]?.reps ?? entry.reps
+                                )
+                            },
                             set: { newReps in
                                 guard !entry.isLocked else { return }
-                                var states = entries.map(WorkoutEntryEditing.EntryState.init)
+                                var states = currentBufferedStates()
                                 WorkoutEntryEditing.applyRepsEdit(
                                     to: &states,
                                     setIndex: entry.setIndex,
                                     newReps: newReps
                                 )
 
-                                for sibling in entries {
-                                    guard let state = states.first(where: { $0.setIndex == sibling.setIndex }) else { continue }
-                                    sibling.weight = state.weight
-                                    sibling.reps = state.reps
-                                    sibling.isLocked = state.isLocked
-                                }
-                                try? modelContext.save()
-                                onEntryUpdated()
+                                bufferedEntries = Dictionary(
+                                    states.map { ($0.setIndex, $0) },
+                                    uniquingKeysWith: { _, latest in latest }
+                                )
+                                scheduleBufferedCommit()
                             }
                         ),
                         format: .number
@@ -2948,6 +3537,7 @@ private struct ExerciseSection: View {
 
                     Button {
                         focusedField = nil
+                        guard commitBufferedEntries() else { return }
                         if !entry.isLocked && entry.weight == 0 && entry.reps == 0 {
                             return
                         }
@@ -2966,8 +3556,15 @@ private struct ExerciseSection: View {
                             !entry.isLocked,
                             entry: entry
                         )
-                        try? modelContext.save()
-                        onEntryUpdated()
+                        do {
+                            try modelContext.save()
+                            synchronizeBuffersFromModels()
+                            onEntryUpdated()
+                        } catch {
+                            modelContext.rollback()
+                            synchronizeBuffersFromModels()
+                            onError(error.localizedDescription)
+                        }
                     } label: {
                         Image(systemName: entry.isLocked ? "checkmark.square.fill" : "square")
                             .foregroundStyle(entry.isLocked ? .green : .secondary)
@@ -2978,7 +3575,9 @@ private struct ExerciseSection: View {
                     )
                     .disabled(
                         !isExecutionEnabled
-                            || (!entry.isLocked && entry.weight == 0 && entry.reps == 0)
+                            || (!entry.isLocked
+                                && (bufferedEntries[entry.setIndex]?.weight ?? entry.weight) == 0
+                                && (bufferedEntries[entry.setIndex]?.reps ?? entry.reps) == 0)
                     )
                 }
             }
@@ -2987,7 +3586,7 @@ private struct ExerciseSection: View {
                 Text(exercise?.name ?? "Unknown Exercise")
                 Spacer()
                 HStack(spacing: 14) {
-                    if allowsProgramEdits {
+                    if allowsProgramEdits || allowsExerciseSwap {
                         Button(action: onSwap) {
                         VStack(spacing: -3) {
                             Image(systemName: "arrow.right")
@@ -2998,7 +3597,9 @@ private struct ExerciseSection: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .frame(width: actionButtonSize, height: actionButtonSize)
-                    .accessibilityIdentifier("workout.swap.\(slot.position)")
+                    .accessibilityIdentifier(
+                        swapAccessibilityID ?? "workout.swap.\(slot.position)"
+                    )
                     .accessibilityLabel("Swap \(exercise?.name ?? "exercise")")
                     .disabled(!isExecutionEnabled)
                     }
@@ -3028,20 +3629,124 @@ private struct ExerciseSection: View {
                     .frame(width: actionButtonSize, height: actionButtonSize)
                     .disabled(!isExecutionEnabled)
 
-                    if allowsProgramEdits {
+                    if allowsProgramEdits || onResetToProgramDefault != nil {
                         Menu {
-                            Button("Skip Exercise for Today", action: onSkipToday)
-                            Button("Skip \(slot.muscle.displayName) for Today", action: onSkipMuscleToday)
-                            Divider()
-                            Button("Remove Exercise from Future Workouts", role: .destructive, action: onRemoveFuture)
-                            Button("Remove \(slot.muscle.displayName) from Future Workouts", role: .destructive, action: onRemoveMuscleFuture)
+                            if allowsProgramEdits {
+                                Button("Skip Exercise for Today", action: onSkipToday)
+                                Button("Skip \(slot.muscle.displayName) for Today", action: onSkipMuscleToday)
+                                Divider()
+                                Button("Remove Exercise from Future Workouts", role: .destructive, action: onRemoveFuture)
+                                Button("Remove \(slot.muscle.displayName) from Future Workouts", role: .destructive, action: onRemoveMuscleFuture)
+                            }
+                            if let onResetToProgramDefault {
+                                Button("Reset to Program Default", action: onResetToProgramDefault)
+                            }
                         } label: {
                             Image(systemName: "ellipsis.circle")
                         }
+                        .accessibilityIdentifier(
+                            (swapAccessibilityID ?? "workout.swap.\(slot.position)")
+                                .replacingOccurrences(
+                                    of: "workout.swap.",
+                                    with: "workout.more."
+                                )
+                        )
                         .disabled(!isExecutionEnabled)
                     }
                 }
             }
+        }
+        .onAppear {
+            synchronizeBuffersFromModels()
+            registerBufferFlusher()
+        }
+        .onChange(of: entries.map(\.id)) { _, _ in
+            guard pendingCommitTask == nil else { return }
+            synchronizeBuffersFromModels()
+            registerBufferFlusher()
+        }
+        .onChange(of: focusedField) { oldValue, newValue in
+            if oldValue != nil && oldValue != newValue {
+                _ = commitBufferedEntries()
+            }
+        }
+        .onDisappear {
+            _ = commitBufferedEntries()
+            if let registeredBufferKey {
+                bufferCoordinator.unregister(key: registeredBufferKey)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willResignActiveNotification
+        )) { _ in
+            _ = commitBufferedEntries()
+        }
+    }
+
+    private func currentBufferedStates() -> [WorkoutEntryEditing.EntryState] {
+        entries.map { entry in
+            bufferedEntries[entry.setIndex] ?? WorkoutEntryEditing.EntryState(entry: entry)
+        }
+    }
+
+    private func registerBufferFlusher() {
+        if let registeredBufferKey, registeredBufferKey != bufferRegistrationKey {
+            bufferCoordinator.unregister(key: registeredBufferKey)
+        }
+        bufferCoordinator.register(key: bufferRegistrationKey) {
+            commitBufferedEntries()
+        }
+        registeredBufferKey = bufferRegistrationKey
+    }
+
+    private func synchronizeBuffersFromModels() {
+        bufferedEntries = Dictionary(
+            entries.map {
+                let state = WorkoutEntryEditing.EntryState(entry: $0)
+                return (state.setIndex, state)
+            },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        pendingCommitTask = nil
+    }
+
+    private func scheduleBufferedCommit() {
+        pendingCommitTask?.cancel()
+        pendingCommitTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            _ = commitBufferedEntries()
+        }
+    }
+
+    @discardableResult
+    private func commitBufferedEntries() -> Bool {
+        pendingCommitTask?.cancel()
+        pendingCommitTask = nil
+        var changed = false
+        for entry in entries {
+            guard let state = bufferedEntries[entry.setIndex], !entry.isLocked else { continue }
+            if entry.weight != state.weight || entry.reps != state.reps {
+                entry.weight = state.weight
+                entry.reps = state.reps
+                changed = true
+            }
+        }
+        guard changed else { return true }
+        do {
+            try modelContext.save()
+            synchronizeBuffersFromModels()
+            onEntryUpdated()
+            return true
+        } catch {
+            modelContext.rollback()
+            synchronizeBuffersFromModels()
+            onError(error.localizedDescription)
+            return false
         }
     }
 }

@@ -4,14 +4,22 @@ import BackgroundTasks
 
 @main
 struct OpenLiftApp: App {
-    private static let schema = Schema(versionedSchema: OpenLiftSchemaV13.self)
+    private static let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
 
     private static let startup: OpenLiftContainerStartup = {
         AppRuntime.prepareForUITesting()
 
         if AppRuntime.isUITesting {
+            let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+            if AppRuntime.shouldPrepareClusteredProgramRollout {
+                let modelContext = ModelContext(container)
+                _ = try? BootstrapDataService.prepareClusteredProgramRollout(
+                    modelContext: modelContext,
+                    clusteredDraftBackupConfirmed: true
+                )
+            }
             return OpenLiftContainerStartup(
-                container: OpenLiftModelContainerFactory.makeInMemory(schema: schema),
+                container: container,
                 issue: nil
             )
         }

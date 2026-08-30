@@ -424,9 +424,9 @@ enum BootstrapDataService {
         cycle: ActiveCycleInstance,
         modelContext: ModelContext
     ) throws -> WorkoutImportResult {
-        let catalog = try ensureExerciseCatalog(modelContext: modelContext)
-        let exercisesByName = Dictionary(uniqueKeysWithValues: catalog.map { ($0.name.lowercased(), $0) })
-        let exercisesById = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
+        var catalog = try ensureExerciseCatalog(modelContext: modelContext)
+        var exercisesByName = Dictionary(uniqueKeysWithValues: catalog.map { ($0.name.lowercased(), $0) })
+        var exercisesById = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
         var sessionsById: [UUID: Session] = [:]
         for session in try modelContext.fetch(FetchDescriptor<Session>()) {
             sessionsById[session.id] = session
@@ -482,6 +482,111 @@ enum BootstrapDataService {
             }
         )
         let pointerKeysBeforeRecovery = Set(rotationStatesByKey.keys)
+        var clusterPreferencesByKey = Dictionary(
+            uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>()).map {
+                ($0.key, $0)
+            }
+        )
+        var clusterOverrideKeys = Set(
+            try modelContext.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>()).map(\.key)
+        )
+        let latestClusterPreferenceExport = exports.compactMap {
+            export -> (sessionID: String, date: Date, payloads: [SessionExportService.ClusterExercisePreferencePayload])? in
+            guard let metadata = export.fixed_cycle,
+                  metadata.schema_version >= 4,
+                  metadata.program_identifier == FixedCycleClusterProgramService.programIdentifier,
+                  metadata.program_version == FixedCycleClusterProgramService.structureVersion,
+                  let date = SessionExportService.parseExportDate(export.date) else { return nil }
+            return (export.session_id, date, metadata.cluster_exercise_preferences ?? [])
+        }.max { $0.date < $1.date }
+
+        func resolveOverlayExercise(
+            id: String,
+            name: String,
+            muscle: String,
+            type: String,
+            equipment: String
+        ) -> Exercise? {
+            if let uuid = UUID(uuidString: id), let existing = exercisesById[uuid] {
+                return existing
+            }
+            if let existing = exercisesByName[name.lowercased()] {
+                return existing
+            }
+            guard let uuid = UUID(uuidString: id),
+                  let primaryMuscle = MuscleGroup(rawValue: muscle),
+                  let exerciseType = ExerciseType(rawValue: type),
+                  let equipmentType = EquipmentType(rawValue: equipment) else { return nil }
+            let exercise = Exercise(
+                id: uuid,
+                name: name,
+                primaryMuscle: primaryMuscle,
+                type: exerciseType,
+                equipment: equipmentType
+            )
+            guard (try? exercise.validate()) != nil else { return nil }
+            modelContext.insert(exercise)
+            catalog.append(exercise)
+            exercisesById[uuid] = exercise
+            exercisesByName[name.lowercased()] = exercise
+            return exercise
+        }
+
+        // Every clustered export can be the only surviving description of a
+        // custom exercise used by an older completed occurrence. Ingest those
+        // descriptors across the complete recovery set before importing sets
+        // and occurrence snapshots. Durable preference state itself is still
+        // authoritative only in the newest clustered export below.
+        for export in exports {
+            guard let metadata = export.fixed_cycle,
+                  metadata.schema_version >= 4,
+                  metadata.program_identifier == FixedCycleClusterProgramService.programIdentifier,
+                  metadata.program_version == FixedCycleClusterProgramService.structureVersion else {
+                continue
+            }
+            for payload in metadata.cluster_exercise_preferences ?? [] where
+                payload.program_version_id == FixedCycleClusterProgramService.programVersionID {
+                _ = resolveOverlayExercise(
+                    id: payload.exercise_id,
+                    name: payload.exercise_name,
+                    muscle: payload.muscle,
+                    type: payload.exercise_type,
+                    equipment: payload.equipment
+                )
+            }
+            for payload in metadata.cluster_exercise_overrides ?? [] where
+                payload.program_version_id == FixedCycleClusterProgramService.programVersionID {
+                _ = resolveOverlayExercise(
+                    id: payload.exercise_id,
+                    name: payload.exercise_name,
+                    muscle: payload.muscle,
+                    type: payload.exercise_type,
+                    equipment: payload.equipment
+                )
+            }
+        }
+
+        if let latestClusterPreferenceExport {
+            let authoritativeKeys = Set(latestClusterPreferenceExport.payloads.compactMap {
+                payload -> String? in
+                guard payload.program_version_id
+                    == FixedCycleClusterProgramService.programVersionID else { return nil }
+                return ClusterExercisePreference.key(
+                    programVersionID: payload.program_version_id,
+                    templateDayPosition: payload.template_day_position,
+                    slotPosition: payload.slot_position
+                )
+            })
+            let stalePreferences = clusterPreferencesByKey.values.filter {
+                $0.programVersionID == FixedCycleClusterProgramService.programVersionID
+                    && $0.updatedAt <= latestClusterPreferenceExport.date
+                    && !authoritativeKeys.contains($0.key)
+            }
+            for preference in stalePreferences {
+                modelContext.delete(preference)
+                clusterPreferencesByKey.removeValue(forKey: preference.key)
+            }
+        }
 
         for export in exports {
             guard let sessionId = UUID(uuidString: export.session_id),
@@ -637,6 +742,76 @@ enum BootstrapDataService {
 
             if let metadata = export.fixed_cycle {
                 session.dayLabelSnapshot = metadata.day_label
+                if canHydrateClusterState,
+                   metadata.schema_version >= 4,
+                   export.session_id == latestClusterPreferenceExport?.sessionID {
+                    for payload in metadata.cluster_exercise_preferences ?? [] where
+                        payload.program_version_id == FixedCycleClusterProgramService.programVersionID {
+                        guard let exercise = resolveOverlayExercise(
+                            id: payload.exercise_id,
+                            name: payload.exercise_name,
+                            muscle: payload.muscle,
+                            type: payload.exercise_type,
+                            equipment: payload.equipment
+                        ) else { continue }
+                        let key = ClusterExercisePreference.key(
+                            programVersionID: payload.program_version_id,
+                            templateDayPosition: payload.template_day_position,
+                            slotPosition: payload.slot_position
+                        )
+                        let updatedAt = SessionExportService.parseExportDate(payload.updated_at)
+                            ?? finishedAt
+                        if let existing = clusterPreferencesByKey[key] {
+                            if updatedAt >= existing.updatedAt {
+                                existing.exerciseId = exercise.id
+                                existing.updatedAt = updatedAt
+                            }
+                        } else {
+                            let preference = ClusterExercisePreference(
+                                programVersionID: payload.program_version_id,
+                                templateDayPosition: payload.template_day_position,
+                                slotPosition: payload.slot_position,
+                                exerciseId: exercise.id,
+                                updatedAt: updatedAt
+                            )
+                            modelContext.insert(preference)
+                            clusterPreferencesByKey[key] = preference
+                        }
+                    }
+                }
+                if canHydrateClusterState, metadata.schema_version >= 4 {
+                    for payload in metadata.cluster_exercise_overrides ?? [] where
+                        payload.session_id == session.id.uuidString
+                            && payload.program_version_id == FixedCycleClusterProgramService.programVersionID {
+                        guard let overrideID = UUID(uuidString: payload.override_id),
+                              let exercise = resolveOverlayExercise(
+                                  id: payload.exercise_id,
+                                  name: payload.exercise_name,
+                                  muscle: payload.muscle,
+                                  type: payload.exercise_type,
+                                  equipment: payload.equipment
+                              ) else { continue }
+                        let key = ClusterExerciseOccurrenceOverride.key(
+                            sessionId: session.id,
+                            programVersionID: payload.program_version_id,
+                            templateDayPosition: payload.template_day_position,
+                            slotPosition: payload.slot_position
+                        )
+                        guard clusterOverrideKeys.insert(key).inserted else { continue }
+                        modelContext.insert(
+                            ClusterExerciseOccurrenceOverride(
+                                id: overrideID,
+                                sessionId: session.id,
+                                programVersionID: payload.program_version_id,
+                                templateDayPosition: payload.template_day_position,
+                                slotPosition: payload.slot_position,
+                                exerciseId: exercise.id,
+                                createdAt: SessionExportService.parseExportDate(payload.created_at)
+                                    ?? finishedAt
+                            )
+                        )
+                    }
+                }
                 for statePayload in metadata.cluster_rotation_states ?? [] where
                     canHydrateClusterState
                         && metadata.schema_version == 4
@@ -2109,6 +2284,16 @@ enum FixedCycleClusterProgramService {
         var id: String { cluster.rawValue }
     }
 
+    struct ResolvedSlot: Identifiable {
+        let slot: CycleSlot
+        let exerciseId: UUID
+        let progressionKey: String
+
+        var id: String {
+            "\(slot.position)-\(slot.muscle.rawValue)"
+        }
+    }
+
     struct ActivationCleanupPlan: Equatable {
         let pointerIDs: Set<UUID>
     }
@@ -2367,12 +2552,73 @@ enum FixedCycleClusterProgramService {
         )
     }
 
+    static func persistentPreference(
+        selection: Selection,
+        slotPosition: Int,
+        preferences: [ClusterExercisePreference]
+    ) -> ClusterExercisePreference? {
+        let key = ClusterExercisePreference.key(
+            programVersionID: programVersionID,
+            templateDayPosition: selection.day.position,
+            slotPosition: slotPosition
+        )
+        return preferences.first { $0.key == key }
+    }
+
+    static func occurrenceOverride(
+        sessionId: UUID,
+        selection: Selection,
+        slotPosition: Int,
+        overrides: [ClusterExerciseOccurrenceOverride]
+    ) -> ClusterExerciseOccurrenceOverride? {
+        let key = ClusterExerciseOccurrenceOverride.key(
+            sessionId: sessionId,
+            programVersionID: programVersionID,
+            templateDayPosition: selection.day.position,
+            slotPosition: slotPosition
+        )
+        return overrides.first { $0.key == key }
+    }
+
+    /// Occurrence overrides deliberately outrank persistent preferences. This
+    /// lets one workout depart from a durable slot choice without mutating it.
+    static func resolvedSlots(
+        selection: Selection,
+        sessionId: UUID,
+        preferences: [ClusterExercisePreference],
+        overrides: [ClusterExerciseOccurrenceOverride]
+    ) -> [ResolvedSlot] {
+        CycleOrdering.sortedSlots(selection.day.slots).map { slot in
+            let exerciseId = occurrenceOverride(
+                sessionId: sessionId,
+                selection: selection,
+                slotPosition: slot.position,
+                overrides: overrides
+            )?.exerciseId ?? persistentPreference(
+                selection: selection,
+                slotPosition: slot.position,
+                preferences: preferences
+            )?.exerciseId ?? slot.exerciseId
+            return ResolvedSlot(
+                slot: slot,
+                exerciseId: exerciseId,
+                progressionKey: progressionKey(
+                    cluster: selection.cluster,
+                    effectiveStep: selection.effectiveStep,
+                    slotPosition: slot.position
+                )
+            )
+        }
+    }
+
     static func makeOccurrence(
         session: Session,
         selection: Selection,
         exercises: [Exercise],
         entries: [SetEntry],
         resistanceProfiles: [ExerciseResistanceProfile],
+        preferences: [ClusterExercisePreference] = [],
+        overrides: [ClusterExerciseOccurrenceOverride] = [],
         completedAt: Date = .now
     ) throws -> ClusterOccurrenceRecord {
         guard session.cycleInstanceId == selection.cycleInstanceId,
@@ -2380,8 +2626,14 @@ enum FixedCycleClusterProgramService {
             throw ProgramError.invalidClusterContext
         }
         let byID = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
-        let snapshots = try CycleOrdering.sortedSlots(selection.day.slots).map { slot in
-            guard let exercise = byID[slot.exerciseId] else {
+        let snapshots = try resolvedSlots(
+            selection: selection,
+            sessionId: session.id,
+            preferences: preferences,
+            overrides: overrides
+        ).map { resolved in
+            let slot = resolved.slot
+            guard let exercise = byID[resolved.exerciseId] else {
                 throw ProgramError.invalidClusterContext
             }
             let performed = entries.contains {
@@ -2403,11 +2655,7 @@ enum FixedCycleClusterProgramService {
                 exerciseName: exercise.name,
                 muscle: slot.muscle,
                 prescribedSetCount: slot.defaultSetCount,
-                progressionKey: progressionKey(
-                    cluster: selection.cluster,
-                    effectiveStep: selection.effectiveStep,
-                    slotPosition: slot.position
-                ),
+                progressionKey: resolved.progressionKey,
                 resistanceProfile: resistanceProfile,
                 completionStatus: performed ? .performed : .skipped
             )

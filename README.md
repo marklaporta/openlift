@@ -78,6 +78,8 @@ That file is ignored by git. Start from:
 - Cluster completion writes immutable occurrence evidence with stable,
   versioned progression keys. Skipped rows do not block advancement, and no
   movement or subsection can advance independently.
+- V14 permits a clustered movement swap for this workout only or for that exact
+  canonical rotation slot going forward without editing the reserved template.
 - Fixed Cycle requires a dated readiness observation before working sets can be changed or the workout can be completed. Readiness is advisory and never changes the cycle or dose.
 - The clustered program prefers the same stable progression key, with an exact
   resistance-profile match first and an explicit same-key/different-profile
