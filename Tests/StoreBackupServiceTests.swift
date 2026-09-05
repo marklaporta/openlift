@@ -149,14 +149,157 @@ final class StoreBackupServiceTests: XCTestCase {
         XCTAssertTrue(StoreBackupService.needsSnapshot(dateKey: "2026-07-29", environment: environment))
     }
 
+    func testPendingCloudRetryReusesSnapshotAndDoesNotRewriteOrResnapshotLiveStore() throws {
+        let store = root.appendingPathComponent("live.store")
+        try makeStore(at: store, exerciseCount: 1)
+        let baseline = makeEnvironment()
+        var writes = 0
+        var uploaded = false
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: baseline.containerIdentifier, iCloudContainerURL: baseline.iCloudContainerURL,
+            localDocumentsURL: baseline.localDocumentsURL,
+            coordinatedWrite: { data, url in writes += 1; try data.write(to: url, options: .atomic) },
+            ubiquityMetadata: { _ in .init(isUbiquitousItem: true, isUploaded: uploaded,
+                                         isUploading: !uploaded, uploadingErrorDescription: nil) }
+        )
+        let first = try StoreBackupService.mirrorStore(storeURL: store, dateKey: "2026-09-04", environment: environment)
+        XCTAssertEqual(first.status, .pending)
+        XCTAssertTrue(StoreBackupService.needsSnapshot(dateKey: "2026-09-04", environment: environment))
+        let evidence = StoreBackupService.evidence(dateKey: "2026-09-04", environment: environment)
+        XCTAssertTrue(evidence.localSnapshotVerified)
+        XCTAssertTrue(evidence.cloudMirrorVerified)
+        XCTAssertFalse(evidence.cloudUploadVerified)
+        let bytes = try Data(contentsOf: XCTUnwrap(first.localMirrorURL))
+        // An absent source makes a needless re-VACUUM fail. Retry must reuse the checked daily snapshot.
+        let absentStore = root.appendingPathComponent("absent.store")
+        _ = try StoreBackupService.mirrorStore(storeURL: absentStore, dateKey: "2026-09-04", environment: environment)
+        XCTAssertEqual(writes, 1)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(first.localMirrorURL)), bytes)
+        uploaded = true
+        XCTAssertFalse(StoreBackupService.needsSnapshot(dateKey: "2026-09-04", environment: environment))
+    }
+
+    func testExistingCloudFileIsNotVerifiedBackupWithoutIntegrityAndUploadEvidence() throws {
+        let base = makeEnvironment()
+        let cloud = StoreBackupService.destinations(dateKey: "2026-09-04", environment: base).cloud!
+        try FileManager.default.createDirectory(at: cloud.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("placeholder or corruption".utf8).write(to: cloud)
+        XCTAssertTrue(StoreBackupService.needsSnapshot(dateKey: "2026-09-04", environment: base))
+        XCTAssertFalse(StoreBackupService.evidence(dateKey: "2026-09-04", environment: base).cloudUploadVerified)
+        let source = root.appendingPathComponent("source.store")
+        try makeStore(at: source, exerciseCount: 1)
+        _ = try StoreBackupService.mirrorStore(storeURL: source, dateKey: "2026-09-04", environment: base)
+        let metadataCases: [SessionExportService.UbiquityMetadata] = [
+            .init(isUbiquitousItem: nil, isUploaded: false, isUploading: false, uploadingErrorDescription: nil),
+            .init(isUbiquitousItem: false, isUploaded: true, isUploading: false, uploadingErrorDescription: nil),
+            .init(isUbiquitousItem: true, isUploaded: false, isUploading: false, uploadingErrorDescription: "Offline"),
+            .init(isUbiquitousItem: true, isUploaded: true, isUploading: false, uploadingErrorDescription: "Upload failed"),
+            .init(isUbiquitousItem: true, isUploaded: true, isUploading: false, uploadingErrorDescription: nil, isDownloaded: false)
+        ]
+        for metadata in metadataCases {
+            let environment = SessionExportService.ExportEnvironment(
+                containerIdentifier: base.containerIdentifier, iCloudContainerURL: base.iCloudContainerURL,
+                localDocumentsURL: base.localDocumentsURL, coordinatedWrite: base.coordinatedWrite,
+                ubiquityMetadata: { _ in metadata }
+            )
+            XCTAssertTrue(StoreBackupService.needsSnapshot(dateKey: "2026-09-04", environment: environment))
+            XCTAssertFalse(StoreBackupService.evidence(dateKey: "2026-09-04", environment: environment).cloudUploadVerified)
+        }
+    }
+
+    func testLocalOnlySnapshotUploadsWhenContainerReturnsAndMetadataFailureStaysPending() throws {
+        let base = makeEnvironment()
+        let source = root.appendingPathComponent("source.store")
+        try makeStore(at: source, exerciseCount: 1)
+        let localOnly = SessionExportService.ExportEnvironment(
+            containerIdentifier: base.containerIdentifier, iCloudContainerURL: nil,
+            localDocumentsURL: base.localDocumentsURL, coordinatedWrite: base.coordinatedWrite,
+            ubiquityMetadata: base.ubiquityMetadata
+        )
+        _ = try StoreBackupService.mirrorStore(storeURL: source, dateKey: "2026-09-04", environment: localOnly)
+        XCTAssertFalse(StoreBackupService.needsSnapshot(dateKey: "2026-09-04", environment: localOnly))
+        XCTAssertTrue(StoreBackupService.needsSnapshot(dateKey: "2026-09-04", environment: base))
+        let result = try StoreBackupService.mirrorStore(storeURL: root.appendingPathComponent("absent"), dateKey: "2026-09-04", environment: base)
+        XCTAssertEqual(result.status, .success)
+        let throwingMetadata = SessionExportService.ExportEnvironment(
+            containerIdentifier: base.containerIdentifier, iCloudContainerURL: base.iCloudContainerURL,
+            localDocumentsURL: base.localDocumentsURL, coordinatedWrite: base.coordinatedWrite,
+            ubiquityMetadata: { _ in throw CocoaError(.fileReadUnknown) }
+        )
+        XCTAssertTrue(StoreBackupService.needsSnapshot(dateKey: "2026-09-04", environment: throwingMetadata))
+    }
+
+    func testEvictedCloudSnapshotIsNotOverwrittenWhileDownloadIsPending() throws {
+        let base = makeEnvironment()
+        let source = root.appendingPathComponent("source.store")
+        try makeStore(at: source, exerciseCount: 1)
+        let cloud = StoreBackupService.destinations(dateKey: "2026-09-04", environment: base).cloud!
+        try FileManager.default.createDirectory(at: cloud.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let placeholder = Data("evicted snapshot".utf8)
+        try placeholder.write(to: cloud)
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: base.containerIdentifier, iCloudContainerURL: base.iCloudContainerURL,
+            localDocumentsURL: base.localDocumentsURL,
+            coordinatedWrite: { _, _ in XCTFail("Must not replace an unreadable ubiquitous snapshot") },
+            ubiquityMetadata: { _ in .init(isUbiquitousItem: true, isUploaded: true, isUploading: false,
+                                         uploadingErrorDescription: nil, isDownloaded: false) }
+        )
+        let result = try StoreBackupService.mirrorStore(storeURL: source, dateKey: "2026-09-04", environment: environment)
+        XCTAssertEqual(result.status, .pending)
+        XCTAssertEqual(try Data(contentsOf: cloud), placeholder)
+        XCTAssertTrue(StoreBackupService.isValidSnapshot(at: result.localMirrorURL))
+    }
+
+    func testPendingAndCorruptCloudFilesCannotDisplaceUploadedRecoveryPoints() throws {
+        let base = makeEnvironment()
+        let source = root.appendingPathComponent("retention-source.store")
+        try makeStore(at: source, exerciseCount: 1)
+        let snapshot = root.appendingPathComponent("retention-source.sqlite")
+        try StoreBackupService.snapshot(storeAt: source, into: snapshot)
+        let bytes = try Data(contentsOf: snapshot)
+        let directory = iCloudBackupsDirectory(base)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        func destination(_ day: Int) -> URL {
+            directory.appendingPathComponent(StoreBackupService.filename(dateKey: String(format: "2026-07-%02d", day)))
+        }
+        // Eight uploaded recovery points, followed by a newer pending upload
+        // and a corrupt file whose metadata incorrectly looks successful.
+        for day in 1...9 { try bytes.write(to: destination(day)) }
+        try Data("corrupt snapshot".utf8).write(to: destination(10))
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: base.containerIdentifier, iCloudContainerURL: base.iCloudContainerURL,
+            localDocumentsURL: base.localDocumentsURL, coordinatedWrite: base.coordinatedWrite,
+            ubiquityMetadata: { url in
+                let pending = url.lastPathComponent == "store-2026-07-09.sqlite"
+                return .init(isUbiquitousItem: true, isUploaded: !pending,
+                             isUploading: pending, uploadingErrorDescription: nil)
+            }
+        )
+
+        StoreBackupService.pruneSnapshots(environment: environment)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination(1).path))
+        for day in 2...8 {
+            XCTAssertTrue(StoreBackupService.isValidSnapshot(at: destination(day)),
+                          "Uploaded recovery point \(day) must survive pending/corrupt newer files")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination(9).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination(10).path))
+    }
+
     func testPruneKeepsNewestSnapshotsInBothDestinations() throws {
         let environment = makeEnvironment()
+        let source = root.appendingPathComponent("prune-source.store")
+        try makeStore(at: source, exerciseCount: 1)
+        let verified = root.appendingPathComponent("prune-source.sqlite")
+        try StoreBackupService.snapshot(storeAt: source, into: verified)
+        let bytes = try Data(contentsOf: verified)
         let directories = [iCloudBackupsDirectory(environment), localBackupsDirectory(environment)]
         for directory in directories {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             for day in 1...9 {
                 let name = StoreBackupService.filename(dateKey: String(format: "2026-07-%02d", day))
-                try Data("snapshot \(day)".utf8).write(to: directory.appendingPathComponent(name))
+                try bytes.write(to: directory.appendingPathComponent(name))
             }
             try Data("not a snapshot".utf8).write(to: directory.appendingPathComponent("workout-keep.json"))
         }

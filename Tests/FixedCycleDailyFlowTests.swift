@@ -3,6 +3,23 @@ import XCTest
 @testable import OpenLift
 
 final class FixedCycleDailyFlowTests: XCTestCase {
+    func testClusterProgressCountsOnlyLockedWorkingSetsAndCompletedEvidenceWins() {
+        let session = UUID(), exercise = UUID()
+        let rows = [
+            SetEntry(sessionId: session, exerciseId: exercise, setIndex: 1, weight: 50, reps: 10),
+            SetEntry(sessionId: session, exerciseId: exercise, setIndex: 2, weight: 50, reps: 0, isLocked: true)
+        ]
+        let untouched = ClusterWorkoutProgress.make(sessionId: session, exerciseIds: [exercise], entries: rows, isCompleted: false)
+        XCTAssertEqual(untouched.title, "Not started")
+        XCTAssertEqual(untouched.completedSetCount, 0)
+        rows[0].isLocked = true
+        let started = ClusterWorkoutProgress.make(sessionId: session, exerciseIds: [exercise], entries: rows, isCompleted: false)
+        XCTAssertEqual(started.title, "In progress")
+        XCTAssertEqual(started.completedSetCount, 1)
+        XCTAssertEqual(started.summary, "In progress · 1 completed set")
+        XCTAssertEqual(ClusterWorkoutProgress.make(sessionId: session, exerciseIds: [], entries: rows, isCompleted: true).title, "Completed")
+    }
+
     func testCompletedFixedWorkoutBlocksDraftForRestOfLocalCalendarDay() throws {
         let finishedAt = date(year: 2026, month: 8, day: 4, hour: 17, minute: 51)
         let laterThatDay = date(year: 2026, month: 8, day: 4, hour: 23, minute: 59)

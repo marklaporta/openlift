@@ -323,6 +323,38 @@ enum AdaptiveWorkoutService {
         try modelContext.save()
     }
 
+    /// The execution mutation boundary independently enforces cable isolation,
+    /// including callers that supply an unqualified prefill dictionary.
+    private static func cableAdditionHistory(
+        exercise: Exercise?, planId: UUID, modelContext: ModelContext
+    ) throws -> (rows: [ComparableSetRow], profile: ResistanceProfileValue?)? {
+        guard let exercise, exercise.equipment.supportsResistanceProfile else { return nil }
+        let profiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        let value = ResistanceProfileService.lastUsedValue(exerciseId: exercise.id, profiles: profiles)
+        let rows = AdaptivePrefillService.latestRows(
+            exerciseId: exercise.id, excludingPlanId: planId,
+            adaptiveSessions: try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>()),
+            adaptiveSetEntries: try modelContext.fetch(FetchDescriptor<AdaptiveSetEntry>()),
+            rotationSessions: try modelContext.fetch(FetchDescriptor<Session>()),
+            rotationSetEntries: try modelContext.fetch(FetchDescriptor<SetEntry>()),
+            resistanceRequirement: .cable(value), resistanceProfiles: profiles
+        )
+        return (rows, value)
+    }
+
+    private static func insertAdditionProfile(
+        _ value: ResistanceProfileValue?, sessionId: UUID, exerciseId: UUID,
+        occurrenceId: UUID, modelContext: ModelContext, now: Date
+    ) {
+        guard let value else { return }
+        modelContext.insert(ExerciseResistanceProfile(
+            workoutKind: .adaptive, sessionId: sessionId, exerciseId: exerciseId,
+            occurrenceId: occurrenceId, resistanceSource: value.resistanceSource,
+            chainType: value.chainType, chainPercent: value.chainPercent,
+            eccentricPercent: value.eccentricPercent, createdAt: now, updatedAt: now
+        ))
+    }
+
     @discardableResult
     static func appendComplex(
         plan: GeneratedWorkoutPlan,
@@ -403,9 +435,22 @@ enum AdaptiveWorkoutService {
 
         if let session {
             for exercise in plannedExercises {
+                let cableHistory = try cableAdditionHistory(
+                    exercise: exercisesById[exercise.exerciseId] ?? manualExercise,
+                    planId: plan.id, modelContext: modelContext
+                )
+                insertAdditionProfile(cableHistory?.profile, sessionId: session.id,
+                                      exerciseId: exercise.exerciseId, occurrenceId: exercise.occurrenceId,
+                                      modelContext: modelContext, now: now)
                 for setIndex in 1...exercise.prescribedSetCount {
-                    let prior = prefill[exercise.occurrenceId]?[setIndex]
-                        ?? prefillByExerciseId[exercise.exerciseId]?[setIndex]
+                    let prior: AdaptiveSetPrefill?
+                    if let cableHistory {
+                        let row = cableHistory.rows.first { $0.setIndex == setIndex } ?? cableHistory.rows.last
+                        prior = row.map { AdaptiveSetPrefill(weight: $0.weight, reps: $0.reps) }
+                    } else {
+                        prior = prefill[exercise.occurrenceId]?[setIndex]
+                            ?? prefillByExerciseId[exercise.exerciseId]?[setIndex]
+                    }
                     modelContext.insert(
                         AdaptiveSetEntry(
                             adaptiveSessionId: session.id,
@@ -472,8 +517,16 @@ enum AdaptiveWorkoutService {
         )
         complex.exercises.append(snapshot)
         if let session {
+            let cableHistory = try cableAdditionHistory(exercise: exercise, planId: plan.id, modelContext: modelContext)
+            insertAdditionProfile(cableHistory?.profile, sessionId: session.id,
+                                  exerciseId: exercise.id, occurrenceId: snapshot.occurrenceId,
+                                  modelContext: modelContext, now: now)
             for setIndex in 1...setCount {
-                let previous = prefill[setIndex]
+                let previous: AdaptiveSetPrefill?
+                if let cableHistory {
+                    let row = cableHistory.rows.first { $0.setIndex == setIndex } ?? cableHistory.rows.last
+                    previous = row.map { AdaptiveSetPrefill(weight: $0.weight, reps: $0.reps) }
+                } else { previous = prefill[setIndex] }
                 modelContext.insert(
                     AdaptiveSetEntry(
                         adaptiveSessionId: session.id,
@@ -1013,14 +1066,41 @@ enum AdaptiveWorkoutService {
         }) else {
             throw AdaptiveWorkoutServiceError.plannedExerciseNotFound
         }
+        let profiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        let oldProfile = try ResistanceProfileService.profile(
+            workoutKind: .adaptive, sessionId: session.id, exerciseId: fromExerciseId,
+            occurrenceId: occurrenceId, in: profiles
+        )
+        // Resolve the replacement profile before looking up weights. A cable
+        // replacement with no complete profile is never ordinary global history.
+        let remainingProfiles = profiles.filter { $0.id != oldProfile?.id }
+        let replacementProfile = exercise.equipment.supportsResistanceProfile
+            ? ResistanceProfileService.lastUsedValue(exerciseId: exercise.id, profiles: remainingProfiles)
+            : nil
         let replacementRows = AdaptivePrefillService.latestRows(
             exerciseId: exercise.id,
             excludingPlanId: plan.id,
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: setEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries
+            rotationSetEntries: rotationSetEntries,
+            resistanceRequirement: exercise.equipment.supportsResistanceProfile
+                ? .cable(replacementProfile) : .notApplicable,
+            resistanceProfiles: remainingProfiles
         )
+        if let oldProfile { modelContext.delete(oldProfile) }
+        if let replacementProfile {
+            let created = ExerciseResistanceProfile(
+                workoutKind: .adaptive, sessionId: session.id, exerciseId: exercise.id,
+                occurrenceId: occurrenceId, resistanceSource: replacementProfile.resistanceSource,
+                chainType: replacementProfile.chainType, chainPercent: replacementProfile.chainPercent,
+                eccentricPercent: replacementProfile.eccentricPercent, createdAt: now, updatedAt: now
+            )
+            modelContext.insert(created)
+            if setEntries.contains(where: {
+                $0.adaptiveSessionId == session.id && $0.occurrenceId == occurrenceId && $0.isLocked
+            }) { created.frozenAt = now }
+        }
         for entry in setEntries where
             entry.adaptiveSessionId == session.id && entry.occurrenceId == occurrenceId {
             entry.exerciseId = exercise.id

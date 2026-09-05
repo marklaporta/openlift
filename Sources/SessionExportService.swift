@@ -12,6 +12,7 @@ enum SessionExportService {
         let isUploaded: Bool
         let isUploading: Bool
         let uploadingErrorDescription: String?
+        var isDownloaded: Bool? = nil
     }
 
     struct ExportEnvironment {
@@ -1414,7 +1415,7 @@ enum SessionExportService {
         }
 
         let outcome: ExportWriteOutcome
-        if let metadata, metadata.isUbiquitousItem == true, metadata.isUploaded {
+        if let metadata, metadata.isUbiquitousItem == true, metadata.isUploaded, metadata.uploadingErrorDescription == nil {
             outcome = ExportWriteOutcome(
                 status: .success,
                 filename: filename,
@@ -1528,13 +1529,15 @@ enum SessionExportService {
             .isUbiquitousItemKey,
             .ubiquitousItemIsUploadedKey,
             .ubiquitousItemIsUploadingKey,
-            .ubiquitousItemUploadingErrorKey
+            .ubiquitousItemUploadingErrorKey,
+            .ubiquitousItemDownloadingStatusKey
         ])
         return UbiquityMetadata(
             isUbiquitousItem: values.isUbiquitousItem,
             isUploaded: values.ubiquitousItemIsUploaded == true,
             isUploading: values.ubiquitousItemIsUploading == true,
-            uploadingErrorDescription: values.ubiquitousItemUploadingError?.localizedDescription
+            uploadingErrorDescription: values.ubiquitousItemUploadingError?.localizedDescription,
+            isDownloaded: values.ubiquitousItemDownloadingStatus.map { $0 != .notDownloaded }
         )
     }
 

@@ -191,3 +191,20 @@ ledger and to global canonical-exercise repeat-last lookup. Ad hoc volume
 feedback is retained as a note but cannot change a future dose. Ad hoc work and
 substitutions remain excluded from like-for-like Adaptive-complex performance
 comparisons.
+
+
+### Execute-time cable additions and substitutions
+
+Cable repeat-last requires a complete exact resistance profile, including source,
+chain type/percentage, and eccentric percentage. This applies to substituted
+editable sets, add-movement, appended complexes, and historical set-count lookup.
+Mutation services recheck cable additions rather than trusting an unqualified
+prefill dictionary. Replacement/default profiles are resolved before lookup and
+saved with the occurrence. Locked substitution rows retain their entered load/reps;
+their new occurrence profile is frozen. Unknown/different profile history is shown
+as reference only and never supplies Adaptive weights/reps. This does not change
+the separately specified clustered Fixed Cycle same-progression fallback.
+
+Execution shows the prior effort's date, literal weights/reps, resistance profile,
+and source identity beside the sets. The completion recap uses only locked working
+sets and separates the local workout save from JSON and full-store backup evidence.

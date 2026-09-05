@@ -128,6 +128,31 @@ final class HistoryTimelineServiceTests: XCTestCase {
         XCTAssertEqual(first.first?.id, "adaptive-\(a.uuidString)")
     }
 
+    func testRecoveryExportsJoinStoredHistoryWithoutDuplicatingEitherWorkoutKind() {
+        let fixed = rotation(300)
+        let adaptive = adaptive(200)
+        let orphanID = UUID().uuidString
+        func export(_ id: String, _ date: TimeInterval) -> ExportedSessionSummary {
+            ExportedSessionSummary(id: id, date: Date(timeIntervalSince1970: date), cycleName: "Recovery",
+                                   cycleDayIndex: 0, exerciseCount: 0, exercises: [])
+        }
+        let entries = HistoryTimelineService.entries(
+            sessions: [fixed], adaptiveSessions: [adaptive],
+            exports: [export(fixed.id.uuidString.lowercased(), 900), export(adaptive.id.uuidString.lowercased(), 800),
+                      export(orphanID, 250), export(orphanID.lowercased(), 250)]
+        )
+        XCTAssertEqual(entries.map(\.date.timeIntervalSince1970), [300, 250, 200])
+        guard case .rotation = entries[0], case .exported = entries[1], case .adaptive = entries[2] else {
+            return XCTFail("Persisted identities win; recovery-only sessions belong in the same timeline")
+        }
+    }
+
+    func testDistinctSessionsWithSameTimestampRemainDistinct() {
+        let entries = HistoryTimelineService.entries(sessions: [rotation(300), rotation(300)], adaptiveSessions: [])
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertNotEqual(entries[0].id, entries[1].id)
+    }
+
     func testHistoryHandlesEmptyInputAndSingleKind() {
         XCTAssertTrue(HistoryTimelineService.entries(sessions: [], adaptiveSessions: []).isEmpty)
         XCTAssertEqual(

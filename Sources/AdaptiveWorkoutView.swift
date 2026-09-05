@@ -416,6 +416,7 @@ struct AdaptiveWorkoutView: View {
                                 title: effectiveExercise?.name ?? snapshot.exerciseName,
                                 exercise: effectiveExercise,
                                 entries: entries,
+                                previousEffort: previousEffort(plan: plan, exercise: snapshot)?.compactSummary,
                                 resistanceProfile: resistanceProfile.map(
                                     ResistanceProfileService.snapshot
                                 ),
@@ -517,6 +518,30 @@ struct AdaptiveWorkoutView: View {
         Section {
             ContentUnavailableView {
                 Label("Adaptive Workout Complete", systemImage: "checkmark.circle")
+            }
+        }
+
+        if let session = adaptiveSessions.first(where: { $0.generatedPlanId == plan.id }) {
+            let completedRows = adaptiveSetEntries.filter {
+                $0.adaptiveSessionId == session.id && $0.isLocked && $0.reps > 0
+            }
+            Section("Completed Work") {
+                Text("\(completedRows.count) completed sets across \(Set(completedRows.map(\.occurrenceId)).count) movements")
+                    .accessibilityIdentifier("adaptive.completed.recap")
+                ForEach(plan.complexes.flatMap(\.exercises)) { exercise in
+                    let rows = completedRows.filter { $0.occurrenceId == exercise.occurrenceId }.sorted { $0.setIndex < $1.setIndex }
+                    if !rows.isEmpty {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(exercise.exerciseName).font(.subheadline.weight(.semibold))
+                            Text(rows.map { "\(WeightFormatting.normalized($0.weight)) × \($0.reps)" }.joined(separator: " · "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            Section("Saved & Backup") {
+                WorkoutSaveStatusView(sessionId: session.id, kind: .adaptive, status: session.exportStatus)
             }
         }
 
@@ -947,6 +972,17 @@ struct AdaptiveWorkoutView: View {
         }
     }
 
+    private func previousEffort(plan: GeneratedWorkoutPlan, exercise: PlannedExerciseSnapshot) -> ExerciseEffortLookupResult? {
+        ExerciseEffortLookupService.globalEffort(
+            exerciseId: exercise.exerciseId, excludingPlanId: plan.id,
+            adaptiveSessions: adaptiveSessions, adaptiveSetEntries: adaptiveSetEntries,
+            rotationSessions: rotationSessions, rotationSetEntries: rotationSetEntries,
+            resistanceRequirement: cableExerciseIds.contains(exercise.exerciseId)
+                ? .cable(currentResistanceValue(plan: plan, exercise: exercise)) : .notApplicable,
+            resistanceProfiles: resistanceProfiles
+        )
+    }
+
     private func previousRows(
         plan: GeneratedWorkoutPlan,
         exercise: PlannedExerciseSnapshot
@@ -987,19 +1023,22 @@ struct AdaptiveWorkoutView: View {
         plan: GeneratedWorkoutPlan,
         exercise: PlannedExerciseSnapshot
     ) -> ResistanceProfileValue? {
-        let persisted = plan.sessionId.flatMap { sessionId in
-            (try? ResistanceProfileService.profile(
-                workoutKind: .adaptive,
-                sessionId: sessionId,
-                exerciseId: exercise.exerciseId,
-                occurrenceId: exercise.occurrenceId,
-                in: resistanceProfiles
-            )).flatMap(ResistanceProfileService.value)
+        if let sessionId = plan.sessionId,
+           let persisted = try? ResistanceProfileService.profile(
+               workoutKind: .adaptive, sessionId: sessionId, exerciseId: exercise.exerciseId,
+               occurrenceId: exercise.occurrenceId, in: resistanceProfiles
+           ) {
+            return ResistanceProfileService.value(persisted)
         }
-        return persisted ?? ResistanceProfileService.lastUsedValue(
-            exerciseId: exercise.exerciseId,
-            profiles: resistanceProfiles
+        return ResistanceProfileService.lastUsedValue(
+            exerciseId: exercise.exerciseId, profiles: resistanceProfiles
         )
+    }
+
+    private func newMovementResistanceRequirement(exerciseId: UUID) -> ResistanceProfileLookupRequirement {
+        cableExerciseIds.contains(exerciseId)
+            ? .cable(ResistanceProfileService.lastUsedValue(exerciseId: exerciseId, profiles: resistanceProfiles))
+            : .notApplicable
     }
 
     private func formatRows(_ rows: [ComparableSetRow]) -> String {
@@ -1328,37 +1367,7 @@ struct AdaptiveWorkoutView: View {
                     rotationSetEntries: rotationSetEntries,
                     modelContext: modelContext
                 )
-                if let session = adaptiveSessions.first(where: { $0.generatedPlanId == plan.id }) {
-                    var currentProfiles = try modelContext.fetch(
-                        FetchDescriptor<ExerciseResistanceProfile>()
-                    )
-                    if let old = try ResistanceProfileService.profile(
-                        workoutKind: .adaptive,
-                        sessionId: session.id,
-                        exerciseId: context.currentExerciseId,
-                        occurrenceId: context.occurrenceId,
-                        in: currentProfiles
-                    ) {
-                        modelContext.delete(old)
-                        currentProfiles.removeAll { $0.id == old.id }
-                    }
-                    if exercise.equipment.supportsResistanceProfile,
-                       let value = ResistanceProfileService.lastUsedValue(
-                           exerciseId: exercise.id,
-                           profiles: currentProfiles
-                       ) {
-                        _ = try ResistanceProfileService.create(
-                            workoutKind: .adaptive,
-                            sessionId: session.id,
-                            exerciseId: exercise.id,
-                            occurrenceId: context.occurrenceId,
-                            value: value,
-                            profiles: currentProfiles,
-                            modelContext: modelContext
-                        )
-                    }
-                    try modelContext.save()
-                }
+
             }
         } catch { errorMessage = error.localizedDescription }
     }
@@ -1395,7 +1404,9 @@ struct AdaptiveWorkoutView: View {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries
+                    rotationSetEntries: rotationSetEntries,
+                    resistanceRequirement: newMovementResistanceRequirement(exerciseId: exercise.id),
+                    resistanceProfiles: resistanceProfiles
                 )
                 var prefill: [Int: AdaptiveSetPrefill] = [:]
                 if !previous.isEmpty {
@@ -1421,7 +1432,9 @@ struct AdaptiveWorkoutView: View {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries
+                    rotationSetEntries: rotationSetEntries,
+                    resistanceRequirement: newMovementResistanceRequirement(exerciseId: exercise.id),
+                    resistanceProfiles: resistanceProfiles
                 )
                 var prefillByExerciseId: [UUID: [Int: AdaptiveSetPrefill]] = [:]
                 if !previous.isEmpty {
@@ -1497,7 +1510,9 @@ struct AdaptiveWorkoutView: View {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: rotationSessions,
-                    rotationSetEntries: rotationSetEntries
+                    rotationSetEntries: rotationSetEntries,
+                    resistanceRequirement: newMovementResistanceRequirement(exerciseId: component.exerciseId),
+                    resistanceProfiles: resistanceProfiles
                 )
                 guard !rows.isEmpty else { continue }
                 for setIndex in 1...max(1, component.prescribedSetCount) {
@@ -1604,7 +1619,9 @@ struct AdaptiveWorkoutView: View {
             adaptiveSessions: adaptiveSessions,
             adaptiveSetEntries: adaptiveSetEntries,
             rotationSessions: rotationSessions,
-            rotationSetEntries: rotationSetEntries
+            rotationSetEntries: rotationSetEntries,
+            resistanceRequirement: newMovementResistanceRequirement(exerciseId: exercise.id),
+            resistanceProfiles: resistanceProfiles
         )
         if !previous.isEmpty {
             return previous.count
@@ -1962,6 +1979,7 @@ private struct AdaptiveExerciseSection: View {
     let title: String
     let exercise: Exercise?
     let entries: [AdaptiveSetEntry]
+    let previousEffort: String?
     let resistanceProfile: ResistanceProfileSnapshot?
     let resistanceProfiles: [ResistanceProfileSnapshot]
     let sessionId: UUID
@@ -1989,6 +2007,16 @@ private struct AdaptiveExerciseSection: View {
 
     var body: some View {
         Section {
+            if let previousEffort {
+                Text(previousEffort)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("adaptive.previousEffort.\(occurrenceId.uuidString)")
+            } else {
+                Text("No previous completed effort")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let exercise, exercise.equipment.supportsResistanceProfile {
                 CableResistanceProfileControl(
                     workoutKind: .adaptive,

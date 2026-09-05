@@ -141,9 +141,11 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
         let addedAfterFreeze = app.buttons["Flat Dumbbell Press"].firstMatch
         XCTAssertTrue(addedAfterFreeze.waitForExistence(timeout: 5))
         addedAfterFreeze.tap()
-        XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
         let editFrozen = app.descendants(matching: .any)["Edit Flat Dumbbell Press"].firstMatch
+        // Prior-effort context adds height; the appended movement may be outside
+        // the lazy List's realized viewport until explicitly scrolled into view.
         scrollToElement(editFrozen, in: app)
+        XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
         editFrozen.tap()
         app.buttons["Move Earlier"].tap()
         let editMoved = app.descendants(matching: .any)["Edit Flat Dumbbell Press"].firstMatch
@@ -172,6 +174,15 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
         XCTAssertTrue(finishConfirmation.waitForExistence(timeout: 5))
         finishConfirmation.tap()
         XCTAssertTrue(app.staticTexts["Adaptive Workout Complete"].waitForExistence(timeout: 10))
+        let recap = app.staticTexts["adaptive.completed.recap"]
+        scrollToElement(recap, in: app)
+        XCTAssertEqual(recap.label, "1 completed sets across 1 movements")
+        scrollToElement(app.staticTexts["workout.save.local"], in: app)
+        let completionScreenshot = XCTAttachment(screenshot: app.screenshot())
+        completionScreenshot.name = "Adaptive completion and backup evidence"
+        completionScreenshot.lifetime = .keepAlways
+        add(completionScreenshot)
+        scrollToElement(app.staticTexts["adaptive.tomorrowPrediction"], in: app)
         XCTAssertTrue(app.staticTexts["adaptive.tomorrowPrediction"].waitForExistence(timeout: 5))
         XCTAssertFalse(
             app.staticTexts.matching(
