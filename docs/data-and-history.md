@@ -300,3 +300,25 @@ If an AI agent is asked to change real user data:
 - explain whether the change affects draft state, completed history, exports, or all three
 
 This repo has already hit bugs where draft state, cycle state, and history diverged. Treat stored user data as a high-risk area.
+
+
+## Unified history and recovery evidence
+
+History interleaves Fixed Cycle/ad-hoc, Adaptive, and recovery-export-only sessions
+in one newest-first timeline. Stable session IDs (case-normalized for JSON) merge
+local/cloud export copies and prefer persisted sessions. Timestamp/name equality
+does not collapse distinct workouts. Exercise search includes recovery-only work.
+
+Completed screens distinguish the saved workout from its recovery JSON and the
+daily full-store snapshot. An export's upload confirmation is not proof that
+planner/rotation/readiness state is backed up. The full-store snapshot is daily
+and may predate the workout just completed. Diagnostic filenames and timestamps
+are available under **Backup Details**, not the primary workout flow.
+
+Daily SQLite backups require a readable nonempty file and a successful SQLite
+quick-check result. A cloud backup additionally requires ubiquitous-item and
+uploaded metadata without an upload error. Pending retries reuse checked snapshot
+bytes, avoiding repeated VACUUM/replacement/upload cycles. Evicted cloud snapshots
+are requested for download and never blindly overwritten. Only integrity-checked snapshots count toward retention; cloud snapshots must also
+have confirmed upload metadata. Pending/corrupt files cannot displace the last
+seven verified recovery points.

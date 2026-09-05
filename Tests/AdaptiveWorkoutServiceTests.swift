@@ -558,8 +558,8 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         let addedEntries = allEntries
             .filter { $0.occurrenceId == snapshot.occurrenceId }
             .sorted { $0.setIndex < $1.setIndex }
-        XCTAssertEqual(addedEntries.map(\.weight), [30, 30])
-        XCTAssertEqual(addedEntries.map(\.reps), [12, 10])
+        XCTAssertEqual(addedEntries.map(\.weight), [0, 0])
+        XCTAssertEqual(addedEntries.map(\.reps), [0, 0])
         XCTAssertTrue(addedEntries.allSatisfy { !$0.isLocked })
         XCTAssertEqual(originalEntries[0].weight, 60)
         XCTAssertEqual(originalEntries[0].reps, 9)
@@ -737,6 +737,133 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         )
     }
 
+    func testAdaptiveRecoveryExportCanAppearWithoutHydration() throws {
+        let (program, exercise) = makeProgram()
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program, inputs: readyInputs, localDateKey: "2026-09-04",
+            timeZoneIdentifier: "America/Los_Angeles", revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: exercise, check: check)
+        let snapshot = try XCTUnwrap(plan.complexes.first?.exercises.first)
+        let session = AdaptiveWorkoutSession(generatedPlanId: plan.id, finishedAt: .now, status: .completed)
+        let row = AdaptiveSetEntry(adaptiveSessionId: session.id, occurrenceId: snapshot.occurrenceId,
+                                  exerciseId: exercise.id, setIndex: 1, weight: 40, reps: 10, isLocked: true)
+        let payload = AdaptiveExportService.makePayload(
+            plan: plan, session: session, readiness: check, setEntries: [row], exercises: [exercise], overrides: [], feedback: []
+        )
+        let summary = try XCTUnwrap(ExportedSessionSummary.decode(data: AdaptiveExportService.encode(payload)))
+        XCTAssertEqual(summary.id, session.id.uuidString)
+        XCTAssertEqual(summary.cycleName, "Adaptive")
+        XCTAssertEqual(summary.dayLabel, "Adaptive Floating")
+        XCTAssertEqual(summary.exercises.first?.sets.first?.reps, 10)
+        XCTAssertEqual(HistoryTimelineService.entries(sessions: [], adaptiveSessions: [], exports: [summary]).count, 1)
+    }
+
+    func testCableSubstitutionNeverPrefillsUnknownOrDifferentProfilesAndKeepsLockedWork() throws {
+        let baseline = ResistanceProfileValue.voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
+        let histories: [ResistanceProfileValue?] = [
+            nil, .weightStack, baseline,
+            .voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 25),
+            .voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 50)
+        ]
+        for historicalProfile in histories {
+            let (context, _) = makeProfileContext()
+            let (program, press) = makeProgram()
+            let cable = Exercise(name: "Cable replacement", primaryMuscle: .chest, type: .isolation, equipment: .cable)
+            let check = try AdaptiveWorkoutService.makeReadinessCheck(
+                program: program, inputs: readyInputs, localDateKey: "2026-09-04",
+                timeZoneIdentifier: "America/Los_Angeles", revision: 1
+            )
+            let plan = try makeProposal(program: program, exercise: press, check: check)
+            context.insert(plan); context.insert(cable)
+            let session = try AdaptiveWorkoutService.freeze(plan: plan, modelContext: context)
+            let snapshot = try XCTUnwrap(plan.complexes.first?.exercises.first)
+            let editable = try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).sorted { $0.setIndex < $1.setIndex }
+            editable[0].weight = 55; editable[0].reps = 9; editable[0].isLocked = true
+            let history = AdaptiveWorkoutSession(generatedPlanId: UUID(), createdAt: Date(timeIntervalSince1970: 100),
+                finishedAt: Date(timeIntervalSince1970: 200), status: .completed)
+            let previous = AdaptiveSetEntry(adaptiveSessionId: history.id, occurrenceId: UUID(), exerciseId: cable.id,
+                                           setIndex: 1, weight: 30, reps: 12, isLocked: true)
+            if let historicalProfile {
+                context.insert(ExerciseResistanceProfile(
+                    workoutKind: .adaptive, sessionId: history.id, exerciseId: cable.id, occurrenceId: previous.occurrenceId,
+                    resistanceSource: historicalProfile.resistanceSource, chainType: historicalProfile.chainType,
+                    chainPercent: historicalProfile.chainPercent, eccentricPercent: historicalProfile.eccentricPercent,
+                    createdAt: Date(timeIntervalSince1970: 100), updatedAt: Date(timeIntervalSince1970: 100)
+                ))
+            }
+            context.insert(ExerciseResistanceProfile(
+                workoutKind: .adaptive, sessionId: UUID(), exerciseId: cable.id, occurrenceId: UUID(),
+                resistanceSource: baseline.resistanceSource, chainType: baseline.chainType,
+                chainPercent: baseline.chainPercent, eccentricPercent: baseline.eccentricPercent,
+                createdAt: Date(timeIntervalSince1970: 900), updatedAt: Date(timeIntervalSince1970: 900)
+            ))
+            try AdaptiveWorkoutService.substitute(
+                plan: plan, occurrenceId: snapshot.occurrenceId, fromExerciseId: press.id, to: cable, difficulty: .easy,
+                adaptiveSessions: [session, history], setEntries: editable + [previous],
+                rotationSessions: [], rotationSetEntries: [], modelContext: context
+            )
+            XCTAssertEqual(editable[0].weight, 55)
+            XCTAssertEqual(editable[0].reps, 9)
+            XCTAssertTrue(editable[0].isLocked)
+            XCTAssertEqual(editable[1].weight, historicalProfile == baseline ? 30 : 0)
+            XCTAssertEqual(editable[1].reps, historicalProfile == baseline ? 12 : 0)
+            let current = try XCTUnwrap(ResistanceProfileService.profile(
+                workoutKind: .adaptive, sessionId: session.id, exerciseId: cable.id, occurrenceId: snapshot.occurrenceId,
+                in: context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+            ))
+            XCTAssertEqual(ResistanceProfileService.value(current), baseline)
+            XCTAssertNotNil(current.frozenAt)
+        }
+    }
+
+    func testCableAddAndAppendRejectUnqualifiedPrefillAtMutationBoundary() throws {
+        let (context, _) = makeProfileContext()
+        let (program, press) = makeProgram()
+        let cable = Exercise(name: "Unknown-profile Cable Fly", primaryMuscle: .chest, type: .isolation, equipment: .cable)
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program, inputs: readyInputs, localDateKey: "2026-09-04",
+            timeZoneIdentifier: "America/Los_Angeles", revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: press, check: check)
+        context.insert(plan); context.insert(cable)
+        let session = try AdaptiveWorkoutService.freeze(plan: plan, modelContext: context)
+        let complex = try XCTUnwrap(plan.complexes.first)
+        let unsafe: [Int: AdaptiveSetPrefill] = [1: .init(weight: 999, reps: 20)]
+        let added = try AdaptiveWorkoutService.addMovementToComplex(
+            plan: plan, complexId: complex.id, exercise: cable, difficulty: .easy, prescribedSetCount: 1,
+            adaptiveSessions: [session], prefill: unsafe, modelContext: context
+        )
+        let appended = try AdaptiveWorkoutService.appendComplex(
+            plan: plan, definition: nil, manualExercise: cable, manualPrescribedSetCount: 1,
+            exercises: [press, cable], adaptiveSessions: [session], prefillByExerciseId: [cable.id: unsafe], modelContext: context
+        )
+        let ids = Set([added.occurrenceId] + appended.exercises.map(\.occurrenceId))
+        let rows = try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).filter { ids.contains($0.occurrenceId) }
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { $0.weight == 0 && $0.reps == 0 && !$0.isLocked })
+        let historicalSession = AdaptiveWorkoutSession(generatedPlanId: UUID(),
+            createdAt: Date(timeIntervalSince1970: 100), finishedAt: Date(timeIntervalSince1970: 200), status: .completed)
+        let prior = AdaptiveSetEntry(adaptiveSessionId: historicalSession.id, occurrenceId: UUID(),
+                                    exerciseId: cable.id, setIndex: 1, weight: 25, reps: 11, isLocked: true)
+        context.insert(historicalSession); context.insert(prior)
+        context.insert(ExerciseResistanceProfile(workoutKind: .adaptive, sessionId: historicalSession.id,
+                                                exerciseId: cable.id, occurrenceId: prior.occurrenceId, resistanceSource: .weightStack))
+        try context.save()
+        let comparable = try AdaptiveWorkoutService.addMovementToComplex(
+            plan: plan, complexId: complex.id, exercise: cable, difficulty: .easy, prescribedSetCount: 1,
+            adaptiveSessions: [session], prefill: unsafe, modelContext: context
+        )
+        let comparableRow = try XCTUnwrap(context.fetch(FetchDescriptor<AdaptiveSetEntry>()).first { $0.occurrenceId == comparable.occurrenceId })
+        XCTAssertEqual(comparableRow.weight, 25)
+        XCTAssertEqual(comparableRow.reps, 11)
+        XCTAssertNotNil(try ResistanceProfileService.profile(
+            workoutKind: .adaptive, sessionId: session.id, exerciseId: cable.id,
+            occurrenceId: comparable.occurrenceId, in: context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        ))
+
+    }
+
     func testFrozenSubstitutionUsesExerciseCategoryAndUpdatesSnapshotAndRows() throws {
         let (context, _) = makeContext()
         let (program, press) = makeProgram()
@@ -788,7 +915,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
     }
 
     func testFrozenSubstitutionRefreshesEditablePrefillAndClearsItWithoutHistory() throws {
-        let (context, _) = makeContext()
+        let (context, _) = makeProfileContext()
         let (program, press) = makeProgram()
         let fly = Exercise(
             name: "Cable Fly",
@@ -843,6 +970,12 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             reps: 12,
             isLocked: true
         )
+
+        // Cable repeat-last is valid only with complete matching evidence.
+        context.insert(ExerciseResistanceProfile(
+            workoutKind: .adaptive, sessionId: historicalSession.id, exerciseId: fly.id,
+            occurrenceId: historicalRow.occurrenceId, resistanceSource: .weightStack
+        ))
 
         try AdaptiveWorkoutService.substitute(
             plan: plan,
@@ -1852,6 +1985,12 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
             timeZoneIdentifier: "America/Los_Angeles",
             exerciseSelections: exerciseSelections
         )
+    }
+
+    private func makeProfileContext() -> (ModelContext, ModelContainer) {
+        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+        return (ModelContext(container), container)
     }
 
     private func makeContext() -> (ModelContext, ModelContainer) {

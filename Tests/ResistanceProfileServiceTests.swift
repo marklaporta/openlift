@@ -3,6 +3,19 @@ import XCTest
 @testable import OpenLift
 
 final class ResistanceProfileServiceTests: XCTestCase {
+    func testCompactEffortLabelIncludesPerformanceProfileAndFallbackIdentity() {
+        let result = ExerciseEffortLookupResult(
+            sessionId: UUID(), completedAt: Date(timeIntervalSince1970: 100), sourceKind: .adHoc,
+            matchKind: .globalLatest, cycleName: "Off-Schedule", dayLabel: nil,
+            rows: [.init(setIndex: 1, weight: 30, reps: 12, isLocked: true)],
+            resistanceProfile: .weightStack, profileComparison: .different
+        )
+        XCTAssertTrue(result.compactSummary.contains("Reference only · not comparable"))
+        XCTAssertTrue(result.compactSummary.contains("30.0 × 12"))
+        XCTAssertTrue(result.compactSummary.contains("Ad hoc · Off-Schedule"))
+        XCTAssertTrue(result.compactSummary.contains("Cable · Weight Stack"))
+    }
+
     func testResistanceProfilesAreEligibleOnlyForCableEquipment() {
         XCTAssertTrue(EquipmentType.cable.supportsResistanceProfile)
         XCTAssertFalse(EquipmentType.dumbbell.supportsResistanceProfile)

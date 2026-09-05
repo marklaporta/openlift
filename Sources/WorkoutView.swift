@@ -31,6 +31,27 @@ enum FixedCycleWorkoutError: LocalizedError, Equatable {
     }
 }
 
+/// UI state follows confirmed set evidence, never prefilled editable values.
+struct ClusterWorkoutProgress: Equatable {
+    let completedSetCount: Int
+    let availableSetCount: Int
+    let isCompleted: Bool
+
+    var title: String {
+        isCompleted ? "Completed" : completedSetCount > 0 ? "In progress" : "Not started"
+    }
+
+    var summary: String {
+        "\(title) · \(completedSetCount) completed set\(completedSetCount == 1 ? "" : "s")"
+    }
+
+    static func make(sessionId: UUID, exerciseIds: Set<UUID>, entries: [SetEntry], isCompleted: Bool) -> Self {
+        let rows = entries.filter { $0.sessionId == sessionId && exerciseIds.contains($0.exerciseId) }
+        return Self(completedSetCount: rows.filter { $0.isLocked && $0.reps > 0 }.count,
+                    availableSetCount: rows.count, isCompleted: isCompleted)
+    }
+}
+
 struct FixedCycleCompletedSetRecap: Equatable {
     let setIndex: Int
     let weight: Double
@@ -870,6 +891,8 @@ struct WorkoutView: View {
     @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     @State private var errorMessage: String?
+    @State private var finishBlockedClusters: [FixedCycleClusterProgramService.Cluster] = []
+    @State private var scrollToCluster: String?
     @State private var draftExportTask: Task<Void, Never>?
     @State private var draftExportGeneration = 0
     @State private var entryBufferCoordinator = FixedCycleEntryBufferCoordinator()
@@ -1071,8 +1094,15 @@ struct WorkoutView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
             handleDateRefresh(.now)
         }
-        .alert("Validation Error", isPresented: .constant(errorMessage != nil), actions: {
-            Button("OK") { errorMessage = nil }
+        .alert(finishBlockedClusters.isEmpty ? "Workout Needs Attention" : "Complete Entered Clusters", isPresented: .constant(errorMessage != nil), actions: {
+            ForEach(finishBlockedClusters, id: \.rawValue) { cluster in
+                Button("Review \(cluster.displayName)") {
+                    scrollToCluster = cluster.rawValue
+                    errorMessage = nil
+                    finishBlockedClusters = []
+                }
+            }
+            Button("OK") { errorMessage = nil; finishBlockedClusters = [] }
         }, message: {
             Text(errorMessage ?? "Unknown error")
         })
@@ -1146,6 +1176,7 @@ struct WorkoutView: View {
 
     private var rotationWorkoutContent: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             List {
                 if let completedFixedSessionToday {
                     fixedCompletionSummary(
@@ -1338,6 +1369,11 @@ struct WorkoutView: View {
                     )
                 }
             }
+            .onChange(of: scrollToCluster) { _, target in
+                guard let target else { return }
+                withAnimation { proxy.scrollTo("cluster.\(target)", anchor: .top) }
+                scrollToCluster = nil
+            }
             .scrollDismissesKeyboard(.immediately)
             .navigationTitle("Workout")
             .toolbar {
@@ -1347,6 +1383,7 @@ struct WorkoutView: View {
                         dismissKeyboard()
                     }
                 }
+            }
             }
         }
     }
@@ -1359,7 +1396,7 @@ struct WorkoutView: View {
         Section {
             Text("Three independent clusters · Draft session")
                 .font(.headline)
-            Text("Complete only the clusters you train. Unperformed prescribed sets are omitted.")
+            Text("Complete Cluster saves that cluster and advances only its rotation. Finish Workout closes the session; untouched clusters stay where they are.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -1373,7 +1410,19 @@ struct WorkoutView: View {
             let displayedStep = completed.map {
                 $0.positionIndex % selection.cluster.rotationLength
             } ?? selection.effectiveStep
+            let ids = Set(completed?.exerciseSnapshots.map(\.exerciseId)
+                ?? FixedCycleClusterProgramService.resolvedSlots(
+                    selection: selection, sessionId: session.id,
+                    preferences: clusterExercisePreferences, overrides: clusterExerciseOverrides
+                ).map(\.exerciseId))
+            let progress = ClusterWorkoutProgress.make(
+                sessionId: session.id, exerciseIds: ids, entries: setEntries, isCompleted: completed != nil
+            )
             Section {
+                Text(progress.summary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(completed != nil ? .green : .secondary)
+                    .accessibilityIdentifier("workout.clusterState.\(selection.cluster.rawValue)")
                 if let completed {
                     let performed = completed.exerciseSnapshots.filter {
                         $0.completionStatus == .performed
@@ -1486,9 +1535,13 @@ struct WorkoutView: View {
             } header: {
                 Text("\(selection.cluster.displayName) · \(FixedCycleClusterProgramService.variantLabel(displayedStep))")
             }
+            .id("cluster.\(selection.cluster.rawValue)")
         }
 
         Section {
+            Text("Finish saves only completed clusters and their locked working sets. Unperformed prescribed sets are omitted.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Button("Finish Workout") {
                 finishWorkout()
             }
@@ -1542,7 +1595,36 @@ struct WorkoutView: View {
             }
         }
 
-        if let nextDay {
+        Section("Saved & Backup") {
+            WorkoutSaveStatusView(sessionId: session.id, kind: .fixed, status: session.exportStatus)
+        }
+
+        let completedClusters = clusterOccurrences.filter { $0.sessionId == session.id }
+        let nextSelections = completionClusterSelections(for: session)
+        if !completedClusters.isEmpty {
+            Section("Cluster Rotations") {
+                ForEach(FixedCycleClusterProgramService.Cluster.allCases, id: \.rawValue) { cluster in
+                    let occurrence = completedClusters.first { $0.clusterID == cluster.rawValue }
+                    let next = nextSelections.first { $0.cluster == cluster }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(cluster.displayName) · \(occurrence == nil ? "Unchanged" : "Advanced")")
+                            .font(.subheadline.weight(.semibold))
+                        if let next {
+                            Text("Next: \(FixedCycleClusterProgramService.variantLabel(next.effectiveStep))")
+                            let slots = FixedCycleClusterProgramService.resolvedSlots(
+                                selection: next, sessionId: UUID(),
+                                preferences: clusterExercisePreferences, overrides: []
+                            )
+                            Text(slots.compactMap { item in exercises.first { $0.id == item.exerciseId }?.name }.joined(separator: " · "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("fixed.nextCluster.\(cluster.rawValue)")
+                }
+            }
+        } else if let nextDay {
             let names = CycleOrdering.sortedSlots(nextDay.slots).compactMap { slot in
                 exercises.first(where: { $0.id == slot.exerciseId })?.name
             }
@@ -1558,6 +1640,14 @@ struct WorkoutView: View {
                 .padding(.vertical, 2)
             }
         }
+    }
+
+    private func completionClusterSelections(for session: Session) -> [FixedCycleClusterProgramService.Selection] {
+        guard let cycle = activeCycles.first(where: { $0.id == session.cycleInstanceId }),
+              let template = templates.first(where: { $0.id == cycle.templateId }) else { return [] }
+        return (try? FixedCycleClusterProgramService.selections(
+            template: template, cycleInstanceId: cycle.id, states: clusterRotationStates
+        )) ?? []
     }
 
     private func completedSetSummary(_ sets: [FixedCycleCompletedSetRecap]) -> String {
@@ -2081,6 +2171,10 @@ struct WorkoutView: View {
 
             try modelContext.save()
         } catch {
+            if let error = error as? FixedCycleWorkoutError,
+               case .uncompletedClusterWork(let clusters) = error {
+                finishBlockedClusters = clusters
+            }
             errorMessage = error.localizedDescription
         }
     }
@@ -2828,31 +2922,7 @@ struct WorkoutView: View {
     }
 
     private func prefillSourceText(_ result: ExerciseEffortLookupResult) -> String {
-        let match: String
-        switch result.matchKind {
-        case .sameCycleDay: match = "Prior same-day effort"
-        case .sameProgressionIdentity: match = "Prior progression-key effort"
-        case .globalLatest: match = "Global latest effort"
-        }
-        let kind: String
-        switch result.sourceKind {
-        case .fixedCycle: kind = "Fixed Cycle"
-        case .adaptive: kind = "Adaptive"
-        case .adHoc: kind = "Ad hoc"
-        }
-        let profile: String
-        switch result.profileComparison {
-        case .exact: profile = result.resistanceProfile?.displayName ?? "Same resistance"
-        case .different:
-            profile = result.matchKind == .sameProgressionIdentity
-                ? "Same progression key · different resistance profile fallback"
-                : "Different resistance profile — reference only"
-        case .unknown:
-            profile = result.matchKind == .sameProgressionIdentity
-                ? "Same progression key · resistance profile fallback"
-                : "Resistance profile unknown — reference only"
-        }
-        return "\(match) · \(kind) · \(profile) · \(result.completedAt.formatted(date: .abbreviated, time: .omitted))"
+        result.compactSummary
     }
 
     private func skipExerciseToday(

@@ -151,3 +151,15 @@ If you want to change the built-in fallback template, update:
 - starter-template tests in [`BootstrapDataServiceTests.swift`](../Tests/BootstrapDataServiceTests.swift)
 
 That keeps fresh installs deterministic and test-covered.
+
+
+### Cluster progress and completion recap
+
+Each draft cluster shows Not started, In progress, or Completed with the count of
+locked positive-rep sets. Prefilled editable rows do not mark a cluster started.
+Complete Cluster saves/advances only that cluster; Finish Workout closes the
+session without advancing untouched clusters. If another cluster contains locked
+work, finishing names it and offers a Review action that navigates to that cluster.
+The recap lists actual retained work and all three independent next selections,
+explicitly distinguishing advanced from unchanged rotations. The existing 3/6/6
+rotation model and set-count/prefill policies are unchanged.

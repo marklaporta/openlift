@@ -2413,6 +2413,23 @@ struct ExerciseEffortLookupResult: Equatable {
     let resistanceProfile: ResistanceProfileValue?
     let profileComparison: ResistanceProfileComparison
 
+    /// One compact, provenance-bearing comparison label beside editable sets.
+    var compactSummary: String {
+        let heading = isComparable ? "Last comparable effort"
+            : matchKind == .sameProgressionIdentity ? "Same progression fallback · not comparable" : "Reference only · not comparable"
+        let source: String
+        switch sourceKind {
+        case .fixedCycle: source = "Fixed Cycle"
+        case .adaptive: source = "Adaptive"
+        case .adHoc: source = "Ad hoc"
+        }
+        let identity = [source, dayLabel ?? cycleName].compactMap { $0 }.joined(separator: " · ")
+        let profile = resistanceProfile?.displayName
+            ?? (profileComparison == .exact ? "Standard resistance" : "Resistance profile unknown")
+        let performance = rows.map { "\(WeightFormatting.normalized($0.weight)) × \($0.reps)" }.joined(separator: " · ")
+        return "\(heading) · \(completedAt.formatted(date: .abbreviated, time: .omitted))\n\(performance)\n\(identity) · \(profile)"
+    }
+
     var isComparable: Bool {
         profileComparison == .exact
     }

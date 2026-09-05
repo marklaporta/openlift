@@ -6,11 +6,13 @@ import SwiftData
 enum HistoryTimelineEntry: Identifiable {
     case rotation(Session)
     case adaptive(AdaptiveWorkoutSession)
+    case exported(ExportedSessionSummary)
 
     var id: String {
         switch self {
         case .rotation(let session): return "rotation-\(session.id.uuidString)"
         case .adaptive(let session): return "adaptive-\(session.id.uuidString)"
+        case .exported(let session): return "exported-\(session.id.lowercased())"
         }
     }
 
@@ -18,6 +20,7 @@ enum HistoryTimelineEntry: Identifiable {
         switch self {
         case .rotation(let session): return session.finishedAt ?? session.createdAt
         case .adaptive(let session): return session.finishedAt ?? session.createdAt
+        case .exported(let session): return session.date
         }
     }
 }
@@ -27,10 +30,20 @@ enum HistoryTimelineService {
     /// rather than shuffling between redraws.
     static func entries(
         sessions: [Session],
-        adaptiveSessions: [AdaptiveWorkoutSession]
+        adaptiveSessions: [AdaptiveWorkoutSession],
+        exports: [ExportedSessionSummary] = []
     ) -> [HistoryTimelineEntry] {
+        // Identity, not timestamp/name, decides duplicates. Two genuine workouts
+        // can share a date; the persisted record wins over its recovery copy.
+        let knownIDs = Set(sessions.map { $0.id.uuidString.lowercased() })
+            .union(adaptiveSessions.map { $0.id.uuidString.lowercased() })
+        let uniqueExports = Dictionary(grouping: exports, by: { $0.id.lowercased() })
+            .compactMap { id, copies in
+                knownIDs.contains(id) ? nil : copies.max { $0.date < $1.date }
+            }
         let combined = sessions.map(HistoryTimelineEntry.rotation)
             + adaptiveSessions.map(HistoryTimelineEntry.adaptive)
+            + uniqueExports.map(HistoryTimelineEntry.exported)
         return combined.sorted { lhs, rhs in
             if lhs.date != rhs.date { return lhs.date > rhs.date }
             return lhs.id < rhs.id
@@ -57,19 +70,7 @@ struct HistoryView: View {
             $0.status == .completed || $0.finishedAt != nil || $0.exportStatus == .success
         }
 
-        let grouped = Dictionary(grouping: candidates, by: dedupeKey(for:))
-        let deduped = grouped.compactMap { _, group -> Session? in
-            group.max { lhs, rhs in
-                let lhsSetCount = lockedSetCount(for: lhs.id)
-                let rhsSetCount = lockedSetCount(for: rhs.id)
-                if lhsSetCount != rhsSetCount {
-                    return lhsSetCount < rhsSetCount
-                }
-                return (lhs.finishedAt ?? lhs.createdAt) < (rhs.finishedAt ?? rhs.createdAt)
-            }
-        }
-
-        return deduped.sorted { ($0.finishedAt ?? $0.createdAt) > ($1.finishedAt ?? $1.createdAt) }
+        return candidates.sorted { ($0.finishedAt ?? $0.createdAt) > ($1.finishedAt ?? $1.createdAt) }
     }
 
     private var completedAdaptiveSessions: [AdaptiveWorkoutSession] {
@@ -81,12 +82,13 @@ struct HistoryView: View {
     private var timelineEntries: [HistoryTimelineEntry] {
         HistoryTimelineService.entries(
             sessions: completedSessions,
-            adaptiveSessions: completedAdaptiveSessions
+            adaptiveSessions: completedAdaptiveSessions,
+            exports: exportedSessions
         )
     }
 
     private var exportedBySessionId: [String: ExportedSessionSummary] {
-        Dictionary(uniqueKeysWithValues: exportedSessions.map { ($0.id, $0) })
+        Dictionary(exportedSessions.map { ($0.id.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private var hasSearchQuery: Bool {
@@ -102,15 +104,15 @@ struct HistoryView: View {
             adaptiveSetEntries: adaptiveSetEntries,
             exercises: exercises
         )
-        let knownSessionIds = Set(completedSessions.map { $0.id.uuidString })
-            .union(completedAdaptiveSessions.map { $0.id.uuidString })
+        let knownSessionIds = Set(completedSessions.map { $0.id.uuidString.lowercased() })
+            .union(completedAdaptiveSessions.map { $0.id.uuidString.lowercased() })
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        for exported in exportedSessions where !knownSessionIds.contains(exported.id) {
-            for exercise in exported.exercises where
+        for exported in exportedSessions where !knownSessionIds.contains(exported.id.lowercased()) {
+            for (index, exercise) in exported.exercises.enumerated() where
                 exercise.exercise_name.localizedCaseInsensitiveContains(query) {
                 results.append(
                     HistoryExerciseOccurrence(
-                        id: "exported-\(exported.id)-\(exercise.exercise_name)",
+                        id: "exported-\(exported.id)-\(index)",
                         date: exported.date,
                         exerciseName: exercise.exercise_name,
                         workoutName: exported.cycleName,
@@ -140,27 +142,21 @@ struct HistoryView: View {
                             }
                         }
                     }
-                } else if completedSessions.isEmpty && completedAdaptiveSessions.isEmpty {
-                    if exportedSessions.isEmpty {
-                        ContentUnavailableView(
-                            "No Completed Sessions",
-                            systemImage: "clock.arrow.circlepath",
-                            description: Text("Finish a workout to see it in history.")
-                        )
-                    } else {
-                        Section("Exported Workouts") {
-                            ForEach(exportedSessions) { exported in
-                                NavigationLink {
-                                    ExportedSessionDetailView(session: exported)
-                                } label: {
-                                    ExportedSessionRowView(session: exported)
-                                }
-                            }
-                        }
-                    }
+                } else if timelineEntries.isEmpty {
+                    ContentUnavailableView(
+                        "No Completed Sessions",
+                        systemImage: "clock.arrow.circlepath",
+                        description: Text("Finish a workout to see it in history.")
+                    )
                 } else {
                     ForEach(timelineEntries) { entry in
                         switch entry {
+                        case .exported(let exported):
+                            NavigationLink {
+                                ExportedSessionDetailView(session: exported)
+                            } label: {
+                                ExportedSessionRowView(session: exported)
+                            }
                         case .adaptive(let session):
                             NavigationLink {
                                 AdaptiveSessionDetailView(session: session)
@@ -203,7 +199,7 @@ struct HistoryView: View {
         if let snapshot = session.cycleNameSnapshot, !snapshot.isEmpty {
             return snapshot
         }
-        if let exported = exportedBySessionId[session.id.uuidString] {
+        if let exported = exportedBySessionId[session.id.uuidString.lowercased()] {
             return exported.cycleName
         }
         return OpenLiftStateResolver.cycleName(
@@ -217,7 +213,7 @@ struct HistoryView: View {
         if let snapshot = session.dayLabelSnapshot, !snapshot.isEmpty {
             return snapshot
         }
-        if let exported = exportedBySessionId[session.id.uuidString] {
+        if let exported = exportedBySessionId[session.id.uuidString.lowercased()] {
             return exported.dayLabel
         }
         return OpenLiftStateResolver.dayLabel(
@@ -235,16 +231,6 @@ struct HistoryView: View {
         exportedSessions = ExportedSessionSummary.loadAll()
     }
 
-    private func dedupeKey(for session: Session) -> String {
-        let timestamp = Int((session.finishedAt ?? session.createdAt).timeIntervalSince1970)
-        let cycle = (session.cycleNameSnapshot ?? "").lowercased()
-        let day = (session.dayLabelSnapshot ?? "").lowercased()
-        return "\(timestamp)|\(session.cycleDayIndex)|\(cycle)|\(day)"
-    }
-
-    private func lockedSetCount(for sessionId: UUID) -> Int {
-        setEntries.filter { $0.sessionId == sessionId && $0.reps > 0 && $0.isLocked }.count
-    }
 
 }
 
@@ -279,7 +265,7 @@ enum HistoryExerciseSearchService {
         let namesById = Dictionary(uniqueKeysWithValues: matchingExercises.map { ($0.id, $0.name) })
         var results: [HistoryExerciseOccurrence] = []
 
-        for session in sessions where session.status == .completed {
+        for session in sessions where session.status == .completed || session.finishedAt != nil || session.exportStatus == .success {
             let rowsByExercise = Dictionary(grouping: setEntries.filter {
                 $0.sessionId == session.id
                     && matchingIds.contains($0.exerciseId)
@@ -846,16 +832,43 @@ private struct SessionDetailView: View {
     HistoryView()
 }
 
-private struct ExportedSessionSummary: Identifiable {
+struct ExportedSessionSummary: Identifiable {
     let id: String
     let date: Date
     let cycleName: String
     let cycleDayIndex: Int
     let exerciseCount: Int
     let exercises: [SessionExportService.ExportExercise]
+    var dayLabelSnapshot: String? = nil
 
     var dayLabel: String {
-        "Day \(cycleDayIndex + 1)"
+        dayLabelSnapshot ?? "Day \(cycleDayIndex + 1)"
+    }
+
+    static func decode(data: Data, fileURL: URL? = nil) -> ExportedSessionSummary? {
+        if let payload = AdaptiveExportService.decode(data),
+           let date = SessionExportService.parseExportDate(payload.date) {
+            let exercises = payload.plan.complexes.sorted { $0.position < $1.position }.flatMap { complex in
+                complex.exercises.sorted { $0.position < $1.position }.compactMap { exercise -> SessionExportService.ExportExercise? in
+                    let rows = exercise.sets.filter { $0.is_locked && $0.reps > 0 }
+                    guard !rows.isEmpty else { return nil }
+                    return SessionExportService.ExportExercise(
+                        exercise_id: exercise.exercise_id, exercise_name: exercise.exercise_name,
+                        muscle: exercise.primary_muscle,
+                        sets: rows.map { .init(set_index: $0.set_index, weight: $0.weight, reps: $0.reps) },
+                        resistance_profile: exercise.resistance_profile
+                    )
+                }
+            }
+            return Self(id: payload.session_id, date: date, cycleName: "Adaptive", cycleDayIndex: 0,
+                        exerciseCount: exercises.count, exercises: exercises, dayLabelSnapshot: "Adaptive Floating")
+        }
+        guard let payload = SessionExportService.decodeExportPayload(data: data, fileURL: fileURL),
+              let date = SessionExportService.parseExportDate(payload.date) else { return nil }
+        return Self(id: payload.session_id, date: date, cycleName: payload.cycle_name,
+                    cycleDayIndex: payload.cycle_day_index, exerciseCount: payload.exercises.count,
+                    exercises: payload.exercises,
+                    dayLabelSnapshot: payload.fixed_cycle?.day_label ?? (payload.workout_kind == "ad_hoc" ? "Off-Schedule" : nil))
     }
 
     static func loadAll() -> [ExportedSessionSummary] {
@@ -884,24 +897,13 @@ private struct ExportedSessionSummary: Identifiable {
 
             for fileURL in urls where fileURL.pathExtension == "json" && fileURL.lastPathComponent.hasPrefix("workout-") {
                 guard let data = try? Data(contentsOf: fileURL),
-                      let payload = SessionExportService.decodeExportPayload(data: data, fileURL: fileURL),
-                      let date = SessionExportService.parseExportDate(payload.date) else { continue }
-
-                results.append(
-                    ExportedSessionSummary(
-                        id: payload.session_id,
-                        date: date,
-                        cycleName: payload.cycle_name,
-                        cycleDayIndex: payload.cycle_day_index,
-                        exerciseCount: payload.exercises.count,
-                        exercises: payload.exercises
-                    )
-                )
+                      let summary = decode(data: data, fileURL: fileURL) else { continue }
+                results.append(summary)
             }
         }
 
         // Keep newest unique sessions if file mirrors exist in iCloud and local docs.
-        let deduped = Dictionary(grouping: results, by: \.id).compactMap { _, grouped in
+        let deduped = Dictionary(grouping: results, by: { $0.id.lowercased() }).compactMap { _, grouped in
             grouped.max(by: { $0.date < $1.date })
         }
 
@@ -920,7 +922,7 @@ private struct ExportedSessionRowView: View {
                 Text(session.cycleName)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text(session.dayLabel)
+                Text("\(session.dayLabel) · Recovery export")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -949,7 +951,7 @@ private struct ExportedSessionDetailView: View {
                 }
             }
 
-            ForEach(session.exercises, id: \.exercise_name) { exercise in
+            ForEach(Array(session.exercises.enumerated()), id: \.offset) { _, exercise in
                 Section(exercise.exercise_name) {
                     ForEach(exercise.sets, id: \.set_index) { set in
                         HStack {
@@ -967,5 +969,69 @@ private struct ExportedSessionDetailView: View {
             }
         }
         .navigationTitle("Session Detail")
+    }
+}
+
+/// Recovery status is evidence based: a completed workout, its JSON export,
+/// and the daily full-store snapshot are three separate things.
+struct WorkoutSaveStatusView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @Query private var diagnostics: [ExportDiagnostic]
+    let sessionId: UUID
+    let kind: ExportSessionKind
+    let status: ExportStatus
+    @State private var storeEvidence: StoreBackupService.Evidence?
+    @State private var localExportAvailable = false
+
+    private var diagnostic: ExportDiagnostic? {
+        diagnostics.filter { $0.sessionId == sessionId && $0.sessionKind == kind }
+            .max { $0.updatedAt < $1.updatedAt }
+    }
+
+    var body: some View {
+        Text("Workout saved on this device")
+            .accessibilityIdentifier("workout.save.local")
+        Text(localExportAvailable ? "Recovery export available on this device" : "Local recovery export not verified")
+            .font(.caption)
+        Text(diagnostic?.status == .success ? "Workout iCloud upload confirmed" : status == .failed ? "Workout iCloud upload needs retry" : "Workout iCloud upload not confirmed yet")
+            .font(.subheadline)
+            .accessibilityIdentifier("workout.save.cloud")
+        Text(storeEvidence?.detail ?? "Checking full-store backup…")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("workout.save.fullStore")
+        DisclosureGroup("Backup Details") {
+            Text("Workout exports recover workout history. A full-store snapshot also includes planner, rotation, and readiness state. The daily snapshot may predate this workout.")
+            if let diagnostic {
+                Text(diagnostic.detail)
+                LabeledContent("Export file", value: diagnostic.filename)
+                Text("Last checked: \(diagnostic.updatedAt.formatted())")
+            }
+            if let storeEvidence {
+                LabeledContent("Local snapshot verified", value: storeEvidence.localSnapshotVerified ? "Yes" : "No")
+                LabeledContent("Cloud mirror verified", value: storeEvidence.cloudMirrorVerified ? "Yes" : "No")
+                LabeledContent("Cloud upload confirmed", value: storeEvidence.cloudUploadVerified ? "Yes" : "No")
+            }
+        }
+        .font(.caption)
+        .task(id: diagnostic?.updatedAt) { await refreshEvidence() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await refreshEvidence() } }
+        }
+    }
+
+    private func refreshEvidence() async {
+        let localPath = diagnostic?.localMirrorPath
+        let result = await Task.detached(priority: .utility) {
+            let exported = localPath.flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) }
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) } != nil
+            let state = StoreBackupService.evidence(
+                dateKey: AdaptiveWorkoutService.localDateKey(for: .now),
+                environment: .live()
+            )
+            return (exported, state)
+        }.value
+        localExportAvailable = result.0
+        storeEvidence = result.1
     }
 }
