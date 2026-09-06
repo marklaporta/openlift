@@ -62,8 +62,9 @@ or considering sessions already owned by any versioned progression identity.
 Legacy cable history must still match the current complete profile to prefill.
 Drafts copy the literal qualifying row count, weights, and reps, so manually
 reducing a non-leg lane from three rows to two carries forward after that lane is
-completed. With no qualifying effort, the reserved template supplies three
-rows.
+completed. With no qualifying effort, the template supplies its literal
+prescribed count (v1 defaults to three; the September v2 replacement lanes
+retain the replaced lane count).
 
 Legacy Rotation `Session` and `SetEntry` shapes remain unchanged for copied-store
 migration safety. Adaptive planning/execution provenance lives in parallel

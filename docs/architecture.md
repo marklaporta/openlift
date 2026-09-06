@@ -111,8 +111,9 @@ preference, then canonical exercise. The structural progression key never
 changes, while prefill/history remain filtered by the resolved exercise ID.
 Completed occurrences freeze the actual resolved exercise as evidence.
 
-Progression keys are versioned structural identities, not template-day lookup
-heuristics. Shorter internal rotations are derived from the cluster step, while
+Progression keys are versioned semantic identities, not template-day lookup
+heuristics. V2 maps surviving movements to their existing identities; changing
+position never transfers a different exercise's loads. Shorter internal rotations are derived from the cluster step, while
 future structural edits require a new program version. Normal startup and V13
 migration do not activate this program; the explicit rollout is documented in
 [`migration-safety.md`](migration-safety.md).
@@ -220,7 +221,8 @@ the same fail-closed filter independently. The legacy whole-day pointer is not
 used, and a draft containing a completed cluster cannot be discarded or silently
 replaced. Partial-cluster advancement does not exist.
 
-Each reserved template slot defaults to three draft rows. If a comparable prior
+V1 reserved slots default to three draft rows; the explicit v2 revision retains
+completed replacement-lane counts as its new default. If a comparable prior
 performance exists, draft creation copies its literal row count, weights, and
 reps instead. This is why manually completing two rows for a non-leg progression
 lane causes the next occurrence of that same lane to open with two rows; the

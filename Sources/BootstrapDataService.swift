@@ -229,6 +229,9 @@ enum BootstrapDataService {
 
     private static func satisfiesCatalogAlias(_ exercise: Exercise, for defaultName: String) -> Bool {
         switch defaultName {
+        case "Safety Bar Squat":
+            return exercise.name.caseInsensitiveCompare("Safety Squat Bar Squat") == .orderedSame
+                && exercise.primaryMuscle == .quads && exercise.equipment == .barbell
         case "Incline Press-Flye":
             return exercise.name.caseInsensitiveCompare("Incline Dumbbell Press-Flye") == .orderedSame
                 && exercise.primaryMuscle == .chest
@@ -468,10 +471,44 @@ enum BootstrapDataService {
             sessionsById[session.id] = session
         }
         let availableCycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
-        let availableTemplates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        var availableTemplates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let revisionExports = exports.filter { $0.fixed_cycle?.program_identifier == FixedCycleClusterProgramService.programIdentifier && $0.fixed_cycle?.program_version == 2 && $0.fixed_cycle?.schema_version == 4 }
+        if let newestRevision = revisionExports.max(by: { $0.date < $1.date }),
+           let metadata = newestRevision.fixed_cycle,
+           let exportedTemplateID = UUID(uuidString: metadata.template_id) {
+            let revised: CycleTemplate
+            if let existing = availableTemplates.first(where: { $0.id == exportedTemplateID }) {
+                guard FixedCycleClusterProgramService.isProgramTemplate(existing), FixedCycleClusterProgramService.versionID(for: existing) == FixedCycleClusterProgramService.revisionVersionID else { throw ClusterRevisionError.invalidState }
+                revised = existing
+            } else {
+                revised = try FixedCycleClusterProgramService.makeTemplate(exercises: catalog, revised: true)
+                revised.id = exportedTemplateID
+                // Recover literal prescriptions when this slot has been exported.
+                for export in revisionExports.sorted(by: { $0.date < $1.date }) {
+                    for occurrence in export.fixed_cycle?.cluster_occurrences ?? [] {
+                        guard let position = occurrence.template_day_position, let day = revised.days.first(where: { $0.position == position }) else { continue }
+                        for snapshot in occurrence.exercises where snapshot.prescribed_set_count > 0 {
+                            day.slots.first(where: { $0.position == snapshot.position })?.defaultSetCount = snapshot.prescribed_set_count
+                        }
+                    }
+                }
+                modelContext.insert(revised)
+                availableTemplates.append(revised)
+            }
+            let exportedCycleID = metadata.cycle_instance_id.flatMap(UUID.init(uuidString:))
+            let destination = availableCycles.first(where: { $0.id == exportedCycleID }) ?? cycle
+            if availableTemplates.contains(where: { $0.id == destination.templateId && FixedCycleClusterProgramService.isProgramTemplate($0) }) {
+                destination.templateId = revised.id
+            }
+        }
         let templatesByID = Dictionary(
             uniqueKeysWithValues: availableTemplates.map { ($0.id, $0) }
         )
+        func recoveredTemplateID(_ metadata: SessionExportService.FixedCycleMetadata, fallback: UUID) -> UUID {
+            if let exact = UUID(uuidString: metadata.template_id), templatesByID[exact] != nil { return exact }
+            let version = "\(FixedCycleClusterProgramService.programIdentifier).v\(metadata.program_version ?? 0)"
+            return availableTemplates.first { FixedCycleClusterProgramService.isProgramTemplate($0) && FixedCycleClusterProgramService.versionID(for: $0) == version }?.id ?? fallback
+        }
         var entriesByKey: [ImportedSetKey: SetEntry] = [:]
         for entry in try modelContext.fetch(FetchDescriptor<SetEntry>()) {
             let key = ImportedSetKey(
@@ -526,15 +563,17 @@ enum BootstrapDataService {
         var clusterOverrideKeys = Set(
             try modelContext.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>()).map(\.key)
         )
-        let latestClusterPreferenceExport = exports.compactMap {
-            export -> (sessionID: String, date: Date, payloads: [SessionExportService.ClusterExercisePreferencePayload])? in
+        let clusterPreferenceExports = exports.compactMap {
+            export -> (sessionID: String, date: Date, versionID: String, payloads: [SessionExportService.ClusterExercisePreferencePayload])? in
             guard let metadata = export.fixed_cycle,
                   metadata.schema_version >= 4,
                   metadata.program_identifier == FixedCycleClusterProgramService.programIdentifier,
-                  metadata.program_version == FixedCycleClusterProgramService.structureVersion,
+                  FixedCycleClusterProgramService.supports(version: metadata.program_version),
                   let date = SessionExportService.parseExportDate(export.date) else { return nil }
-            return (export.session_id, date, metadata.cluster_exercise_preferences ?? [])
-        }.max { $0.date < $1.date }
+            let versionID = "\(FixedCycleClusterProgramService.programIdentifier).v\(metadata.program_version!)"
+            return (export.session_id, date, versionID, metadata.cluster_exercise_preferences ?? [])
+        }
+        let latestClusterPreferenceExports = Dictionary(grouping: clusterPreferenceExports, by: \.versionID).compactMapValues { $0.max { $0.date < $1.date } }
 
         func resolveOverlayExercise(
             id: String,
@@ -546,7 +585,7 @@ enum BootstrapDataService {
             if let uuid = UUID(uuidString: id), let existing = exercisesById[uuid] {
                 return existing
             }
-            if let existing = exercisesByName[name.lowercased()] {
+            if let existing = resolveImportedExercise(id: UUID(uuidString: id), name: name, byId: exercisesById, byName: exercisesByName) {
                 return existing
             }
             guard let uuid = UUID(uuidString: id),
@@ -577,11 +616,11 @@ enum BootstrapDataService {
             guard let metadata = export.fixed_cycle,
                   metadata.schema_version >= 4,
                   metadata.program_identifier == FixedCycleClusterProgramService.programIdentifier,
-                  metadata.program_version == FixedCycleClusterProgramService.structureVersion else {
+                  FixedCycleClusterProgramService.supports(version: metadata.program_version) else {
                 continue
             }
             for payload in metadata.cluster_exercise_preferences ?? [] where
-                payload.program_version_id == FixedCycleClusterProgramService.programVersionID {
+                FixedCycleClusterProgramService.supports(programVersionID: payload.program_version_id) {
                 _ = resolveOverlayExercise(
                     id: payload.exercise_id,
                     name: payload.exercise_name,
@@ -591,7 +630,7 @@ enum BootstrapDataService {
                 )
             }
             for payload in metadata.cluster_exercise_overrides ?? [] where
-                payload.program_version_id == FixedCycleClusterProgramService.programVersionID {
+                FixedCycleClusterProgramService.supports(programVersionID: payload.program_version_id) {
                 _ = resolveOverlayExercise(
                     id: payload.exercise_id,
                     name: payload.exercise_name,
@@ -602,11 +641,10 @@ enum BootstrapDataService {
             }
         }
 
-        if let latestClusterPreferenceExport {
+        for latestClusterPreferenceExport in latestClusterPreferenceExports.values {
             let authoritativeKeys = Set(latestClusterPreferenceExport.payloads.compactMap {
                 payload -> String? in
-                guard payload.program_version_id
-                    == FixedCycleClusterProgramService.programVersionID else { return nil }
+                guard payload.program_version_id == latestClusterPreferenceExport.versionID else { return nil }
                 return ClusterExercisePreference.key(
                     programVersionID: payload.program_version_id,
                     templateDayPosition: payload.template_day_position,
@@ -614,7 +652,7 @@ enum BootstrapDataService {
                 )
             })
             let stalePreferences = clusterPreferencesByKey.values.filter {
-                $0.programVersionID == FixedCycleClusterProgramService.programVersionID
+                $0.programVersionID == latestClusterPreferenceExport.versionID
                     && $0.updatedAt <= latestClusterPreferenceExport.date
                     && !authoritativeKeys.contains($0.key)
             }
@@ -631,7 +669,7 @@ enum BootstrapDataService {
             let isClusteredV4 = export.fixed_cycle.map {
                 $0.schema_version == 4
                     && $0.program_identifier == FixedCycleClusterProgramService.programIdentifier
-                    && $0.program_version == FixedCycleClusterProgramService.structureVersion
+                    && FixedCycleClusterProgramService.supports(version: $0.program_version)
             } ?? false
             let destinationCycle: ActiveCycleInstance
             if isClusteredV4 {
@@ -780,9 +818,9 @@ enum BootstrapDataService {
                 session.dayLabelSnapshot = metadata.day_label
                 if canHydrateClusterState,
                    metadata.schema_version >= 4,
-                   export.session_id == latestClusterPreferenceExport?.sessionID {
+                   export.session_id == latestClusterPreferenceExports["\(FixedCycleClusterProgramService.programIdentifier).v\(metadata.program_version ?? 0)"]?.sessionID {
                     for payload in metadata.cluster_exercise_preferences ?? [] where
-                        payload.program_version_id == FixedCycleClusterProgramService.programVersionID {
+                        FixedCycleClusterProgramService.supports(programVersionID: payload.program_version_id) {
                         guard let exercise = resolveOverlayExercise(
                             id: payload.exercise_id,
                             name: payload.exercise_name,
@@ -818,7 +856,7 @@ enum BootstrapDataService {
                 if canHydrateClusterState, metadata.schema_version >= 4 {
                     for payload in metadata.cluster_exercise_overrides ?? [] where
                         payload.session_id == session.id.uuidString
-                            && payload.program_version_id == FixedCycleClusterProgramService.programVersionID {
+                            && FixedCycleClusterProgramService.supports(programVersionID: payload.program_version_id) {
                         guard let overrideID = UUID(uuidString: payload.override_id),
                               let exercise = resolveOverlayExercise(
                                   id: payload.exercise_id,
@@ -852,7 +890,7 @@ enum BootstrapDataService {
                     canHydrateClusterState
                         && metadata.schema_version == 4
                         && metadata.program_identifier == FixedCycleClusterProgramService.programIdentifier
-                        && metadata.program_version == FixedCycleClusterProgramService.structureVersion {
+                        && FixedCycleClusterProgramService.supports(version: metadata.program_version) {
                     guard statePayload.position_index >= 0,
                           !statePayload.program_version_id.isEmpty,
                           !statePayload.cluster_id.isEmpty else { continue }
@@ -878,7 +916,7 @@ enum BootstrapDataService {
                     } else {
                         let state = ClusterRotationState(
                             cycleInstanceId: session.cycleInstanceId,
-                            templateId: destinationCycle.templateId,
+                            templateId: recoveredTemplateID(metadata, fallback: destinationCycle.templateId),
                             programVersionID: statePayload.program_version_id,
                             clusterID: statePayload.cluster_id,
                             positionIndex: statePayload.position_index,
@@ -894,7 +932,7 @@ enum BootstrapDataService {
                     canHydrateClusterState
                         && metadata.schema_version == 4
                         && metadata.program_identifier == FixedCycleClusterProgramService.programIdentifier
-                        && metadata.program_version == FixedCycleClusterProgramService.structureVersion {
+                        && FixedCycleClusterProgramService.supports(version: metadata.program_version) {
                     guard let occurrenceID = UUID(uuidString: occurrencePayload.occurrence_id),
                           !clusterOccurrenceIDs.contains(occurrenceID),
                           occurrencePayload.position_index >= 0 else { continue }
@@ -931,7 +969,7 @@ enum BootstrapDataService {
                               id: occurrenceID,
                               sessionId: session.id,
                               cycleInstanceId: session.cycleInstanceId,
-                              templateId: destinationCycle.templateId,
+                              templateId: recoveredTemplateID(metadata, fallback: destinationCycle.templateId),
                               programVersionID: occurrencePayload.program_version_id,
                               clusterID: occurrencePayload.cluster_id,
                               absoluteStep: occurrencePayload.position_index,
@@ -1035,7 +1073,7 @@ enum BootstrapDataService {
         }
 
         let recoveredOccurrences = try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
-            .filter { $0.programVersionID == FixedCycleClusterProgramService.programVersionID }
+            .filter { FixedCycleClusterProgramService.supports(programVersionID: $0.programVersionID) }
         for (cycleID, cycleOccurrences) in Dictionary(
             grouping: recoveredOccurrences,
             by: \.cycleInstanceId
@@ -1043,7 +1081,7 @@ enum BootstrapDataService {
             for cluster in FixedCycleClusterProgramService.Cluster.allCases {
                 let key = ClusterRotationState.key(
                     cycleInstanceId: cycleID,
-                    programVersionID: FixedCycleClusterProgramService.programVersionID,
+                    programVersionID: cycleOccurrences.filter { $0.clusterID == cluster.rawValue }.max(by: { $0.positionIndex < $1.positionIndex })?.programVersionID ?? FixedCycleClusterProgramService.programVersionID,
                     clusterID: cluster.rawValue
                 )
                 let candidates = cycleOccurrences.filter { $0.clusterID == cluster.rawValue }
@@ -1095,7 +1133,7 @@ enum BootstrapDataService {
                 let derived = ClusterRotationState(
                     cycleInstanceId: cycleID,
                     templateId: latest.templateId,
-                    programVersionID: FixedCycleClusterProgramService.programVersionID,
+                    programVersionID: latest.programVersionID,
                     clusterID: cluster.rawValue,
                     positionIndex: recoveredCount,
                     updatedAt: latest.completedAt,
@@ -1107,32 +1145,18 @@ enum BootstrapDataService {
             }
         }
 
-        if latestClusterPreferenceExport != nil {
-            let recoveredPreferenceExerciseIDs = FixedCycleClusterProgramService
-                .persistentExerciseIDsByKey(
-                    preferences: Array(clusterPreferencesByKey.values)
-                )
-            let clusteredTemplates = availableTemplates.filter {
-                FixedCycleClusterProgramService.isProgramTemplate($0)
+        for versionID in latestClusterPreferenceExports.keys {
+            let candidates = availableTemplates.filter {
+                FixedCycleClusterProgramService.isProgramTemplate($0) && FixedCycleClusterProgramService.versionID(for: $0) == versionID
             }
-            let preferencesAreValid = !clusteredTemplates.isEmpty && clusteredTemplates.allSatisfy {
-                clusteredTemplate in
-                do {
-                    try FixedCycleClusterProgramService.validatePersistentExercisePreferences(
-                        template: clusteredTemplate,
-                        exerciseIDsByPreferenceKey: recoveredPreferenceExerciseIDs
-                    )
-                    return true
-                } catch {
-                    return false
-                }
+            let ids = FixedCycleClusterProgramService.persistentExerciseIDsByKey(preferences: Array(clusterPreferencesByKey.values), programVersionID: versionID)
+            let valid = !candidates.isEmpty && candidates.allSatisfy {
+                (try? FixedCycleClusterProgramService.validatePersistentExercisePreferences(template: $0, exerciseIDsByPreferenceKey: ids)) != nil
             }
-            if !preferencesAreValid {
-                let invalidOverlay = clusterPreferencesByKey.values.filter {
-                    $0.programVersionID == FixedCycleClusterProgramService.programVersionID
-                }
-                result.resetInvalidClusterExercisePreferences += invalidOverlay.count
-                for preference in invalidOverlay {
+            if !valid {
+                let invalid = clusterPreferencesByKey.values.filter { $0.programVersionID == versionID }
+                result.resetInvalidClusterExercisePreferences += invalid.count
+                for preference in invalid {
                     modelContext.delete(preference)
                     clusterPreferencesByKey.removeValue(forKey: preference.key)
                 }
@@ -1186,6 +1210,8 @@ enum BootstrapDataService {
 
     private static func safeExerciseAliases(for canonical: String) -> [String] {
         switch canonical {
+        case "safetybarsquat", "safetysquatbarsquat":
+            return ["safetybarsquat", "safetysquatbarsquat"]
         case "stifflegdeadlift", "stiffleggedeadlift", "sldl":
             return ["stifflegdeadlift", "stiffleggedeadlift", "sldl"]
         case "singlearmdumbbellrow", "singlearmdumbellrow", "singlearmdbrow":
@@ -1815,7 +1841,7 @@ enum BootstrapDataService {
                       Set(states.filter {
                           $0.cycleInstanceId == cycle.id
                               && $0.templateId == template.id
-                              && $0.programVersionID == FixedCycleClusterProgramService.programVersionID
+                              && $0.programVersionID == FixedCycleClusterProgramService.versionID(for: template)
                       }.map(\.clusterID)) == Set(FixedCycleClusterProgramService.Cluster.allCases.map(\.rawValue)) else {
                     throw ClusteredProgramRolloutError.completedRolloutStateMissing
                 }
@@ -1957,6 +1983,151 @@ enum BootstrapDataService {
                 cycleId: cycle.id,
                 didApply: true
             )
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    static let september5SafetyBarSessionID = UUID(uuidString: "734246BD-22B9-4D6E-BF88-130B5144B28A")!
+
+    /// User-authorized name-only correction. All other immutable evidence stays
+    /// unchanged; completed exports must be retried after the transaction.
+    private static func renameSeptember5SafetyBarSquat(modelContext: ModelContext) throws {
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let matches = exercises.filter { ["Safety Squat Bar Squat", "Safety Bar Squat"].contains($0.name) }
+        guard matches.count <= 1 else { throw ClusterRevisionError.invalidState }
+        guard let exercise = matches.first else { return }
+        let target = try modelContext.fetch(FetchDescriptor<Session>()).first { $0.id == september5SafetyBarSessionID }
+        if let target {
+            let occurrences = try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).filter { $0.sessionId == target.id }
+            guard target.status == .completed,
+                  occurrences.contains(where: { $0.exerciseSnapshots.contains { $0.exerciseId == exercise.id } }) else { throw ClusterRevisionError.invalidState }
+            for occurrence in occurrences {
+                try occurrence.correctExerciseName(exerciseId: exercise.id, name: "Safety Bar Squat")
+            }
+            for snapshot in try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>()) where snapshot.sessionId == target.id && snapshot.exerciseId == exercise.id {
+                snapshot.exerciseName = "Safety Bar Squat"
+            }
+            target.exportStatus = .pending
+        }
+        exercise.name = "Safety Bar Squat"
+    }
+
+    static let september2026RevisionMarker = "clustered-program-revision-2026-09-06-v2"
+
+    enum ClusterRevisionError: LocalizedError {
+        case backupRequired, invalidState, draftHasWork, pendingChanges
+        var errorDescription: String? {
+            switch self {
+            case .backupRequired: return "A verified store backup is required before revising the clustered program."
+            case .invalidState: return "The clustered revision found conflicting or incomplete program state; no changes were applied."
+            case .draftHasWork: return "Resolve the current draft before revising the clustered program; no entered work was removed."
+            case .pendingChanges: return "Save pending changes before revising the clustered program."
+            }
+        }
+    }
+
+    /// Explicit content revision, not a schema migration or ordinary startup action.
+    /// The same cycle continues at its exact independent raw positions. V1
+    /// templates, pointers, preferences and completed evidence remain archived.
+    @discardableResult
+    static func prepareSeptember2026ClusterRevision(
+        modelContext: ModelContext,
+        backupConfirmed: Bool = false
+    ) throws -> ClusteredProgramRolloutResult {
+        guard !modelContext.hasChanges else { throw ClusterRevisionError.pendingChanges }
+        do {
+            let markers = try modelContext.fetch(FetchDescriptor<TrainingPreference>())
+            let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+            let cycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+            let states = try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
+            if let marker = markers.first(where: { $0.key == september2026RevisionMarker }) {
+                let ids = marker.modeRawValue.split(separator: "|").compactMap { UUID(uuidString: String($0)) }
+                guard ids.count == 2,
+                      let template = templates.first(where: { $0.id == ids[0] }),
+                      FixedCycleClusterProgramService.isProgramTemplate(template),
+                      FixedCycleClusterProgramService.versionID(for: template) == FixedCycleClusterProgramService.revisionVersionID,
+                      cycles.contains(where: { $0.id == ids[1] && $0.templateId == ids[0] }),
+                      Set(states.filter { $0.cycleInstanceId == ids[1] && $0.templateId == ids[0] && $0.programVersionID == FixedCycleClusterProgramService.revisionVersionID }.map(\.clusterID)) == Set(FixedCycleClusterProgramService.Cluster.allCases.map(\.rawValue)) else {
+                    throw ClusterRevisionError.invalidState
+                }
+                return ClusteredProgramRolloutResult(templateId: ids[0], cycleId: ids[1], didApply: false)
+            }
+            guard backupConfirmed else { throw ClusterRevisionError.backupRequired }
+            let candidates = cycles.filter { cycle in
+                templates.contains { $0.id == cycle.templateId && FixedCycleClusterProgramService.isProgramTemplate($0) }
+            }
+            guard candidates.count == 1, let cycle = candidates.first,
+                  let oldTemplate = templates.first(where: { $0.id == cycle.templateId }),
+                  FixedCycleClusterProgramService.versionID(for: oldTemplate) == FixedCycleClusterProgramService.programVersionID,
+                  !templates.contains(where: { $0.name == FixedCycleClusterProgramService.revisionTemplateName }) else {
+                throw ClusterRevisionError.invalidState
+            }
+            let oldStates = states.filter { $0.cycleInstanceId == cycle.id }
+            guard oldStates.count == 3,
+                  Set(oldStates.map(\.clusterID)) == Set(FixedCycleClusterProgramService.Cluster.allCases.map(\.rawValue)),
+                  oldStates.allSatisfy({ $0.templateId == oldTemplate.id && $0.programVersionID == FixedCycleClusterProgramService.programVersionID && $0.positionIndex >= 0 }) else {
+                throw ClusterRevisionError.invalidState
+            }
+            // No draft may span two template versions. Even prefilled work is
+            // retained for review instead of trying to distinguish it from edits.
+            guard !(try modelContext.fetch(FetchDescriptor<Session>())).contains(where: { $0.status == .draft }),
+                  !(try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())).contains(where: { $0.status == .draft }) else {
+                throw ClusterRevisionError.draftHasWork
+            }
+            try renameSeptember5SafetyBarSquat(modelContext: modelContext)
+            let exercises = try ensureExerciseCatalog(modelContext: modelContext, saveChanges: false)
+            let template = try FixedCycleClusterProgramService.makeTemplate(exercises: exercises, revised: true)
+            let preferences = try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>())
+            var carried: [ClusterExercisePreference] = []
+            for oldDay in oldTemplate.days {
+                for oldSlot in oldDay.slots {
+                    // Retired canonical movements intentionally have no target.
+                    // In particular, sumo's positional BSS preference must not
+                    // override the user's explicit new Prime squat assignment.
+                    let targets = template.days.flatMap { day in
+                        day.slots.filter { $0.exerciseId == oldSlot.exerciseId }.map { (day, $0) }
+                    }
+                    let matching = targets.first(where: { $0.0.position == oldDay.position && $0.1.position == oldSlot.position })
+                        ?? (targets.count == 1 ? targets.first : nil)
+                    guard let (newDay, newSlot) = matching else { continue }
+                    newSlot.defaultSetCount = oldSlot.defaultSetCount
+                    let oldKey = ClusterExercisePreference.key(programVersionID: FixedCycleClusterProgramService.programVersionID, templateDayPosition: oldDay.position, slotPosition: oldSlot.position)
+                    guard let preference = preferences.first(where: { $0.key == oldKey }) else { continue }
+                    carried.append(ClusterExercisePreference(programVersionID: FixedCycleClusterProgramService.revisionVersionID, templateDayPosition: newDay.position, slotPosition: newSlot.position, exerciseId: preference.exerciseId, updatedAt: preference.updatedAt))
+                }
+            }
+            // New movements inherit only the retired lane's literal row count,
+            // never its weights, reps, resistance profile, or progression key.
+            let completedIDs = Set(try modelContext.fetch(FetchDescriptor<Session>()).filter { $0.status == .completed }.map(\.id))
+            let evidence = try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).filter { completedIDs.contains($0.sessionId) }.sorted { $0.completedAt > $1.completedAt }
+            let entries = try modelContext.fetch(FetchDescriptor<SetEntry>())
+            for (oldDayPosition, newDayPosition, slotPosition) in [(1, 2, 1), (5, 6, 0)] {
+                guard let newSlot = template.days.first(where: { $0.position == newDayPosition })?.slots.first(where: { $0.position == slotPosition }) else { continue }
+                for occurrence in evidence where occurrence.programVersionID == FixedCycleClusterProgramService.programVersionID && occurrence.templateDayPosition == oldDayPosition {
+                    guard let snapshot = occurrence.exerciseSnapshots.first(where: { $0.position == slotPosition && $0.completionStatus == .performed }) else { continue }
+                    let count = entries.filter { $0.sessionId == occurrence.sessionId && $0.exerciseId == snapshot.exerciseId && $0.isLocked && $0.reps > 0 }.count
+                    if count > 0 { newSlot.defaultSetCount = count; break }
+                }
+            }
+            try FixedCycleClusterProgramService.validatePersistentExercisePreferences(template: template, exerciseIDsByPreferenceKey: FixedCycleClusterProgramService.persistentExerciseIDsByKey(preferences: carried, programVersionID: FixedCycleClusterProgramService.revisionVersionID))
+            modelContext.insert(template)
+            for preference in carried { modelContext.insert(preference) }
+            for old in oldStates {
+                modelContext.insert(ClusterRotationState(cycleInstanceId: cycle.id, templateId: template.id, programVersionID: FixedCycleClusterProgramService.revisionVersionID, clusterID: old.clusterID, positionIndex: old.positionIndex, updatedAt: old.updatedAt, lastCompletedOccurrenceID: old.lastCompletedOccurrenceID, isDerived: old.isDerived))
+            }
+            cycle.templateId = template.id
+            modelContext.insert(TrainingPreference(key: september2026RevisionMarker, modeRawValue: "\(template.id.uuidString)|\(cycle.id.uuidString)"))
+            // Keep the original rollout's idempotence marker aligned to the live
+            // template, without changing any completed-session evidence.
+            if let original = markers.first(where: { $0.key == clusteredProgramRolloutMarkerKey }) {
+                original.modeRawValue = "\(template.id.uuidString)|\(cycle.id.uuidString)"
+            }
+            try modelContext.save()
+            UserDefaults.standard.set(template.id.uuidString, forKey: "openlift.lastActivatedTemplateId")
+            UserDefaults.standard.set(template.name, forKey: "openlift.lastActivatedTemplateName")
+            return ClusteredProgramRolloutResult(templateId: template.id, cycleId: cycle.id, didApply: true)
         } catch {
             modelContext.rollback()
             throw error
@@ -2249,9 +2420,11 @@ enum BootstrapDataService {
         ("Single-Arm Dumbbell Row", .back, .compound, .dumbbell),
         ("Assisted Pull-Up", .back, .compound, .machine),
         ("Lat Prayer", .back, .isolation, .cable),
+        ("Dumbbell Lat Pullover", .back, .isolation, .dumbbell),
+        ("Cable Lat Pullover", .back, .isolation, .cable),
         ("Hack Squat", .quads, .compound, .machine),
         ("Leg Press", .quads, .compound, .machine),
-        ("Safety Squat Bar Squat", .quads, .compound, .barbell),
+        ("Safety Bar Squat", .quads, .compound, .barbell),
         ("Leg Extension", .quads, .isolation, .machine),
         ("Bulgarian Split Squat", .quads, .compound, .dumbbell),
         ("Pendulum Squat", .quads, .compound, .machine),
@@ -2351,6 +2524,7 @@ enum FixedCycleClusterProgramService {
         let absoluteStep: Int
         let effectiveStep: Int
         let day: CycleDay
+        var programVersionID: String = FixedCycleClusterProgramService.programVersionID
 
         var id: String { cluster.rawValue }
     }
@@ -2374,6 +2548,22 @@ enum FixedCycleClusterProgramService {
     static let programVersionID = "\(programIdentifier).v\(structureVersion)"
     static let templateName = "Clustered Hypertrophy v1"
     static let templateIdentityKey = RotationPoolKey.clusteredHypertrophyV1.rawValue
+
+    static let revisionVersionID = "\(programIdentifier).v2"
+    static let revisionTemplateName = "Clustered Hypertrophy v2"
+    static let revisionIdentityKey = "openlift_clustered_hypertrophy_v2"
+
+    static func isReservedTemplateName(_ name: String) -> Bool {
+        [templateName, revisionTemplateName].contains { name.caseInsensitiveCompare($0) == .orderedSame }
+    }
+    static func supports(version: Int?) -> Bool { version == 1 || version == 2 }
+    static func supports(programVersionID: String) -> Bool {
+        programVersionID == self.programVersionID || programVersionID == revisionVersionID
+    }
+    static func versionID(for template: CycleTemplate) -> String {
+        template.rotationPools.contains { $0.key == revisionIdentityKey }
+            ? revisionVersionID : programVersionID
+    }
 
     static func activationCleanupPlan(
         existingCycles: [ActiveCycleInstance],
@@ -2422,9 +2612,9 @@ enum FixedCycleClusterProgramService {
     static func isProgramTemplate(_ template: CycleTemplate?) -> Bool {
         guard let template,
               template.rotationPools.contains(where: {
-                  $0.key == templateIdentityKey && $0.entries.isEmpty
+                  ($0.key == templateIdentityKey || $0.key == revisionIdentityKey) && $0.entries.isEmpty
               }) else { return false }
-        let expectedDays: [(Int, String, [(Int, MuscleGroup)])] = [
+        var expectedDays: [(Int, String, [(Int, MuscleGroup)])] = [
             (0, "Cluster 1 · A", [(0, .chest), (1, .back)]),
             (1, "Cluster 1 · B", [(0, .chest), (1, .back)]),
             (2, "Cluster 1 · C", [(0, .chest), (1, .back)]),
@@ -2441,6 +2631,11 @@ enum FixedCycleClusterProgramService {
             (13, "Cluster 3 · E", [(0, .sideDelts), (1, .calves)]),
             (14, "Cluster 3 · F", [(0, .sideDelts), (1, .forearms)])
         ]
+        if versionID(for: template) == revisionVersionID {
+            for position in 3...8 {
+                expectedDays[position].2[0].1 = position % 2 == 1 ? .hamstrings : .quads
+            }
+        }
         let actualDays = CycleOrdering.sortedDays(template.days)
         guard actualDays.count == expectedDays.count else { return false }
         return zip(actualDays, expectedDays).allSatisfy { day, expected in
@@ -2451,12 +2646,12 @@ enum FixedCycleClusterProgramService {
                 && zip(slots, expected.2).allSatisfy { slot, role in
                     slot.position == role.0
                         && slot.muscle == role.1
-                        && slot.defaultSetCount == 3
+                        && (versionID(for: template) == revisionVersionID ? slot.defaultSetCount > 0 : slot.defaultSetCount == 3)
                 }
         }
     }
 
-    static func makeTemplate(exercises: [Exercise]) throws -> CycleTemplate {
+    static func makeTemplate(exercises: [Exercise], revised: Bool = false) throws -> CycleTemplate {
         let byName = Dictionary(exercises.map { ($0.name.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
         func required(_ candidates: [String]) throws -> Exercise {
             for candidate in candidates {
@@ -2552,10 +2747,24 @@ enum FixedCycleClusterProgramService {
                 slot(1, .forearms, ["Captain of Crush", "Captains of Crush"])
             ])
         ]
+        if revised {
+            let chest = [["Flat Dumbbell Press"], ["Incline Dumbbell Press"], ["Incline Press-Flye", "Incline Dumbbell Press-Flye"]]
+            let back = [["Lat Pulldown"], ["Chest Supported Row", "Chest-Supported Cable Row"], ["Dumbbell Lat Pullover"]]
+            let legs = ["Leg Curl", "Belt Squat", "Stiff-Leg Deadlift", "Safety Bar Squat", "Back Extension", "Bulgarian Split Squat"]
+            for index in 0..<3 {
+                cluster1[index].slots.first { $0.position == 0 }!.exerciseId = try required(chest[index]).id
+                cluster1[index].slots.first { $0.position == 1 }!.exerciseId = try required(back[index]).id
+            }
+            for index in 0..<6 {
+                let leg = cluster2[index].slots.first { $0.position == 0 }!
+                leg.exerciseId = try required(index == 3 ? ["Safety Bar Squat", "Safety Squat Bar Squat"] : [legs[index]]).id
+                leg.muscle = index % 2 == 0 ? .hamstrings : .quads
+            }
+        }
         let template = CycleTemplate(
-            name: templateName,
+            name: revised ? revisionTemplateName : templateName,
             days: cluster1 + cluster2 + cluster3,
-            rotationPools: [RotationPool(key: templateIdentityKey, entries: [])]
+            rotationPools: [RotationPool(key: revised ? revisionIdentityKey : templateIdentityKey, entries: [])]
         )
         try template.validate(
             exercisesById: Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
@@ -2565,7 +2774,8 @@ enum FixedCycleClusterProgramService {
 
     static func makeRotationStates(
         cycleInstanceId: UUID,
-        templateId: UUID
+        templateId: UUID,
+        programVersionID: String = programVersionID
     ) -> [ClusterRotationState] {
         Cluster.allCases.map {
             ClusterRotationState(
@@ -2604,7 +2814,7 @@ enum FixedCycleClusterProgramService {
               let state = states.first(where: {
                   $0.cycleInstanceId == cycleInstanceId
                       && $0.templateId == template.id
-                      && $0.programVersionID == programVersionID
+                      && $0.programVersionID == versionID(for: template)
                       && $0.clusterID == cluster.rawValue
               }) else { throw ProgramError.missingClusterPointer(cluster) }
         let absoluteStep = max(0, state.positionIndex)
@@ -2619,7 +2829,8 @@ enum FixedCycleClusterProgramService {
             templateId: template.id,
             absoluteStep: absoluteStep,
             effectiveStep: effectiveStep,
-            day: day
+            day: day,
+            programVersionID: versionID(for: template)
         )
     }
 
@@ -2629,7 +2840,7 @@ enum FixedCycleClusterProgramService {
         preferences: [ClusterExercisePreference]
     ) -> ClusterExercisePreference? {
         let key = ClusterExercisePreference.key(
-            programVersionID: programVersionID,
+            programVersionID: selection.programVersionID,
             templateDayPosition: selection.day.position,
             slotPosition: slotPosition
         )
@@ -2644,7 +2855,7 @@ enum FixedCycleClusterProgramService {
     ) -> ClusterExerciseOccurrenceOverride? {
         let key = ClusterExerciseOccurrenceOverride.key(
             sessionId: sessionId,
-            programVersionID: programVersionID,
+            programVersionID: selection.programVersionID,
             templateDayPosition: selection.day.position,
             slotPosition: slotPosition
         )
@@ -2676,7 +2887,7 @@ enum FixedCycleClusterProgramService {
                 }
                 let resolvedExerciseIDs = CycleOrdering.sortedSlots(day.slots).map { slot in
                     let key = ClusterExercisePreference.key(
-                        programVersionID: programVersionID,
+                        programVersionID: versionID(for: template),
                         templateDayPosition: day.position,
                         slotPosition: slot.position
                     )
@@ -2706,7 +2917,8 @@ enum FixedCycleClusterProgramService {
     }
 
     static func persistentExerciseIDsByKey(
-        preferences: [ClusterExercisePreference]
+        preferences: [ClusterExercisePreference],
+        programVersionID: String = programVersionID
     ) -> [String: UUID] {
         Dictionary(
             preferences
@@ -2739,8 +2951,7 @@ enum FixedCycleClusterProgramService {
                 slot: slot,
                 exerciseId: exerciseId,
                 progressionKey: progressionKey(
-                    cluster: selection.cluster,
-                    effectiveStep: selection.effectiveStep,
+                    selection: selection,
                     slotPosition: slot.position
                 )
             )
@@ -2803,7 +3014,7 @@ enum FixedCycleClusterProgramService {
             sessionId: session.id,
             cycleInstanceId: selection.cycleInstanceId,
             templateId: selection.templateId,
-            programVersionID: programVersionID,
+            programVersionID: selection.programVersionID,
             clusterID: selection.cluster.rawValue,
             absoluteStep: selection.absoluteStep,
             templateDayPosition: selection.day.position,
@@ -2811,6 +3022,29 @@ enum FixedCycleClusterProgramService {
             completedAt: completedAt,
             exerciseSnapshots: snapshots
         )
+    }
+
+    /// Surviving movements retain v1 semantic identities, not their new positions.
+    /// The pullover starts a fresh identity; the already-performed safety-bar
+    /// squat retains its same-exercise Sept 5 identity.
+    static func progressionKey(selection: Selection, slotPosition: Int) -> String {
+        var step = selection.effectiveStep
+        if selection.programVersionID == revisionVersionID {
+            if selection.cluster == .cluster1 {
+                if slotPosition == 0 { step = [1, 0, 2][step % 3] }
+                else if step % 3 == 2 { return "\(revisionVersionID).cluster1.back.pullover" }
+                else { step = [0, 2, 1][step % 3] }
+            } else if selection.cluster == .cluster2 && slotPosition == 0 {
+                if step % 6 == 3 {
+                    // Sept 5 used the same safety-bar exercise as a one-workout
+                    // leg-F override. Exercise UUID isolation keeps leg curls
+                    // out while preserving that explicitly approved baseline.
+                    return progressionKey(cluster: .cluster2, effectiveStep: 5, slotPosition: 0)
+                }
+                step = [5, 0, 1, 2, 3, 4][step % 6]
+            }
+        }
+        return progressionKey(cluster: selection.cluster, effectiveStep: step, slotPosition: slotPosition)
     }
 
     static func progressionKey(
@@ -2840,13 +3074,13 @@ enum FixedCycleClusterProgramService {
         occurrence: ClusterOccurrenceRecord,
         states: [ClusterRotationState]
     ) throws -> ClusterRotationState {
-        guard occurrence.programVersionID == programVersionID,
+        guard occurrence.programVersionID == selection.programVersionID,
               occurrence.clusterID == selection.cluster.rawValue,
               occurrence.positionIndex == selection.absoluteStep,
               let state = states.first(where: {
                   $0.cycleInstanceId == selection.cycleInstanceId
                       && $0.templateId == selection.templateId
-                      && $0.programVersionID == programVersionID
+                      && $0.programVersionID == selection.programVersionID
                       && $0.clusterID == selection.cluster.rawValue
               }),
               state.positionIndex == selection.absoluteStep else {
@@ -2866,7 +3100,7 @@ enum FixedCycleClusterProgramService {
     ) -> ClusterOccurrenceRecord? {
         occurrences.first {
             $0.sessionId == sessionID
-                && $0.programVersionID == programVersionID
+                && supports(programVersionID: $0.programVersionID)
                 && $0.clusterID == cluster.rawValue
         }
     }

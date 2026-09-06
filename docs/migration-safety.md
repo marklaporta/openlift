@@ -217,3 +217,48 @@ xcodebuild test -scheme OpenLift -destination 'platform=iOS Simulator,name=iPhon
 For a verified store backup, run [`test-real-store-migration.sh`](../scripts/test-real-store-migration.sh)
 against the backup archive or directory. The script stages a separate working
 copy and never opens the source store in place.
+
+### Explicit September 2026 program revision
+
+After a verified, quiesced store backup and scratch-copy verification, launch the
+updated app once with both arguments:
+
+```text
+OPENLIFT_REVISE_CLUSTERED_PROGRAM_2026_09_06
+OPENLIFT_CLUSTERED_REVISION_BACKUP_CONFIRMED
+```
+
+This is a content transaction, not an automatic schema migration. It requires one
+recognized v1 cycle with exactly three valid pointers and no fixed/adaptive
+drafts. Any preflight/save failure rolls back. It preserves absolute pointer
+values (reviewed store: 12/12/11), archives v1 state, creates v2 state, and records
+an idempotence marker. Repeating the operation verifies the resulting state and
+does not reapply the revision. The standard schema plan remains V14 unchanged.
+
+Success logs `OPENLIFT_CLUSTERED_REVISION_RESULT`. A name-only correction for the
+reviewed Sept 5 safety-bar session is re-exported after commit and reports
+`OPENLIFT_SAFETY_BAR_RENAME_EXPORT_RESULT`; export failure does not undo an already
+committed content transaction and remains retryable.
+
+Service-only copied-store verification (no export or network calls): stage a
+**copy** under the test host's `Documents/OpenLiftCopiedRevisionStore`, or supply
+`OPENLIFT_REAL_DEVICE_STORE_DIRECTORY`, then run:
+
+```bash
+xcodebuild test -scheme OpenLift \
+  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -only-testing:OpenLiftTests/MigrationSafetyTests/testCopiedRealStoreSeptember2026RevisionWhenOptedIn
+```
+
+The test makes another scratch copy before SwiftData opens it, compares all set
+values and frozen occurrence content (allowing only the requested target name),
+checks the safety-bar UUID, next pointers and pairings, confirms idempotence, and
+verifies that the supplied copy's manifest is unchanged. Never stage the sole
+backup or a live store for testing.
+
+V4 export recovery recognizes both program versions, reconstructs missing v2
+template metadata, and maintains continuous occurrence evidence across the
+revision. Durable preferences are authoritative independently per version; an
+old v1 retry cannot delete current v2 preferences. Recovered pointers and frozen
+occurrences attach to matching-version templates. Safety-bar naming aliases
+resolve to one catalog identity during recovery.

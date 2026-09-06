@@ -210,6 +210,7 @@ enum RotationPoolKey: String, Codable, CaseIterable {
     /// Reserved structural identity. User-authored/imported templates cannot
     /// create or overwrite this versioned program through CycleView.
     case clusteredHypertrophyV1 = "openlift_clustered_hypertrophy_v1"
+    case clusteredHypertrophyV2 = "openlift_clustered_hypertrophy_v2"
 }
 
 enum TrainingMode: String, Codable, CaseIterable, Hashable {
@@ -1713,6 +1714,16 @@ final class ClusterOccurrenceRecord {
             [ClusterExerciseProgressionSnapshot].self,
             from: exerciseSnapshotsData
         )) ?? []
+    }
+
+    /// Explicit name-only repair entry point. Does not alter identity, dose,
+    /// completion status, resistance profile or any structural evidence.
+    func correctExerciseName(exerciseId: UUID, name: String) throws {
+        let updated = exerciseSnapshots.map { snapshot in
+            ClusterExerciseProgressionSnapshot(position: snapshot.position, exerciseId: snapshot.exerciseId, exerciseName: snapshot.exerciseId == exerciseId ? name : snapshot.exerciseName, muscle: snapshot.muscle, prescribedSetCount: snapshot.prescribedSetCount, progressionKey: snapshot.progressionKey, resistanceProfile: snapshot.resistanceProfile, completionStatus: snapshot.completionStatus)
+        }
+        guard updated != exerciseSnapshots else { return }
+        exerciseSnapshotsData = try JSONEncoder().encode(updated)
     }
 
     var positionIndex: Int { absoluteStep }

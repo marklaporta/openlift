@@ -97,7 +97,7 @@ The Cycle tab supports:
 
 Changing to a different active template requires confirmation.
 
-`Clustered Hypertrophy v1` is an internal versioned program template rather
+`Clustered Hypertrophy v1` and `v2` are internal versioned program templates rather
 than a general editable template. The Cycle tab disables editing and cloning it,
 and rejects a published import that tries to replace its reserved name. Its
 three cluster state rows and stable progression identities are created only by
@@ -116,6 +116,8 @@ different raw day that happens to share a shortened progression identity.
 These choices are overlays, not template edits. Resetting a durable preference
 restores the canonical movement, and locked positive-rep work blocks replacement.
 
+**Original v1 mappings (archived after the [v2 revision](#september-2026-clustered-revision-v2)):**
+
 | Identity | Cluster 1: chest + back | Cluster 2: legs + triceps + biceps | Cluster 3: shoulders + calves/forearms |
 |---|---|---|---|
 | A | Incline Dumbbell Press; Lat Pulldown | Belt Squat; Overhead Cable Extension; Incline Curl | Super ROM Dumbbell Lateral Raise; Stair Calves |
@@ -131,7 +133,7 @@ Cluster 3 derives a two-step shoulder identity inside its six-step
 calves/forearms rotation. One whole-cluster state advances atomically; there is
 no pointer or completion action for an internal lane.
 
-Every slot defaults to three rows. A qualifying prior performance for the exact
+In v1, every slot defaults to three rows. A qualifying prior performance for the exact
 progression identity replaces that default with its literal completed row count,
 weights, and reps. Removing row three and completing that lane therefore makes
 the next matching occurrence a two-row draft without changing the immutable
@@ -163,3 +165,40 @@ work, finishing names it and offers a Review action that navigates to that clust
 The recap lists actual retained work and all three independent next selections,
 explicitly distinguishing advanced from unchanged rotations. The existing 3/6/6
 rotation model and set-count/prefill policies are unchanged.
+
+## September 2026 clustered revision (v2)
+
+This explicit, backup-gated content revision leaves the v1 reserved template,
+completed history, old pointers, and old durable preferences archived. It does
+not change the V14 SwiftData schema or reset raw cluster positions. The existing
+cycle continues with v2 pointers at the same values.
+
+- Cluster 1 A: Flat Dumbbell Press + Lat Pulldown.
+- Cluster 1 B: Incline Dumbbell Press + Chest Supported Row.
+- Cluster 1 C: Incline Press-Flye + Dumbbell Lat Pullover.
+- Cluster 2 legs A–F: Leg Curl, Belt Squat, Stiff-Leg Deadlift, Safety Bar Squat,
+  Back Extension, Bulgarian Split Squat. The triceps/biceps pairs keep their
+  original raw-day positions; Cluster 3 is entirely unchanged.
+
+Dumbbell Lat Pullover is the default. Cable Lat Pullover is available through the
+existing exact-slot/workout-only substitution flow, with the usual cable/VOLTRA
+resistance-profile editor. No load or VOLTRA settings are invented.
+
+Surviving movements retain their v1 semantic progression identities, independent
+of their new structural position. The pullover gets a fresh identity and copies
+only the retired straight-arm lane's literal completed row count, not its load,
+reps, or resistance profile. Safety Bar Squat reuses the existing safety-squat-bar
+exercise UUID and the same-exercise Sept 5 performance (225 × 6, 5), via the old
+Cluster 2 F progression key. The lookup additionally requires the exercise UUID,
+so leg curls, belt squats, and substitutions cannot contaminate that baseline.
+
+V1 exact-slot preferences are carried by canonical exercise meaning to v2 when
+the canonical movement survives. Preferences on retired lat-prayer/sumo slots
+remain archived, not mapped onto the new movements. In particular, a Bulgarian
+split squat preference on the former sumo slot cannot replace Safety Bar Squat.
+
+The authorized name correction changes the catalog name to **Safety Bar Squat**
+and only that movement's frozen name evidence in session
+`734246BD-22B9-4D6E-BF88-130B5144B28A`. It preserves the exercise UUID, sets, dates,
+profiles, progression key, and all other completed snapshots. The corrected
+session is marked pending and re-exported after the revision transaction.

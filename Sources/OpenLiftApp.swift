@@ -61,6 +61,22 @@ struct OpenLiftApp: App {
                 print("OPENLIFT_CLUSTERED_PROGRAM_ROLLOUT_FAILED \(error.localizedDescription)")
             }
         }
+        if startup.issue == nil, AppRuntime.shouldPrepareSeptember2026ClusterRevision {
+            let context = ModelContext(startup.container)
+            do {
+                let result = try BootstrapDataService.prepareSeptember2026ClusterRevision(
+                    modelContext: context,
+                    backupConfirmed: AppRuntime.september2026ClusterRevisionBackupIsConfirmed
+                )
+                print("OPENLIFT_CLUSTERED_REVISION_RESULT applied=\(result.didApply) template=\(result.templateId) cycle=\(result.cycleId)")
+                if try context.fetch(FetchDescriptor<Session>()).contains(where: { $0.id == BootstrapDataService.september5SafetyBarSessionID }) {
+                    let export = try SessionExportService.retryCompletedSessionExport(sessionId: BootstrapDataService.september5SafetyBarSessionID, modelContext: context)
+                    print("OPENLIFT_SAFETY_BAR_RENAME_EXPORT_RESULT status=\(export.status.rawValue) file=\(export.filename)")
+                }
+            } catch {
+                print("OPENLIFT_CLUSTERED_REVISION_FAILED \(error.localizedDescription)")
+            }
+        }
         if startup.issue == nil, AppRuntime.shouldRepairJuly27AdaptiveInclineCurl {
             let modelContext = ModelContext(startup.container)
             do {

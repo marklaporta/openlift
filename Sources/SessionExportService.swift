@@ -740,7 +740,7 @@ enum SessionExportService {
                 $0.cycleInstanceId == session.cycleInstanceId
                     && $0.programVersionID == (
                     occurrenceProgramVersionID
-                        ?? FixedCycleClusterProgramService.programVersionID
+                        ?? FixedCycleClusterProgramService.versionID(for: template)
                 )
             }
             .sorted { $0.clusterID < $1.clusterID }
@@ -813,14 +813,14 @@ enum SessionExportService {
                 : nil,
             program_version: isClustered
                 ? (programVersion?.version
-                    ?? FixedCycleClusterProgramService.structureVersion)
+                    ?? (FixedCycleClusterProgramService.versionID(for: template) == FixedCycleClusterProgramService.revisionVersionID ? 2 : 1))
                 : nil,
             cluster_key: nil,
             absolute_cluster_step: nil,
             cluster_occurrences: isClustered ? clusterPayloads : nil,
             cluster_rotation_states: isClustered ? statePayloads : nil,
             cluster_exercise_preferences: isClustered ? clusterExercisePreferences
-                .filter { $0.programVersionID == FixedCycleClusterProgramService.programVersionID }
+                .filter { $0.programVersionID == (occurrenceProgramVersionID ?? FixedCycleClusterProgramService.versionID(for: template)) }
                 .sorted { $0.key < $1.key }
                 .compactMap {
                     guard let exercise = exerciseById[$0.exerciseId] else { return nil }

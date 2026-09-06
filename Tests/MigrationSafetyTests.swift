@@ -1890,3 +1890,56 @@ final class MigrationSafetyTests: XCTestCase {
         })
     }
 }
+
+extension MigrationSafetyTests {
+    /// Service-only opt-in: no app launch arguments, no export calls and no
+    /// network writes. The supplied backup is copied before SwiftData opens it.
+    func testCopiedRealStoreSeptember2026RevisionWhenOptedIn() throws {
+        let documents = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
+        let supplied = ProcessInfo.processInfo.environment["OPENLIFT_REAL_DEVICE_STORE_DIRECTORY"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? documents.appendingPathComponent("OpenLiftCopiedRevisionStore", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: supplied.appendingPathComponent("default.store").path) else {
+            throw XCTSkip("Stage a verified copy in Documents/OpenLiftCopiedRevisionStore to test the content revision.")
+        }
+        let manifest = try completeStoreManifest(in: supplied)
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try copyDirectoryContents(from: supplied, to: fixture.working)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self, configurations: [ModelConfiguration("RevisionCopy", schema: schema, url: fixture.working.appendingPathComponent("default.store"), cloudKitDatabase: .none)])
+        let context = ModelContext(container)
+        func rows() throws -> [String] {
+            try context.fetch(FetchDescriptor<SetEntry>()).map { "\($0.id)|\($0.sessionId)|\($0.exerciseId)|\($0.setIndex)|\($0.weight)|\($0.reps)|\($0.isLocked)|\(String(describing: $0.lockedAt))" }.sorted()
+        }
+        let beforeRows = try rows()
+        let beforeSessions = try context.fetch(FetchDescriptor<Session>()).count
+        let before = try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).map { ($0.id, $0.exerciseSnapshots) }
+        let result = try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context, backupConfirmed: true)
+        XCTAssertTrue(result.didApply)
+        XCTAssertEqual(try rows(), beforeRows)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).count, beforeSessions)
+        let states = try context.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.programVersionID == FixedCycleClusterProgramService.revisionVersionID }.sorted { $0.clusterID < $1.clusterID }
+        XCTAssertEqual(states.map(\.positionIndex), [12, 12, 11])
+        let exercises = try context.fetch(FetchDescriptor<Exercise>())
+        let squat = try XCTUnwrap(exercises.first { $0.name == "Safety Bar Squat" })
+        XCTAssertEqual(squat.id.uuidString, "8A4BD565-B34C-461D-8763-1A58C260E156")
+        let after = try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        XCTAssertEqual(after.count, before.count)
+        for (id, snapshots) in before {
+            let occurrence = try XCTUnwrap(after.first { $0.id == id })
+            let expected = snapshots.map { snapshot in
+                ClusterExerciseProgressionSnapshot(position: snapshot.position, exerciseId: snapshot.exerciseId, exerciseName: occurrence.sessionId == BootstrapDataService.september5SafetyBarSessionID && snapshot.exerciseId == squat.id ? "Safety Bar Squat" : snapshot.exerciseName, muscle: snapshot.muscle, prescribedSetCount: snapshot.prescribedSetCount, progressionKey: snapshot.progressionKey, resistanceProfile: snapshot.resistanceProfile, completionStatus: snapshot.completionStatus)
+            }
+            XCTAssertEqual(occurrence.exerciseSnapshots, expected)
+        }
+        let template = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == result.templateId })
+        let selection = try FixedCycleClusterProgramService.selections(template: template, cycleInstanceId: result.cycleId, states: states)
+        let byID = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0.name) })
+        XCTAssertEqual(selection[0].day.slots.sorted { $0.position < $1.position }.map { byID[$0.exerciseId]! }, ["Flat Dumbbell Press", "Lat Pulldown"])
+        XCTAssertEqual(selection[1].day.slots.sorted { $0.position < $1.position }.map { byID[$0.exerciseId]! }, ["Leg Curl", "Overhead Cable Extension", "Incline Curl"])
+        XCTAssertEqual(template.days.first { $0.position == 2 }?.slots.first { $0.position == 1 }?.defaultSetCount, 2)
+        XCTAssertFalse(try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context, backupConfirmed: true).didApply)
+        XCTAssertEqual(try completeStoreManifest(in: supplied), manifest)
+        print("OPENLIFT_COPIED_REVISION_VERIFIED sessions=\(beforeSessions) sets=\(beforeRows.count) pointers=12,12,11 safetyBarIdentityPreserved=true")
+    }
+}

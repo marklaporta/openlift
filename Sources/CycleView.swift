@@ -353,9 +353,7 @@ struct CycleView: View {
             let currentExercises = try ensureExerciseCatalog()
 
             let draft = try PublishedCycleService.parseTemplate(at: published.url, exercises: currentExercises)
-            guard draft.name.caseInsensitiveCompare(
-                FixedCycleClusterProgramService.templateName
-            ) != .orderedSame else {
+            guard !FixedCycleClusterProgramService.isReservedTemplateName(draft.name) else {
                 throw BootstrapDataService.ClusteredProgramRolloutError.existingTemplateConflict
             }
             if let existing = templates.first(where: { $0.name.caseInsensitiveCompare(draft.name) == .orderedSame }) {
@@ -398,9 +396,7 @@ struct CycleView: View {
 
     private func activate(template: CycleTemplate) {
         do {
-            if template.name.caseInsensitiveCompare(
-                FixedCycleClusterProgramService.templateName
-            ) == .orderedSame,
+            if FixedCycleClusterProgramService.isReservedTemplateName(template.name),
                !FixedCycleClusterProgramService.isProgramTemplate(template) {
                 throw BootstrapDataService.ClusteredProgramRolloutError.existingTemplateConflict
             }
@@ -437,7 +433,8 @@ struct CycleView: View {
             if FixedCycleClusterProgramService.isProgramTemplate(template) {
                 for pointer in FixedCycleClusterProgramService.makeRotationStates(
                     cycleInstanceId: cycle.id,
-                    templateId: template.id
+                    templateId: template.id,
+                    programVersionID: FixedCycleClusterProgramService.versionID(for: template)
                 ) {
                     modelContext.insert(pointer)
                 }

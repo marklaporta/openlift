@@ -59,7 +59,12 @@ block advancement; no movement or internal lane advances independently.
 `Finish Workout` requires at least one completed cluster and retains/exports
 only locked positive-rep rows backed by performed occurrence snapshots.
 
-The reserved template defaults every slot to three rows. A qualifying previous
+The v1 reserved template defaults every slot to three rows; the explicit
+September 2026 v2 revision retains literal replacement-lane counts, archives v1
+state, and maps surviving exercise identities across reordered positions.
+`prepareSeptember2026ClusterRevision` is backup-gated and must not become a
+normal-startup mutation. See `docs/templates.md` and `docs/migration-safety.md`.
+A qualifying previous
 performance for the same progression identity supplies its literal row count,
 weights, and reps, so a completed manual reduction carries forward. Cluster 2
 derives three-step arm identities inside its six-step leg rotation; Cluster 3
