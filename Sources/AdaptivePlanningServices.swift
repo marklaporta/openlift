@@ -2413,10 +2413,9 @@ struct ExerciseEffortLookupResult: Equatable {
     let resistanceProfile: ResistanceProfileValue?
     let profileComparison: ResistanceProfileComparison
 
-    /// Date and literal rows carry the context; only resistance differences need explanation.
+    /// Literal rows carry the inline context; dates remain in History.
     var compactSummary: String {
-        var lines = [completedAt.formatted(date: .abbreviated, time: .omitted),
-                     rows.map { "\(WeightFormatting.normalized($0.weight)) × \($0.reps)" }.joined(separator: " · ")]
+        var lines = [rows.map { "\(WeightFormatting.normalized($0.weight)) × \($0.reps)" }.joined(separator: " · ")]
         if let resistanceProfile { lines.append(resistanceProfile.displayName) }
         if !isComparable {
             lines.append(profileComparison == .unknown

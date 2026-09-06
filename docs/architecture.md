@@ -95,8 +95,8 @@ movements instead start at the approved VOLTRA default of 70% inverse chains
 and 30% eccentric. A complete selection is still required before the first set
 locks. Repeat-last and progression scoring require an exact complete match.
 Unlike/unknown history remains visible as reference. Inline last-session summaries
-show the date, literal sets, and cable resistance when relevant; redundant
-comparison headings and cycle/type names are omitted, while unlike/unknown
+show literal sets and cable resistance when relevant; dates (retained in History),
+redundant comparison headings, and cycle/type names are omitted, while unlike/unknown
 resistance retains an explicit not-comparable note.
 
 ### Clustered Fixed Cycle (V13)
