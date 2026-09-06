@@ -3628,6 +3628,7 @@ private struct ExerciseSection: View {
                     occurrenceId: nil,
                     profile: resistanceProfile,
                     profiles: resistanceProfiles,
+                    baseWeights: entries.map { bufferedEntries[$0.setIndex]?.weight ?? $0.weight },
                     onError: onError
                 )
                 .accessibilityIdentifier("fixed.resistanceProfile.\(exercise.name)")

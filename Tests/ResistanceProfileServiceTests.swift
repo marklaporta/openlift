@@ -55,6 +55,46 @@ final class ResistanceProfileServiceTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(ResistanceProfileValue.self, from: oldSnapshot), percent)
     }
 
+    func testVOLTRAEquivalentConversionsUseEachExplicitBaseWithoutChangingProfile() throws {
+        XCTAssertEqual(try XCTUnwrap(VOLTRAEquivalent.amount(30, unit: .percent, base: 130)), 39, accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(VOLTRAEquivalent.amount(35, unit: .pounds, base: 130)), 26.9230769, accuracy: 0.000001)
+        XCTAssertEqual(VOLTRAEquivalent.caption(35, unit: .pounds, base: 130), "≈26.9% at 130 lb base")
+        XCTAssertEqual(VOLTRAEquivalent.caption(30, unit: .percent, base: 130), "=39 lb at 130 lb base")
+        XCTAssertEqual(VOLTRAEquivalent.caption(12.5, unit: .pounds, base: 50), "=25% at 50 lb base")
+        XCTAssertEqual(VOLTRAEquivalent.caption(30, unit: .percent, base: 12.5), "≈3.8 lb at 12.5 lb base")
+        XCTAssertEqual(VOLTRAEquivalent.caption(0, unit: .pounds, base: 130), "=0% at 130 lb base")
+        XCTAssertEqual(VOLTRAEquivalent.bases([130, 130, 140, 0, -1, .nan, .infinity]), [130, 140])
+        let profile = ResistanceProfileValue.voltra(chainType: .inverseChains, eccentricPercent: 30, chainPounds: 12.5)
+        let draft = VOLTRAProfileDraft(profile)
+        _ = VOLTRAEquivalent.caption(draft.chainPounds, unit: draft.chainUnit, base: 130)
+        _ = VOLTRAEquivalent.caption(draft.chainPounds, unit: draft.chainUnit, base: 140)
+        XCTAssertEqual(draft.value, profile)
+    }
+
+    func testVOLTRAEquivalentRejectsMissingInvalidAndOverflowingBasesOrAmounts() {
+        XCTAssertTrue(VOLTRAEquivalent.bases([]).isEmpty)
+        for base in [0.0, -1, .nan, .infinity] {
+            XCTAssertNil(VOLTRAEquivalent.amount(35, unit: .pounds, base: base))
+            XCTAssertNil(VOLTRAEquivalent.amount(30, unit: .percent, base: base))
+        }
+        for amount in [-1.0, .nan, .infinity] {
+            XCTAssertNil(VOLTRAEquivalent.amount(amount, unit: .pounds, base: 130))
+        }
+        XCTAssertNil(VOLTRAEquivalent.amount(.greatestFiniteMagnitude, unit: .pounds, base: .leastNonzeroMagnitude))
+    }
+
+    func testVOLTRAWholeNumberEditsRejectFractionalNegativeAndOverflowInputs() {
+        XCTAssertEqual(VOLTRAWholeNumberInput.parse("35"), 35)
+        XCTAssertEqual(VOLTRAWholeNumberInput.parse(""), 0)
+        XCTAssertEqual(VOLTRAWholeNumberInput.parse("0"), 0)
+        for text in ["12.5", "-1", "1e2", "35 lb", "999999999999999999999999", String(Int.max)] {
+            XCTAssertNil(VOLTRAWholeNumberInput.parse(text))
+        }
+        // Opening/re-saving an existing fractional profile bypasses new-input parsing.
+        let profile = ResistanceProfileValue.voltra(chainType: .inverseChains, chainPounds: 12.5, eccentricPounds: 35)
+        XCTAssertEqual(VOLTRAProfileDraft(profile).value, profile)
+    }
+
     func testModifierValidationRejectsAmbiguousMissingNegativeAndNonfiniteAmounts() {
         XCTAssertFalse(ResistanceProfileValue.voltra(chainType: .chains, chainPercent: 30,
             eccentricPercent: 30, chainPounds: 35).isComplete)
