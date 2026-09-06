@@ -86,8 +86,10 @@ That file is ignored by git. Start from:
   fallback. A fresh key can consult only legacy, unkeyed global history; work
   owned by another versioned key is excluded.
 - Drafts copy the qualifying performance's literal row count. The reserved
-  clustered template defaults every lane to three rows, so a manually completed
-  two-row lane carries two rows into its next matching progression identity.
+  v1 template defaults to three rows; the explicit September v2 revision retains
+  completed lane counts for replacements. A two-row lane remains two rows.
+- The backup-gated [v2 revision](docs/templates.md#september-2026-clustered-revision-v2)
+  reorders chest/back and legs without resetting progression or arm/accessory rotations.
 - Completed workouts export to `OpenLift/exports`.
 - Draft snapshots export to `OpenLift/exports/drafts`.
 - Published cycle JSON files are discovered from `OpenLift/cycles`.

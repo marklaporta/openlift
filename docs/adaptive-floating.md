@@ -117,7 +117,7 @@ exercise for progressive overload. Compound and isolation continuity are indepen
 recommendation targets the core slot and an isolation recommendation targets the
 accessory slot, so a fly cannot replace a press. Rotation is restricted to the user's current-equipment availability
 pool. The requested initial policy pins Belt Squat as the only currently available
-heavy quad foundation; Safety Squat Bar Squat, Leg Press, and Hack Squat remain
+heavy quad foundation; Safety Bar Squat, Leg Press, and Hack Squat remain
 unavailable heavy candidates, and Leg Extension remains an unavailable light
 accessory. Stiff-Leg Deadlift is the currently available pinned heavy hamstring
 foundation. Reverse Hyper starts as an available light hamstring accessory.

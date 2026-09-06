@@ -14,6 +14,12 @@ enum AppRuntime {
     static let shouldPrepareClusteredProgramRollout = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT"
     )
+    static let shouldPrepareSeptember2026ClusterRevision = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_REVISE_CLUSTERED_PROGRAM_2026_09_06"
+    )
+    static let september2026ClusterRevisionBackupIsConfirmed = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_CLUSTERED_REVISION_BACKUP_CONFIRMED"
+    )
     static let clusteredDraftBackupIsConfirmed = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_CLUSTERED_DRAFT_BACKUP_CONFIRMED"
     )

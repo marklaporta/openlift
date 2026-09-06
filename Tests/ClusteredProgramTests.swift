@@ -2946,3 +2946,246 @@ final class ClusteredProgramTests: XCTestCase {
         XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).isEmpty)
     }
 }
+
+extension ClusteredProgramTests {
+    private func revisionFixture() throws -> (ModelContainer, ModelContext, [Exercise], CycleTemplate, ActiveCycleInstance) {
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV14.self))
+        let context = ModelContext(container)
+        _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
+        let exercises = try context.fetch(FetchDescriptor<Exercise>())
+        let template = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first)
+        let cycle = try XCTUnwrap(try context.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
+        let states = try context.fetch(FetchDescriptor<ClusterRotationState>())
+        // Twelve complete structural steps exercise every old movement twice.
+        for step in 0..<12 {
+            let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: step, cycleNameSnapshot: template.name, dayLabelSnapshot: "Clustered Workout", finishedAt: Date(timeIntervalSince1970: Double(1000 + step)), status: .completed)
+            context.insert(session)
+            for selection in try FixedCycleClusterProgramService.selections(template: template, cycleInstanceId: cycle.id, states: states) {
+                let entries = selection.day.slots.flatMap { slot in
+                    (1...2).map { SetEntry(sessionId: session.id, exerciseId: slot.exerciseId, setIndex: $0, weight: Double(10 + selection.day.position * 10 + slot.position), reps: 10 - $0, isLocked: true) }
+                }
+                entries.forEach(context.insert)
+                let occurrence = try FixedCycleClusterProgramService.makeOccurrence(session: session, selection: selection, exercises: exercises, entries: entries, resistanceProfiles: [], completedAt: session.finishedAt!)
+                context.insert(occurrence)
+                try FixedCycleClusterProgramService.advanceCompletedCluster(selection: selection, occurrence: occurrence, states: states)
+            }
+        }
+        // Durable substitution in the retired sumo slot must remain archived,
+        // not override the newly requested Prime squat.
+        context.insert(ClusterExercisePreference(programVersionID: FixedCycleClusterProgramService.programVersionID, templateDayPosition: 5, slotPosition: 0, exerciseId: exercises.first { $0.name == "Bulgarian Split Squat" }!.id))
+        try context.save()
+        return (container, context, exercises, template, cycle)
+    }
+
+    func testSeptemberRevisionPreservesHistoryPointersAndSemanticProgression() throws {
+        let (container, context, exercises, old, cycle) = try revisionFixture()
+        _ = container
+        let history = try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let frozen = try encoder.encode(history.sorted { $0.id.uuidString < $1.id.uuidString }.map(\.exerciseSnapshots))
+        let oldNames = old.days.sorted { $0.position < $1.position }.flatMap { $0.slots.sorted { $0.position < $1.position }.map(\.exerciseId) }
+        let rows = try context.fetch(FetchDescriptor<SetEntry>())
+        let result = try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context, backupConfirmed: true)
+        XCTAssertTrue(result.didApply)
+        XCTAssertEqual(result.cycleId, cycle.id)
+        let revised = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == result.templateId })
+        XCTAssertEqual(oldNames, old.days.sorted { $0.position < $1.position }.flatMap { $0.slots.sorted { $0.position < $1.position }.map(\.exerciseId) })
+        XCTAssertEqual(frozen, try encoder.encode(history.sorted { $0.id.uuidString < $1.id.uuidString }.map(\.exerciseSnapshots)))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<SetEntry>()).count, rows.count)
+        let states = try context.fetch(FetchDescriptor<ClusterRotationState>())
+        XCTAssertEqual(states.count, 6)
+        XCTAssertTrue(states.allSatisfy { $0.positionIndex == 12 })
+        let byID = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0.name) })
+        let expected = [
+            ["Flat Dumbbell Press", "Lat Pulldown"], ["Incline Dumbbell Press", "Chest Supported Row"], ["Incline Press-Flye", "Dumbbell Lat Pullover"],
+            ["Leg Curl", "Overhead Cable Extension", "Incline Curl"], ["Belt Squat", "Cable Pushdown", "Dumbbell Preacher Curl"], ["Stiff-Leg Deadlift", "Dumbbell Skullcrusher", "Bayesian Curl"],
+            ["Safety Bar Squat", "Overhead Cable Extension", "Incline Curl"], ["Back Extension", "Cable Pushdown", "Dumbbell Preacher Curl"], ["Bulgarian Split Squat", "Dumbbell Skullcrusher", "Bayesian Curl"]
+        ]
+        for day in revised.days where day.position < 9 {
+            XCTAssertEqual(day.slots.sorted { $0.position < $1.position }.map { byID[$0.exerciseId]! }, expected[day.position])
+        }
+        for cluster in FixedCycleClusterProgramService.Cluster.allCases {
+            let state = states.first { $0.programVersionID == FixedCycleClusterProgramService.revisionVersionID && $0.clusterID == cluster.rawValue }!
+            for step in 0..<cluster.rotationLength {
+                state.positionIndex = 12 + step
+                let selection = try FixedCycleClusterProgramService.selection(cluster: cluster, template: revised, cycleInstanceId: cycle.id, states: states)
+                for slot in selection.day.slots {
+                    let key = FixedCycleClusterProgramService.progressionKey(selection: selection, slotPosition: slot.position)
+                    let effort = ExerciseEffortLookupService.fixedCycleEffort(exerciseId: slot.exerciseId, cycleInstanceId: cycle.id, cycleDayIndex: selection.day.position, adaptiveSessions: [], adaptiveSetEntries: [], rotationSessions: try context.fetch(FetchDescriptor<Session>()), rotationSetEntries: rows, progressionKey: key, progressionOccurrences: history)
+                    let name = byID[slot.exerciseId]!
+                    if name == "Dumbbell Lat Pullover" || name == "Safety Bar Squat" {
+                        XCTAssertNil(effort)
+                        XCTAssertEqual(slot.defaultSetCount, 2)
+                    } else {
+                        XCTAssertEqual(effort?.rows.count, 2, name)
+                        let matching = history.filter { $0.exerciseSnapshots.contains { $0.exerciseId == slot.exerciseId && $0.progressionKey == key } }.max { $0.completedAt < $1.completedAt }
+                        XCTAssertNotNil(matching, name)
+                        let expectedWeight = rows.first { $0.sessionId == matching?.sessionId && $0.exerciseId == slot.exerciseId }?.weight
+                        XCTAssertEqual(effort?.rows.first?.weight, expectedWeight, name)
+                    }
+                }
+            }
+            state.positionIndex = 12
+        }
+        try context.save()
+        let preferences = try context.fetch(FetchDescriptor<ClusterExercisePreference>())
+        XCTAssertEqual(preferences.count, 1)
+        XCTAssertEqual(preferences.first?.programVersionID, FixedCycleClusterProgramService.programVersionID)
+        XCTAssertFalse(try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context, backupConfirmed: true).didApply)
+        XCTAssertFalse(try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context).didApply)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<ClusterRotationState>()).count, 6)
+    }
+
+    func testSeptemberRevisionRequiresBackupAndRejectsDraftWithoutMutation() throws {
+        let (container, context, _, old, cycle) = try revisionFixture()
+        _ = container
+        XCTAssertThrowsError(try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context))
+        XCTAssertEqual(cycle.templateId, old.id)
+        let draft = Session(cycleInstanceId: cycle.id, cycleDayIndex: 12, status: .draft)
+        context.insert(draft)
+        try context.save()
+        XCTAssertThrowsError(try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context, backupConfirmed: true))
+        XCTAssertEqual(cycle.templateId, old.id)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<ClusterRotationState>()).count, 3)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).filter { $0.status == .draft }.map(\.id), [draft.id])
+    }
+}
+
+extension ClusteredProgramTests {
+    func testSeptemberRevisionMixedVersionExportHydrationKeepsNamespacesAndHistory() throws {
+        let (sourceContainer, context, exercises, old, cycle) = try revisionFixture()
+        _ = sourceContainer
+        let oldOccurrences = try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let frozen = try encoder.encode(oldOccurrences.sorted { $0.id.uuidString < $1.id.uuidString }.map(\.exerciseSnapshots))
+        let revision = try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context, backupConfirmed: true)
+        let revised = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == revision.templateId })
+        let states = try context.fetch(FetchDescriptor<ClusterRotationState>())
+        let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 12, cycleNameSnapshot: revised.name, dayLabelSnapshot: "Clustered Workout", finishedAt: Date(timeIntervalSince1970: 1100), status: .completed)
+        context.insert(session)
+        for selection in try FixedCycleClusterProgramService.selections(template: revised, cycleInstanceId: cycle.id, states: states) {
+            let entries = selection.day.slots.flatMap { slot in (1...2).map { SetEntry(sessionId: session.id, exerciseId: slot.exerciseId, setIndex: $0, weight: 77, reps: 8, isLocked: true) } }
+            entries.forEach(context.insert)
+            let occurrence = try FixedCycleClusterProgramService.makeOccurrence(session: session, selection: selection, exercises: exercises, entries: entries, resistanceProfiles: [], completedAt: session.finishedAt!)
+            context.insert(occurrence)
+            try FixedCycleClusterProgramService.advanceCompletedCluster(selection: selection, occurrence: occurrence, states: states)
+        }
+        let cable = exercises.first { $0.name == "Cable Lat Pullover" }!
+        context.insert(ClusterExercisePreference(programVersionID: FixedCycleClusterProgramService.revisionVersionID, templateDayPosition: 2, slotPosition: 1, exerciseId: cable.id, updatedAt: Date(timeIntervalSince1970: 1090)))
+        try context.save()
+        let history = try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        let rows = try context.fetch(FetchDescriptor<SetEntry>())
+        let prefs = try context.fetch(FetchDescriptor<ClusterExercisePreference>())
+        let exports = try context.fetch(FetchDescriptor<Session>()).map { completed in
+            let template = completed.id == session.id ? revised : old
+            let metadata = SessionExportService.fixedCycleMetadata(session: completed, template: template, day: template.days[0], exercises: exercises, setEntries: rows, readiness: [], overrides: [], clusterOccurrences: history, clusterRotationStates: states, clusterExercisePreferences: prefs)
+            let payloadExercises = exercises.compactMap { exercise -> SessionExportService.ExportExercise? in
+                let entries = rows.filter { $0.sessionId == completed.id && $0.exerciseId == exercise.id }
+                guard !entries.isEmpty else { return nil }
+                return SessionExportService.ExportExercise(exercise_id: exercise.id.uuidString, exercise_name: exercise.name, muscle: exercise.primaryMuscle.rawValue, sets: entries.sorted { $0.setIndex < $1.setIndex }.map { SessionExportService.ExportSet(set_index: $0.setIndex, weight: $0.weight, reps: $0.reps) })
+            }
+            return SessionExportService.ExportPayload(session_id: completed.id.uuidString, cycle_name: template.name, cycle_day_index: completed.cycleDayIndex, date: ISO8601DateFormatter().string(from: completed.finishedAt!), exercises: payloadExercises, workout_kind: "rotation", fixed_cycle: metadata)
+        }
+        XCTAssertEqual(exports.first { $0.session_id == session.id.uuidString }?.fixed_cycle?.program_version, 2)
+        XCTAssertEqual(exports.first { $0.session_id != session.id.uuidString }?.fixed_cycle?.program_version, 1)
+        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV14.self))
+        let recovered = ModelContext(destination)
+        _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: recovered)
+        let destinationCycle = try XCTUnwrap(try recovered.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
+        _ = try BootstrapDataService.reconcileWorkoutExports(exports, cycle: destinationCycle, modelContext: recovered)
+        let recoveredTemplate = try XCTUnwrap(try recovered.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == destinationCycle.templateId })
+        XCTAssertEqual(FixedCycleClusterProgramService.versionID(for: recoveredTemplate), FixedCycleClusterProgramService.revisionVersionID)
+        let recoveredStates = try recovered.fetch(FetchDescriptor<ClusterRotationState>())
+        let selections = try FixedCycleClusterProgramService.selections(template: recoveredTemplate, cycleInstanceId: destinationCycle.id, states: recoveredStates)
+        XCTAssertEqual(selections.map(\.absoluteStep), [13, 13, 13])
+        XCTAssertEqual(try recovered.fetch(FetchDescriptor<SetEntry>()).count, rows.count)
+        let recoveredPrefs = try recovered.fetch(FetchDescriptor<ClusterExercisePreference>())
+        XCTAssertEqual(Set(recoveredPrefs.map(\.programVersionID)), Set([FixedCycleClusterProgramService.programVersionID, FixedCycleClusterProgramService.revisionVersionID]))
+        let hydratedOld = try recovered.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).filter { $0.programVersionID == FixedCycleClusterProgramService.programVersionID }
+        // Catalog UUIDs may be resolved by name during recovery, but all frozen
+        // original names/keys/dose remain unchanged, including old pairings.
+        XCTAssertEqual(hydratedOld.count, oldOccurrences.count)
+        XCTAssertEqual(Set(hydratedOld.flatMap(\.exerciseSnapshots).map(\.progressionKey)), Set(oldOccurrences.flatMap(\.exerciseSnapshots).map(\.progressionKey)))
+        XCTAssertEqual(frozen, try encoder.encode(oldOccurrences.sorted { $0.id.uuidString < $1.id.uuidString }.map(\.exerciseSnapshots)))
+        // Replaying v1 alone must not erase v2 preference state.
+        _ = try BootstrapDataService.reconcileWorkoutExports(exports.filter { $0.fixed_cycle?.program_version == 1 }, cycle: destinationCycle, modelContext: recovered)
+        XCTAssertEqual(try recovered.fetch(FetchDescriptor<ClusterExercisePreference>()).count, 2)
+    }
+}
+
+extension ClusteredProgramTests {
+    func testSeptemberSafetyBarRenamePreservesTodaysLoadAndSeparatesLegCurlHistory() throws {
+        let (container, context, exercises, old, cycle) = try revisionFixture()
+        _ = container
+        let squat = exercises.first { $0.name == "Safety Bar Squat" }!
+        squat.name = "Safety Squat Bar Squat"
+        let oldOccurrence = try XCTUnwrap(try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).first { $0.clusterID == "cluster-2" && $0.absoluteStep == 11 })
+        context.delete(oldOccurrence)
+        let target = Session(id: BootstrapDataService.september5SafetyBarSessionID, cycleInstanceId: cycle.id, cycleDayIndex: 11, cycleNameSnapshot: old.name, dayLabelSnapshot: "Clustered Workout", finishedAt: Date(timeIntervalSince1970: 1200), status: .completed)
+        context.insert(target)
+        let rows = [6, 5].enumerated().map { SetEntry(sessionId: target.id, exerciseId: squat.id, setIndex: $0.offset + 1, weight: 225, reps: $0.element, isLocked: true) }
+        rows.forEach(context.insert)
+        let snapshot = ClusterExerciseProgressionSnapshot(position: 0, exerciseId: squat.id, exerciseName: squat.name, muscle: .hamstrings, prescribedSetCount: 3, progressionKey: FixedCycleClusterProgramService.progressionKey(cluster: .cluster2, effectiveStep: 5, slotPosition: 0), resistanceProfile: nil, completionStatus: .performed)
+        let occurrence = try ClusterOccurrenceRecord(sessionId: target.id, cycleInstanceId: cycle.id, templateId: old.id, programVersionID: FixedCycleClusterProgramService.programVersionID, clusterID: "cluster-2", absoluteStep: 11, templateDayPosition: 8, dayLabel: "Cluster 2 · F", completedAt: target.finishedAt!, exerciseSnapshots: [snapshot])
+        context.insert(occurrence)
+        let ordered = FixedCycleExerciseSnapshot(sessionId: target.id, position: 2, exerciseId: squat.id, exerciseName: squat.name, muscle: .hamstrings, statusRawValue: "performed")
+        context.insert(ordered)
+        try context.save()
+        let revision = try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context, backupConfirmed: true)
+        XCTAssertEqual(squat.name, "Safety Bar Squat")
+        XCTAssertEqual(occurrence.exerciseSnapshots.first?.exerciseName, "Safety Bar Squat")
+        XCTAssertEqual(ordered.exerciseName, "Safety Bar Squat")
+        XCTAssertEqual(occurrence.exerciseSnapshots.first?.progressionKey, snapshot.progressionKey)
+        XCTAssertEqual(occurrence.exerciseSnapshots.first?.muscle, snapshot.muscle)
+        XCTAssertEqual(occurrence.exerciseSnapshots.first?.prescribedSetCount, snapshot.prescribedSetCount)
+        XCTAssertEqual(rows.map(\.weight), [225, 225])
+        XCTAssertEqual(rows.map(\.reps), [6, 5])
+        let revised = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == revision.templateId })
+        let states = try context.fetch(FetchDescriptor<ClusterRotationState>())
+        let state = states.first { $0.clusterID == "cluster-2" && $0.programVersionID == FixedCycleClusterProgramService.revisionVersionID }!
+        func effort(step: Int) throws -> ExerciseEffortLookupResult? {
+            state.positionIndex = step
+            let selection = try FixedCycleClusterProgramService.selection(cluster: .cluster2, template: revised, cycleInstanceId: cycle.id, states: states)
+            let slot = selection.day.slots.first { $0.position == 0 }!
+            return ExerciseEffortLookupService.fixedCycleEffort(exerciseId: slot.exerciseId, cycleInstanceId: cycle.id, cycleDayIndex: selection.day.position, adaptiveSessions: [], adaptiveSetEntries: [], rotationSessions: try context.fetch(FetchDescriptor<Session>()), rotationSetEntries: try context.fetch(FetchDescriptor<SetEntry>()), progressionKey: FixedCycleClusterProgramService.progressionKey(selection: selection, slotPosition: 0), progressionOccurrences: try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()))
+        }
+        XCTAssertEqual(try effort(step: 15)?.rows.map(\.weight), [225, 225])
+        XCTAssertEqual(try effort(step: 15)?.rows.map(\.reps), [6, 5])
+        XCTAssertEqual(try effort(step: 12)?.rows.map(\.weight), [90, 90])
+        try context.save()
+        _ = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Exercise>()).filter { $0.name == "Safety Bar Squat" }.map(\.id), [squat.id])
+        XCTAssertFalse(try context.fetch(FetchDescriptor<Exercise>()).contains { $0.name == "Safety Squat Bar Squat" })
+    }
+}
+
+extension ClusteredProgramTests {
+    func testOldSafetyBarOverlayAliasHydratesIntoOneCatalogIdentity() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV14.self))
+        let context = ModelContext(container)
+        _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
+        let template = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first)
+        let cycle = try XCTUnwrap(try context.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
+        let catalog = try context.fetch(FetchDescriptor<Exercise>())
+        let safety = try XCTUnwrap(catalog.first { $0.name == "Safety Bar Squat" })
+        let source = clusteredExport(template: template, cycle: cycle, exercise: catalog.first { $0.name == "Incline Dumbbell Press" }!, absoluteStep: 0, pointerCount: 1, date: Date(timeIntervalSince1970: 1000))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(source)) as? [String: Any])
+        var metadata = try XCTUnwrap(object["fixed_cycle"] as? [String: Any])
+        metadata["cluster_exercise_overrides"] = [[
+            "override_id": UUID().uuidString, "session_id": source.session_id,
+            "program_version_id": FixedCycleClusterProgramService.programVersionID,
+            "template_day_position": 8, "slot_position": 0,
+            "exercise_id": UUID().uuidString, "exercise_name": "Safety Squat Bar Squat",
+            "muscle": "quads", "exercise_type": "compound", "equipment": "barbell",
+            "created_at": "1970-01-01T00:16:40Z"
+        ]]
+        object["fixed_cycle"] = metadata
+        let export = try JSONDecoder().decode(SessionExportService.ExportPayload.self, from: JSONSerialization.data(withJSONObject: object))
+        _ = try BootstrapDataService.reconcileWorkoutExports([export], cycle: cycle, modelContext: context)
+        let aliases = try context.fetch(FetchDescriptor<Exercise>()).filter { ["Safety Bar Squat", "Safety Squat Bar Squat"].contains($0.name) }
+        XCTAssertEqual(aliases.map(\.id), [safety.id])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>()).first?.exerciseId, safety.id)
+    }
+}

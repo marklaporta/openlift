@@ -356,7 +356,7 @@ enum FixedCycleWorkoutService {
         let completedClusterIDs: Set<String> = Set(
             occurrences.compactMap { occurrence in
                 guard occurrence.sessionId == sessionId,
-                      occurrence.programVersionID == FixedCycleClusterProgramService.programVersionID else {
+                      FixedCycleClusterProgramService.supports(programVersionID: occurrence.programVersionID) else {
                     return nil
                 }
                 return occurrence.clusterID
@@ -557,18 +557,18 @@ enum FixedCycleWorkoutService {
             throw FixedCycleWorkoutError.cannotReplacePerformedExercise
         }
         let preferenceKey = ClusterExercisePreference.key(
-            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            programVersionID: selection.programVersionID,
             templateDayPosition: selection.day.position,
             slotPosition: slot.position
         )
         let overrideKey = ClusterExerciseOccurrenceOverride.key(
             sessionId: sessionId,
-            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            programVersionID: selection.programVersionID,
             templateDayPosition: selection.day.position,
             slotPosition: slot.position
         )
         var projectedPreferences = FixedCycleClusterProgramService
-            .persistentExerciseIDsByKey(preferences: preferences)
+            .persistentExerciseIDsByKey(preferences: preferences, programVersionID: selection.programVersionID)
         var projectedOverrides = exerciseIDsByOverrideKey(
             sessionId: sessionId,
             overrides: overrides
@@ -606,7 +606,7 @@ enum FixedCycleWorkoutService {
                 modelContext.insert(
                     ClusterExerciseOccurrenceOverride(
                         sessionId: sessionId,
-                        programVersionID: FixedCycleClusterProgramService.programVersionID,
+                        programVersionID: selection.programVersionID,
                         templateDayPosition: selection.day.position,
                         slotPosition: slot.position,
                         exerciseId: replacementExerciseId,
@@ -621,7 +621,7 @@ enum FixedCycleWorkoutService {
             } else {
                 modelContext.insert(
                     ClusterExercisePreference(
-                        programVersionID: FixedCycleClusterProgramService.programVersionID,
+                        programVersionID: selection.programVersionID,
                         templateDayPosition: selection.day.position,
                         slotPosition: slot.position,
                         exerciseId: replacementExerciseId,
@@ -652,18 +652,18 @@ enum FixedCycleWorkoutService {
             throw FixedCycleWorkoutError.cannotReplacePerformedExercise
         }
         let preferenceKey = ClusterExercisePreference.key(
-            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            programVersionID: selection.programVersionID,
             templateDayPosition: selection.day.position,
             slotPosition: slot.position
         )
         let overrideKey = ClusterExerciseOccurrenceOverride.key(
             sessionId: sessionId,
-            programVersionID: FixedCycleClusterProgramService.programVersionID,
+            programVersionID: selection.programVersionID,
             templateDayPosition: selection.day.position,
             slotPosition: slot.position
         )
         var projectedPreferences = FixedCycleClusterProgramService
-            .persistentExerciseIDsByKey(preferences: preferences)
+            .persistentExerciseIDsByKey(preferences: preferences, programVersionID: selection.programVersionID)
         var projectedOverrides = exerciseIDsByOverrideKey(
             sessionId: sessionId,
             overrides: overrides
@@ -698,8 +698,7 @@ enum FixedCycleWorkoutService {
             overrides
                 .filter {
                     $0.sessionId == sessionId
-                        && $0.programVersionID
-                            == FixedCycleClusterProgramService.programVersionID
+                        && FixedCycleClusterProgramService.supports(programVersionID: $0.programVersionID)
                 }
                 .map { ($0.key, $0.exerciseId) },
             uniquingKeysWith: { first, _ in first }
@@ -721,13 +720,13 @@ enum FixedCycleWorkoutService {
         let exerciseIDs = selections.flatMap { selection in
             CycleOrdering.sortedSlots(selection.day.slots).map { slot in
                 let preferenceKey = ClusterExercisePreference.key(
-                    programVersionID: FixedCycleClusterProgramService.programVersionID,
+                    programVersionID: selection.programVersionID,
                     templateDayPosition: selection.day.position,
                     slotPosition: slot.position
                 )
                 let overrideKey = ClusterExerciseOccurrenceOverride.key(
                     sessionId: sessionId,
-                    programVersionID: FixedCycleClusterProgramService.programVersionID,
+                    programVersionID: selection.programVersionID,
                     templateDayPosition: selection.day.position,
                     slotPosition: slot.position
                 )
@@ -2695,8 +2694,7 @@ struct WorkoutView: View {
         fallbackSetCount: Int
     ) throws {
         let key = FixedCycleClusterProgramService.progressionKey(
-            cluster: selection.cluster,
-            effectiveStep: selection.effectiveStep,
+            selection: selection,
             slotPosition: slot.position
         )
         let effort = prefillEffort(

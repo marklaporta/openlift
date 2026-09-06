@@ -184,7 +184,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
     }
 
     func testKnownLowerBodyRolesDistinguishHeavyFoundationsFromLightAccessories() {
-        for name in ["Belt Squat", "Safety Squat Bar Squat", "Leg Press", "Hack Squat"] {
+        for name in ["Belt Squat", "Safety Bar Squat", "Leg Press", "Hack Squat"] {
             XCTAssertEqual(
                 AdaptiveExerciseRoleService.difficulty(for: exercise(name, muscle: .quads)),
                 .hard
