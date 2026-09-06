@@ -17,14 +17,14 @@ final class ResistanceProfileServiceTests: XCTestCase {
         XCTAssertTrue(result.compactSummary.contains("Cable · Weight Stack"))
     }
 
-    func testComparableSummaryIsOnlyDateRowsAndRelevantResistance() {
+    func testComparableSummaryIsOnlyRowsAndRelevantResistance() {
         let result = ExerciseEffortLookupResult(
             sessionId: UUID(), completedAt: Date(timeIntervalSince1970: 100), sourceKind: .fixedCycle,
             matchKind: .sameProgressionIdentity, cycleName: "Fixed Cycle", dayLabel: "Cluster 1 + Cluster 2",
             rows: [.init(setIndex: 1, weight: 80, reps: 9, isLocked: true)],
             resistanceProfile: nil, profileComparison: .exact
         )
-        XCTAssertEqual(result.compactSummary.components(separatedBy: "\n").count, 2)
+        XCTAssertEqual(result.compactSummary, "80.0 × 9")
         XCTAssertFalse(result.compactSummary.contains("comparable"))
         XCTAssertFalse(result.compactSummary.contains("Cluster"))
         XCTAssertFalse(result.compactSummary.contains("Standard resistance"))
