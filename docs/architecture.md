@@ -98,6 +98,8 @@ Unlike/unknown history remains visible as reference. Inline last-session summari
 show literal sets and cable resistance when relevant; dates (retained in History),
 redundant comparison headings, and cycle/type names are omitted, while unlike/unknown
 resistance retains an explicit not-comparable note.
+Inline weights use the shared weight format: no trailing decimal for whole
+weights, with one decimal when needed for fractional weights.
 
 ### Clustered Fixed Cycle (V13)
 

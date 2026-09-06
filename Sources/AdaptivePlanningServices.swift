@@ -2415,7 +2415,7 @@ struct ExerciseEffortLookupResult: Equatable {
 
     /// Literal rows carry the inline context; dates remain in History.
     var compactSummary: String {
-        var lines = [rows.map { "\(WeightFormatting.normalized($0.weight)) × \($0.reps)" }.joined(separator: " · ")]
+        var lines = [rows.map { "\(WeightFormatting.normalized($0.weight).formatted(WeightFormatting.style)) × \($0.reps)" }.joined(separator: " · ")]
         if let resistanceProfile { lines.append(resistanceProfile.displayName) }
         if !isComparable {
             lines.append(profileComparison == .unknown
