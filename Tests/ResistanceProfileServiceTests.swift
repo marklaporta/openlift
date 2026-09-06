@@ -11,7 +11,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
             resistanceProfile: .weightStack, profileComparison: .different
         )
         XCTAssertTrue(result.compactSummary.contains("Different resistance · not comparable"))
-        XCTAssertTrue(result.compactSummary.contains("30.0 × 12"))
+        XCTAssertTrue(result.compactSummary.contains("30 × 12"))
         XCTAssertFalse(result.compactSummary.contains("Off-Schedule"))
         XCTAssertFalse(result.compactSummary.contains("Ad hoc"))
         XCTAssertTrue(result.compactSummary.contains("Cable · Weight Stack"))
@@ -21,14 +21,14 @@ final class ResistanceProfileServiceTests: XCTestCase {
         let result = ExerciseEffortLookupResult(
             sessionId: UUID(), completedAt: Date(timeIntervalSince1970: 100), sourceKind: .fixedCycle,
             matchKind: .sameProgressionIdentity, cycleName: "Fixed Cycle", dayLabel: "Cluster 1 + Cluster 2",
-            rows: [.init(setIndex: 1, weight: 80, reps: 9, isLocked: true)],
+            rows: [.init(setIndex: 1, weight: 80, reps: 9, isLocked: true),
+                   .init(setIndex: 2, weight: 77.5, reps: 10, isLocked: true)],
             resistanceProfile: nil, profileComparison: .exact
         )
-        XCTAssertEqual(result.compactSummary, "80.0 × 9")
+        XCTAssertEqual(result.compactSummary, "80 × 9 · 77.5 × 10")
         XCTAssertFalse(result.compactSummary.contains("comparable"))
         XCTAssertFalse(result.compactSummary.contains("Cluster"))
         XCTAssertFalse(result.compactSummary.contains("Standard resistance"))
-        XCTAssertTrue(result.compactSummary.hasSuffix("80.0 × 9"))
     }
 
     func testPoundsAndMixedModifiersRoundTripWithoutReinterpretingLegacyPercentages() throws {
