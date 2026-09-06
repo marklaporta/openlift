@@ -99,6 +99,8 @@ final class ExerciseResistanceProfile {
     var chainType: VOLTRAChainType?
     var chainPercent: Int?
     var eccentricPercent: Int?
+    var chainPounds: Double?
+    var eccentricPounds: Double?
     var frozenAt: Date?
     var createdAt: Date
     var updatedAt: Date
@@ -113,6 +115,8 @@ final class ExerciseResistanceProfile {
         chainType: VOLTRAChainType? = nil,
         chainPercent: Int? = nil,
         eccentricPercent: Int? = nil,
+        chainPounds: Double? = nil,
+        eccentricPounds: Double? = nil,
         frozenAt: Date? = nil,
         createdAt: Date = .now,
         updatedAt: Date = .now
@@ -126,6 +130,8 @@ final class ExerciseResistanceProfile {
         self.chainType = chainType
         self.chainPercent = chainPercent
         self.eccentricPercent = eccentricPercent
+        self.chainPounds = chainPounds
+        self.eccentricPounds = eccentricPounds
         self.frozenAt = frozenAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt

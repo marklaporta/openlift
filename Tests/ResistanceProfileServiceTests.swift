@@ -3,17 +3,114 @@ import XCTest
 @testable import OpenLift
 
 final class ResistanceProfileServiceTests: XCTestCase {
-    func testCompactEffortLabelIncludesPerformanceProfileAndFallbackIdentity() {
+    func testCompactEffortLabelOmitsRedundantIdentityButRetainsMismatch() {
         let result = ExerciseEffortLookupResult(
             sessionId: UUID(), completedAt: Date(timeIntervalSince1970: 100), sourceKind: .adHoc,
             matchKind: .globalLatest, cycleName: "Off-Schedule", dayLabel: nil,
             rows: [.init(setIndex: 1, weight: 30, reps: 12, isLocked: true)],
             resistanceProfile: .weightStack, profileComparison: .different
         )
-        XCTAssertTrue(result.compactSummary.contains("Reference only · not comparable"))
+        XCTAssertTrue(result.compactSummary.contains("Different resistance · not comparable"))
         XCTAssertTrue(result.compactSummary.contains("30.0 × 12"))
-        XCTAssertTrue(result.compactSummary.contains("Ad hoc · Off-Schedule"))
+        XCTAssertFalse(result.compactSummary.contains("Off-Schedule"))
+        XCTAssertFalse(result.compactSummary.contains("Ad hoc"))
         XCTAssertTrue(result.compactSummary.contains("Cable · Weight Stack"))
+    }
+
+    func testComparableSummaryIsOnlyDateRowsAndRelevantResistance() {
+        let result = ExerciseEffortLookupResult(
+            sessionId: UUID(), completedAt: Date(timeIntervalSince1970: 100), sourceKind: .fixedCycle,
+            matchKind: .sameProgressionIdentity, cycleName: "Fixed Cycle", dayLabel: "Cluster 1 + Cluster 2",
+            rows: [.init(setIndex: 1, weight: 80, reps: 9, isLocked: true)],
+            resistanceProfile: nil, profileComparison: .exact
+        )
+        XCTAssertEqual(result.compactSummary.components(separatedBy: "\n").count, 2)
+        XCTAssertFalse(result.compactSummary.contains("comparable"))
+        XCTAssertFalse(result.compactSummary.contains("Cluster"))
+        XCTAssertFalse(result.compactSummary.contains("Standard resistance"))
+        XCTAssertTrue(result.compactSummary.hasSuffix("80.0 × 9"))
+    }
+
+    func testPoundsAndMixedModifiersRoundTripWithoutReinterpretingLegacyPercentages() throws {
+        let values: [ResistanceProfileValue] = [
+            .voltra(chainType: .inverseChains, chainPounds: 35, eccentricPounds: 35),
+            .voltra(chainType: .chains, eccentricPercent: 30, chainPounds: 12.5),
+            .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPounds: 35),
+            .voltra(chainType: .none, eccentricPounds: 35)
+        ]
+        for value in values {
+            XCTAssertTrue(value.isComplete)
+            XCTAssertEqual(try JSONDecoder().decode(ResistanceProfileValue.self,
+                from: JSONEncoder().encode(value)), value)
+            XCTAssertEqual(try JSONDecoder().decode(ResistanceProfilePayload.self,
+                from: JSONEncoder().encode(ResistanceProfilePayload(value))).value, value)
+            XCTAssertEqual(VOLTRAProfileDraft(value).value, value)
+        }
+        XCTAssertEqual(values[0].displayName, "VOLTRA · Inverse Chains 35 lb · Eccentric 35 lb")
+        let legacy = Data(#"{"resistance_source":"voltra","chain_type":"inverse_chains","chain_percent":30,"eccentric_percent":30}"#.utf8)
+        let percent = try XCTUnwrap(JSONDecoder().decode(ResistanceProfilePayload.self, from: legacy).value)
+        XCTAssertEqual(percent, .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 30))
+        XCTAssertEqual(ResistanceProfileComparison.compare(current: values[0], historical: percent), .different)
+        let oldSnapshot = Data(#"{"resistanceSource":"voltra","chainType":"inverse_chains","chainPercent":30,"eccentricPercent":30}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(ResistanceProfileValue.self, from: oldSnapshot), percent)
+    }
+
+    func testModifierValidationRejectsAmbiguousMissingNegativeAndNonfiniteAmounts() {
+        XCTAssertFalse(ResistanceProfileValue.voltra(chainType: .chains, chainPercent: 30,
+            eccentricPercent: 30, chainPounds: 35).isComplete)
+        XCTAssertFalse(ResistanceProfileValue.voltra(chainType: .chains, eccentricPounds: 35).isComplete)
+        XCTAssertFalse(ResistanceProfileValue.voltra(chainType: .chains, chainPounds: -1, eccentricPounds: 35).isComplete)
+        XCTAssertFalse(ResistanceProfileValue.voltra(chainType: .chains, chainPounds: .infinity, eccentricPounds: 35).isComplete)
+        XCTAssertFalse(ResistanceProfileValue.voltra(chainType: .chains, chainPercent: 101, eccentricPounds: 35).isComplete)
+        XCTAssertFalse(ResistanceProfileValue(resistanceSource: .weightStack, chainType: nil,
+            chainPercent: nil, eccentricPercent: nil, chainPounds: 35).isComplete)
+    }
+
+    @MainActor
+    func testAbsoluteProfilePersistsAcrossBaseChangesDefaultsAndLocking() throws {
+        let (context, container) = makeContext()
+        _ = container
+        let value = ResistanceProfileValue.voltra(chainType: .inverseChains, chainPounds: 35, eccentricPounds: 35)
+        let profile = try ResistanceProfileService.create(workoutKind: .fixed, sessionId: UUID(),
+            exerciseId: UUID(), value: value, profiles: [], modelContext: context)
+        let entry = SetEntry(sessionId: profile.sessionId, exerciseId: profile.exerciseId,
+            setIndex: 1, weight: 130, reps: 10)
+        context.insert(entry)
+        try context.save()
+        entry.weight = 140
+        try context.save()
+        XCTAssertEqual(ResistanceProfileService.value(profile), value)
+        XCTAssertNil(profile.chainPercent)
+        XCTAssertEqual(profile.chainPounds, 35)
+        XCTAssertEqual(ResistanceProfileService.lastUsedValue(exerciseId: profile.exerciseId, profiles: [profile]), value)
+        XCTAssertEqual(ResistanceProfileService.lastUsedValue(exerciseId: UUID(), profiles: [profile]), value)
+        let frozen = ResistanceProfileService.snapshot(profile)
+        try ResistanceProfileService.freezeBeforeLock(profile, modelContext: context)
+        let changed = ResistanceProfileValue.voltra(chainType: .inverseChains, chainPercent: 35, eccentricPercent: 35)
+        XCTAssertThrowsError(try ResistanceProfileService.update(profile, to: changed,
+            confirmedOccurrenceWideCorrection: false, modelContext: context))
+        XCTAssertEqual(ResistanceProfileService.value(profile), value)
+        XCTAssertEqual(frozen.value, value)
+    }
+
+    @MainActor
+    func testFixedExportHydrationRestoresAbsoluteAndMixedProfiles() throws {
+        let (context, container) = makeContext()
+        _ = container
+        let cycle = ActiveCycleInstance(templateId: UUID())
+        context.insert(cycle)
+        try context.save()
+        let value = ResistanceProfileValue.voltra(chainType: .inverseChains, chainPounds: 35, eccentricPounds: 35)
+        let payload = SessionExportService.ExportPayload(session_id: UUID().uuidString,
+            cycle_name: "Recovery", cycle_day_index: 0, date: "2026-09-06T19:00:00Z",
+            exercises: [.init(exercise_name: "Lat Pulldown", muscle: "back",
+                sets: [.init(set_index: 1, weight: 130, reps: 10)], resistance_profile: ResistanceProfilePayload(value))])
+        let decoded = try XCTUnwrap(SessionExportService.decodeExportPayload(data: JSONEncoder().encode(payload)))
+        _ = try BootstrapDataService.reconcileWorkoutExports([decoded], cycle: cycle, modelContext: context)
+        let restored = try XCTUnwrap(context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).first)
+        XCTAssertEqual(ResistanceProfileService.value(restored), value)
+        XCTAssertNotNil(restored.frozenAt)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<SetEntry>()).first?.weight, 130)
     }
 
     func testResistanceProfilesAreEligibleOnlyForCableEquipment() {
@@ -1257,7 +1354,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
 
     @MainActor
     private func makeContext() -> (ModelContext, ModelContainer) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV12.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (ModelContext(container), container)
     }

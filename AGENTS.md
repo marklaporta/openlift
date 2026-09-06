@@ -3,7 +3,7 @@
 ## Project Overview
 
 OpenLift is a local-first iOS hypertrophy tracker built with SwiftUI, SwiftData,
-and Apple frameworks only. It supports Fixed Cycle, the V14 independently
+and Apple frameworks only. It supports Fixed Cycle, the independently
 advancing clustered program, Adaptive Floating, ad hoc logging, resistance
 profiles, and export-backed recovery. The deployment target is iOS 17+.
 
@@ -23,8 +23,8 @@ Key source files:
 
 | File | Responsibility |
 |---|---|
-| `OpenLiftApp.swift` | App entry, V14 container startup, explicit rollout/repair gates |
-| `OpenLiftSchema.swift` | Additive V1-V14 schemas and migration plan |
+| `OpenLiftApp.swift` | App entry, V15 container startup, explicit rollout/repair gates |
+| `OpenLiftSchema.swift` | Additive V1-V15 schemas and migration plan |
 | `Models.swift` | SwiftData models and supporting value types |
 | `BootstrapDataService.swift` | Catalog/template seeding, hydration, repairs, clustered program/rollout |
 | `WorkoutView.swift` | Fixed Cycle draft entry, clustered completion, prefill, finish/export |
@@ -70,6 +70,11 @@ weights, and reps, so a completed manual reduction carries forward. Cluster 2
 derives three-step arm identities inside its six-step leg rotation; Cluster 3
 derives a two-step shoulder identity inside its six-step calves/forearms lane.
 Do not add sub-rotation state.
+
+V15 adds optional absolute-pound chain/eccentric fields to occurrence profiles.
+V12–V14 retain a frozen copy of their shipped profile model. Percent and pound
+settings are distinct durable units and never silently converted on base-weight
+changes; see `docs/migration-safety.md`.
 
 ## Build And Test
 

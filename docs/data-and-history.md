@@ -25,6 +25,16 @@ Core models live in [`Models.swift`](../Sources/Models.swift):
 - V14 clustered exercise overlays: exact-slot `ClusterExercisePreference` and
   session-scoped `ClusterExerciseOccurrenceOverride`
 
+## Resistance units and recovery
+
+V15 adds optional `chainPounds` and `eccentricPounds` to occurrence profiles.
+Shipped percent profiles retain their raw integer fields and nil pound fields.
+JSON exports add optional `chain_pounds` / `eccentric_pounds`; the corresponding
+percent field is absent for a pound-valued modifier. Frozen cluster snapshots
+use the same value semantics. Legacy exports decode unchanged. Fixed/ad-hoc and
+Adaptive recovery, swaps, last-used defaults, locking, and comparison all carry
+the selected units without reinterpreting set base weights.
+
 ## What Counts As History
 
 The History tab primarily shows completed `Session` records plus their locked `SetEntry` values.

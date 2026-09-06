@@ -1988,7 +1988,7 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
     }
 
     private func makeProfileContext() -> (ModelContext, ModelContainer) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         return (ModelContext(container), container)
     }

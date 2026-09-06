@@ -5,7 +5,7 @@ import SwiftData
 import XCTest
 @testable import OpenLift
 
-private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV14
+private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV15
 
 @Model
 private final class UnsupportedMigrationMarker {
@@ -54,10 +54,9 @@ final class MigrationSafetyTests: XCTestCase {
             ObjectIdentifier(FixedCycleReadinessResponse.self)
         ])
 
-        // V11's live readiness models are byte-for-byte unchanged in V12-V14;
-        // all later versions add only parallel entities. The changed-
-        // type guard therefore applies through V10.
-        for schema in OpenLiftSchemaMigrationPlan.schemas.dropLast(4) {
+        // Readiness models changed in V11, so their frozen-type guard applies
+        // through V10. Profile shapes have a separate V12–V14 guard below.
+        for schema in OpenLiftSchemaMigrationPlan.schemas.dropLast(5) {
             for model in schema.models {
                 XCTAssertFalse(
                     changedLiveModelIdentifiers.contains(ObjectIdentifier(model)),
@@ -65,6 +64,61 @@ final class MigrationSafetyTests: XCTestCase {
                 )
             }
         }
+    }
+
+    func testV12ThroughV14KeepFrozenProfileModel() {
+        for models in [OpenLiftSchemaV12.models, OpenLiftSchemaV13.models, OpenLiftSchemaV14.models] {
+            XCTAssertTrue(models.contains { ObjectIdentifier($0) == ObjectIdentifier(OpenLiftSchemaV12.ExerciseResistanceProfile.self) })
+            XCTAssertFalse(models.contains { ObjectIdentifier($0) == ObjectIdentifier(ExerciseResistanceProfile.self) })
+        }
+    }
+
+    @MainActor
+    func testV14ProfileMigratesToV15AndPoundsSurviveReopen() throws {
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let url = fixture.working.appendingPathComponent("default.store")
+        let id = UUID(), sessionID = UUID(), exerciseID = UUID()
+        let frozenAt = Date(timeIntervalSince1970: 1_780_000_000)
+        try autoreleasepool {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+            let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none)])
+            let context = ModelContext(container)
+            context.insert(OpenLiftSchemaV12.ExerciseResistanceProfile(id: id, workoutKind: .fixed,
+                sessionId: sessionID, exerciseId: exerciseID, resistanceSource: .voltra,
+                chainType: .inverseChains, chainPercent: 30, eccentricPercent: 30,
+                frozenAt: frozenAt, createdAt: frozenAt, updatedAt: frozenAt))
+            try context.save()
+        }
+        try autoreleasepool {
+            let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+            let container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
+                configurations: [ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none)])
+            let context = ModelContext(container)
+            let profile = try XCTUnwrap(context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).first)
+            XCTAssertEqual(profile.id, id)
+            XCTAssertEqual(profile.sessionId, sessionID)
+            XCTAssertEqual(profile.exerciseId, exerciseID)
+            XCTAssertEqual(profile.frozenAt, frozenAt)
+            XCTAssertEqual(profile.updatedAt, frozenAt)
+            XCTAssertEqual(profile.createdAt, frozenAt)
+            XCTAssertNil(profile.chainPounds)
+            XCTAssertNil(profile.eccentricPounds)
+            XCTAssertEqual(ResistanceProfileService.value(profile), .voltra(chainType: .inverseChains, chainPercent: 30, eccentricPercent: 30))
+            // New occurrence uses absolute loads; the migrated completed row stays untouched.
+            _ = try ResistanceProfileService.create(workoutKind: .fixed, sessionId: UUID(), exerciseId: exerciseID,
+                value: .voltra(chainType: .inverseChains, chainPounds: 35, eccentricPounds: 35),
+                profiles: [profile], modelContext: context)
+            try context.save()
+        }
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configurations: [ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none)])
+        let reopenedContext = ModelContext(container)
+        let profiles = try reopenedContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        XCTAssertEqual(profiles.count, 2)
+        XCTAssertEqual(ResistanceProfileService.value(profiles.first { $0.id != id }),
+            .voltra(chainType: .inverseChains, chainPounds: 35, eccentricPounds: 35))
     }
 
     func testRealDeviceStoreMigrationTargetTracksHeadOfPlan() throws {
@@ -145,7 +199,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 1)
         XCTAssertEqual(
-            try context.fetchCount(FetchDescriptor<ExerciseResistanceProfile>()),
+            try context.fetchCount(FetchDescriptor<OpenLiftSchemaV12.ExerciseResistanceProfile>()),
             0,
             "Legacy cable work must remain unknown after the lightweight migration."
         )
@@ -201,7 +255,7 @@ final class MigrationSafetyTests: XCTestCase {
                 )
             )
             context.insert(
-                ExerciseResistanceProfile(
+                OpenLiftSchemaV12.ExerciseResistanceProfile(
                     workoutKind: .fixed,
                     sessionId: sessionID,
                     exerciseId: exerciseID,
@@ -231,7 +285,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).map(\.id), [sessionID])
         XCTAssertEqual(try context.fetch(FetchDescriptor<SetEntry>()).first?.weight, 25)
         XCTAssertEqual(
-            try context.fetch(FetchDescriptor<ExerciseResistanceProfile>()).first?.chainPercent,
+            try context.fetch(FetchDescriptor<OpenLiftSchemaV12.ExerciseResistanceProfile>()).first?.chainPercent,
             70
         )
         XCTAssertTrue(try context.fetch(FetchDescriptor<ClusterRotationState>()).isEmpty)
@@ -1259,6 +1313,11 @@ final class MigrationSafetyTests: XCTestCase {
             in: sourceContainer,
             sourceVersion: sourceVersion
         )
+        let sourceProfiles: [ResistanceProfileSnapshot]? = sourceVersion >= OpenLiftSchemaV12.versionIdentifier
+            ? try profileEvidence(in: ModelContext(sourceContainer), legacy: sourceVersion < OpenLiftSchemaV15.versionIdentifier)
+            : nil
+        let sourceClusterEvidence = sourceVersion >= OpenLiftSchemaV13.versionIdentifier
+            ? try clusterEvidence(in: ModelContext(sourceContainer)) : nil
         let sourceLockedAtCounts = sourceVersion >= OpenLiftSchemaV10.versionIdentifier
             ? try lockedAtCounts(in: sourceContainer)
             : nil
@@ -1277,6 +1336,15 @@ final class MigrationSafetyTests: XCTestCase {
             )
         )
         XCTAssertNil(startup.issue)
+        let migratedContext = ModelContext(startup.container)
+        if let sourceProfiles {
+            XCTAssertEqual(try profileEvidence(in: migratedContext, legacy: false), sourceProfiles,
+                           "Migration must preserve every raw profile, unit, identity and freeze timestamp.")
+        }
+        if let sourceClusterEvidence {
+            XCTAssertEqual(try clusterEvidence(in: migratedContext), sourceClusterEvidence,
+                           "Migration must preserve rotation identities/pointers and immutable occurrence evidence.")
+        }
         let allMigratedCounts = try currentEntityCounts(in: startup.container)
         let migratedCounts = allMigratedCounts.filter { sourceCounts[$0.key] != nil }
         XCTAssertEqual(migratedCounts, sourceCounts)
@@ -1696,6 +1764,39 @@ final class MigrationSafetyTests: XCTestCase {
         return counts
     }
 
+    private func profileEvidence(in context: ModelContext, legacy: Bool) throws -> [ResistanceProfileSnapshot] {
+        if !legacy {
+            return try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+                .map(ResistanceProfileService.snapshot).sorted { $0.id.uuidString < $1.id.uuidString }
+        }
+        return try context.fetch(FetchDescriptor<OpenLiftSchemaV12.ExerciseResistanceProfile>()).map {
+            ResistanceProfileSnapshot(id: $0.id, workoutKind: $0.workoutKind,
+                sessionId: $0.sessionId, exerciseId: $0.exerciseId, occurrenceId: $0.occurrenceId,
+                value: ResistanceProfileValue(resistanceSource: $0.resistanceSource,
+                    chainType: $0.chainType, chainPercent: $0.chainPercent, eccentricPercent: $0.eccentricPercent),
+                frozenAt: $0.frozenAt, updatedAt: $0.updatedAt)
+        }.sorted { $0.id.uuidString < $1.id.uuidString }
+    }
+
+    private func clusterEvidence(in context: ModelContext) throws -> [String] {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let states = try context.fetch(FetchDescriptor<ClusterRotationState>()).map {
+            [$0.id.uuidString, $0.key, $0.cycleInstanceId.uuidString, $0.templateId.uuidString,
+             $0.programVersionID, $0.clusterID, String($0.positionIndex),
+             String($0.updatedAt.timeIntervalSince1970), $0.lastCompletedOccurrenceID?.uuidString ?? "",
+             String($0.isDerived)].joined(separator: "|")
+        }
+        let occurrences = try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).map { row in
+            let identity = [row.id.uuidString, row.key, row.sessionId.uuidString,
+                row.cycleInstanceId.uuidString, row.templateId.uuidString, row.programVersionID,
+                row.clusterID, String(row.absoluteStep), String(row.templateDayPosition), row.dayLabel,
+                String(row.completedAt.timeIntervalSince1970)].joined(separator: "|")
+            return identity + "|" + (try encoder.encode(row.exerciseSnapshots)).base64EncodedString()
+        }
+        return (states + occurrences).sorted()
+    }
+
     private func currentEntityCounts(in container: ModelContainer) throws -> [String: Int] {
         let context = ModelContext(container)
         var counts = try sharedV9AndV10EntityCounts(in: context)
@@ -1905,7 +2006,7 @@ extension MigrationSafetyTests {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         try copyDirectoryContents(from: supplied, to: fixture.working)
-        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self, configurations: [ModelConfiguration("RevisionCopy", schema: schema, url: fixture.working.appendingPathComponent("default.store"), cloudKitDatabase: .none)])
         let context = ModelContext(container)
         func rows() throws -> [String] {

@@ -2413,21 +2413,17 @@ struct ExerciseEffortLookupResult: Equatable {
     let resistanceProfile: ResistanceProfileValue?
     let profileComparison: ResistanceProfileComparison
 
-    /// One compact, provenance-bearing comparison label beside editable sets.
+    /// Date and literal rows carry the context; only resistance differences need explanation.
     var compactSummary: String {
-        let heading = isComparable ? "Last comparable effort"
-            : matchKind == .sameProgressionIdentity ? "Same progression fallback · not comparable" : "Reference only · not comparable"
-        let source: String
-        switch sourceKind {
-        case .fixedCycle: source = "Fixed Cycle"
-        case .adaptive: source = "Adaptive"
-        case .adHoc: source = "Ad hoc"
+        var lines = [completedAt.formatted(date: .abbreviated, time: .omitted),
+                     rows.map { "\(WeightFormatting.normalized($0.weight)) × \($0.reps)" }.joined(separator: " · ")]
+        if let resistanceProfile { lines.append(resistanceProfile.displayName) }
+        if !isComparable {
+            lines.append(profileComparison == .unknown
+                ? "Resistance profile unknown · not comparable"
+                : "Different resistance · not comparable")
         }
-        let identity = [source, dayLabel ?? cycleName].compactMap { $0 }.joined(separator: " · ")
-        let profile = resistanceProfile?.displayName
-            ?? (profileComparison == .exact ? "Standard resistance" : "Resistance profile unknown")
-        let performance = rows.map { "\(WeightFormatting.normalized($0.weight)) × \($0.reps)" }.joined(separator: " · ")
-        return "\(heading) · \(completedAt.formatted(date: .abbreviated, time: .omitted))\n\(performance)\n\(identity) · \(profile)"
+        return lines.joined(separator: "\n")
     }
 
     var isComparable: Bool {

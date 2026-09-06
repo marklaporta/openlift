@@ -345,6 +345,53 @@ enum OpenLiftSchemaV11: VersionedSchema {
 /// existing exercise, session, or set entity is changed, so legacy cable work
 /// remains explicitly unknown until an exact occurrence is audited/backfilled.
 enum OpenLiftSchemaV12: VersionedSchema {
+    // Frozen shipped profile shape; V15 adds optional absolute-load fields.
+    @Model
+    final class ExerciseResistanceProfile {
+        @Attribute(.unique) var id: UUID
+        var workoutKind: ResistanceProfileWorkoutKind
+        var sessionId: UUID
+        var exerciseId: UUID
+        /// Adaptive has a durable occurrence ID. Fixed/ad-hoc currently identify
+        /// an occurrence by session + exercise and therefore leave this nil.
+        var occurrenceId: UUID?
+        var resistanceSource: ResistanceSource
+        var chainType: VOLTRAChainType?
+        var chainPercent: Int?
+        var eccentricPercent: Int?
+        var frozenAt: Date?
+        var createdAt: Date
+        var updatedAt: Date
+
+        init(
+            id: UUID = UUID(),
+            workoutKind: ResistanceProfileWorkoutKind,
+            sessionId: UUID,
+            exerciseId: UUID,
+            occurrenceId: UUID? = nil,
+            resistanceSource: ResistanceSource,
+            chainType: VOLTRAChainType? = nil,
+            chainPercent: Int? = nil,
+            eccentricPercent: Int? = nil,
+            frozenAt: Date? = nil,
+            createdAt: Date = .now,
+            updatedAt: Date = .now
+        ) {
+            self.id = id
+            self.workoutKind = workoutKind
+            self.sessionId = sessionId
+            self.exerciseId = exerciseId
+            self.occurrenceId = occurrenceId
+            self.resistanceSource = resistanceSource
+            self.chainType = chainType
+            self.chainPercent = chainPercent
+            self.eccentricPercent = eccentricPercent
+            self.frozenAt = frozenAt
+            self.createdAt = createdAt
+            self.updatedAt = updatedAt
+        }
+    }
+
     static let versionIdentifier = Schema.Version(12, 0, 0)
 
     static let models: [any PersistentModel.Type] = OpenLiftSchemaV11.models + [
@@ -376,6 +423,14 @@ enum OpenLiftSchemaV14: VersionedSchema {
     ]
 }
 
+/// Adds absolute pounds without reinterpreting shipped percentage profiles.
+enum OpenLiftSchemaV15: VersionedSchema {
+    static let versionIdentifier = Schema.Version(15, 0, 0)
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV14.models.filter {
+        ObjectIdentifier($0) != ObjectIdentifier(OpenLiftSchemaV12.ExerciseResistanceProfile.self)
+    } + [ExerciseResistanceProfile.self]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
@@ -391,7 +446,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV11.self,
         OpenLiftSchemaV12.self,
         OpenLiftSchemaV13.self,
-        OpenLiftSchemaV14.self
+        OpenLiftSchemaV14.self,
+        OpenLiftSchemaV15.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -446,7 +502,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         .lightweight(
             fromVersion: OpenLiftSchemaV13.self,
             toVersion: OpenLiftSchemaV14.self
-        )
+        ),
+        .lightweight(fromVersion: OpenLiftSchemaV14.self, toVersion: OpenLiftSchemaV15.self)
     ]
 }
 

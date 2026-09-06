@@ -7,51 +7,145 @@ struct ResistanceProfileValue: Codable, Equatable, Hashable, Sendable {
     let chainType: VOLTRAChainType?
     let chainPercent: Int?
     let eccentricPercent: Int?
+    let chainPounds: Double?
+    let eccentricPounds: Double?
+
+    init(resistanceSource: ResistanceSource, chainType: VOLTRAChainType?,
+         chainPercent: Int?, eccentricPercent: Int?,
+         chainPounds: Double? = nil, eccentricPounds: Double? = nil) {
+        self.resistanceSource = resistanceSource
+        self.chainType = chainType
+        self.chainPercent = chainPercent
+        self.eccentricPercent = eccentricPercent
+        self.chainPounds = chainPounds
+        self.eccentricPounds = eccentricPounds
+    }
 
     static let weightStack = ResistanceProfileValue(
-        resistanceSource: .weightStack,
-        chainType: nil,
-        chainPercent: nil,
-        eccentricPercent: nil
+        resistanceSource: .weightStack, chainType: nil, chainPercent: nil, eccentricPercent: nil
     )
 
-    static func voltra(
-        chainType: VOLTRAChainType,
-        chainPercent: Int,
-        eccentricPercent: Int
-    ) -> ResistanceProfileValue {
+    static func voltra(chainType: VOLTRAChainType, chainPercent: Int? = nil,
+                       eccentricPercent: Int? = nil, chainPounds: Double? = nil,
+                       eccentricPounds: Double? = nil) -> ResistanceProfileValue {
         ResistanceProfileValue(
-            resistanceSource: .voltra,
-            chainType: chainType,
+            resistanceSource: .voltra, chainType: chainType,
             chainPercent: chainType == .none ? 0 : chainPercent,
-            eccentricPercent: eccentricPercent
+            eccentricPercent: eccentricPercent,
+            chainPounds: chainType == .none ? nil : chainPounds,
+            eccentricPounds: eccentricPounds
         )
+    }
+
+    private static func validModifier(percent: Int?, pounds: Double?) -> Bool {
+        if let percent { return pounds == nil && (0...100).contains(percent) }
+        // Absolute loads are stored, never derived from a changing set weight.
+        return pounds.map { $0.isFinite && $0 >= 0 } ?? false
     }
 
     var isComplete: Bool {
         switch resistanceSource {
         case .weightStack:
             return chainType == nil && chainPercent == nil && eccentricPercent == nil
+                && chainPounds == nil && eccentricPounds == nil
         case .voltra:
-            guard let chainType, let chainPercent, let eccentricPercent,
-                  (0...100).contains(chainPercent),
-                  (0...100).contains(eccentricPercent) else { return false }
-            return chainType == .none ? chainPercent == 0 : true
+            guard let chainType,
+                  Self.validModifier(percent: chainPercent, pounds: chainPounds),
+                  Self.validModifier(percent: eccentricPercent, pounds: eccentricPounds) else { return false }
+            return chainType != .none || (chainPercent == 0 && chainPounds == nil)
         }
+    }
+
+    private static func amount(percent: Int?, pounds: Double?) -> String {
+        if let pounds { return "\(pounds.formatted(.number.precision(.fractionLength(0...2)))) lb" }
+        return "\(percent ?? 0)%"
     }
 
     var displayName: String {
         switch resistanceSource {
-        case .weightStack:
-            return "Cable · Weight Stack"
+        case .weightStack: return "Cable · Weight Stack"
         case .voltra:
-            guard let chainType, let chainPercent, let eccentricPercent else {
-                return "VOLTRA · Incomplete Profile"
+            guard isComplete, let chainType else { return "VOLTRA · Incomplete Profile" }
+            let chain = chainType == .none ? "No Chains"
+                : "\(chainType.displayName) \(Self.amount(percent: chainPercent, pounds: chainPounds))"
+            return "VOLTRA · \(chain) · Eccentric \(Self.amount(percent: eccentricPercent, pounds: eccentricPounds))"
+        }
+    }
+}
+
+/// Independent input units are part of the profile, not a display conversion.
+enum VOLTRAModifierUnit: String, CaseIterable { case percent = "%", pounds = "lb" }
+
+struct VOLTRAProfileDraft {
+    var chainType: VOLTRAChainType = .inverseChains
+    var chainUnit: VOLTRAModifierUnit = .percent
+    var eccentricUnit: VOLTRAModifierUnit = .percent
+    var chainPercent = 0
+    var eccentricPercent = 0
+    var chainPounds = 0.0
+    var eccentricPounds = 0.0
+
+    init(_ value: ResistanceProfileValue? = nil) {
+        chainType = value?.chainType ?? .inverseChains
+        chainUnit = value?.chainPounds == nil ? .percent : .pounds
+        eccentricUnit = value?.eccentricPounds == nil ? .percent : .pounds
+        chainPercent = value?.chainPercent ?? 0
+        eccentricPercent = value?.eccentricPercent ?? 0
+        chainPounds = value?.chainPounds ?? 0
+        eccentricPounds = value?.eccentricPounds ?? 0
+    }
+
+    var value: ResistanceProfileValue {
+        .voltra(chainType: chainType,
+                chainPercent: chainUnit == .percent ? chainPercent : nil,
+                eccentricPercent: eccentricUnit == .percent ? eccentricPercent : nil,
+                chainPounds: chainUnit == .pounds ? chainPounds : nil,
+                eccentricPounds: eccentricUnit == .pounds ? eccentricPounds : nil)
+    }
+}
+
+private struct VOLTRAProfileFields: View {
+    @Binding var draft: VOLTRAProfileDraft
+    var body: some View {
+        Picker("Chain mode", selection: $draft.chainType) {
+            ForEach(VOLTRAChainType.allCases, id: \.self) { Text($0.displayName).tag($0) }
+        }
+        if draft.chainType != .none {
+            modifier("Chain", unit: $draft.chainUnit, percent: $draft.chainPercent, pounds: $draft.chainPounds)
+        }
+        modifier("Eccentric", unit: $draft.eccentricUnit, percent: $draft.eccentricPercent, pounds: $draft.eccentricPounds)
+    }
+
+    private func modifier(_ title: String, unit: Binding<VOLTRAModifierUnit>,
+                          percent: Binding<Int>, pounds: Binding<Double>) -> some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Text(title)
+                Spacer()
+                Picker("\(title) unit", selection: unit) {
+                    ForEach(VOLTRAModifierUnit.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 120)
+                .accessibilityIdentifier("voltra\(title)Unit")
             }
-            let chain = chainType == .none
-                ? "No Chains"
-                : "\(chainType.displayName) \(chainPercent)%"
-            return "VOLTRA · \(chain) · Eccentric \(eccentricPercent)%"
+            HStack {
+                if unit.wrappedValue == .percent {
+                    TextField("Amount", value: percent, format: .number)
+                        .keyboardType(.numberPad)
+                        .accessibilityIdentifier("voltra\(title)Amount")
+                        .accessibilityLabel("\(title) amount")
+                    Text("%")
+                    Stepper(title, value: percent, in: 0...100, step: 5).labelsHidden()
+                } else {
+                    TextField("Amount", value: pounds, format: .number)
+                        .keyboardType(.decimalPad)
+                        .accessibilityIdentifier("voltra\(title)Amount")
+                        .accessibilityLabel("\(title) amount")
+                    Text("lb")
+                    Stepper(title, value: pounds, in: 0...Double.greatestFiniteMagnitude, step: 1).labelsHidden()
+                }
+            }
         }
     }
 }
@@ -85,9 +179,7 @@ struct CableResistanceProfileControl: View {
 
     @State private var isEditing = false
     @State private var source: ResistanceSource
-    @State private var chainType: VOLTRAChainType
-    @State private var chainPercent: Int
-    @State private var eccentricPercent: Int
+    @State private var voltra: VOLTRAProfileDraft
     @State private var pendingFrozenSave = false
 
     init(
@@ -112,13 +204,16 @@ struct CableResistanceProfileControl: View {
             ?? ResistanceProfileService.lastUsedValue(exerciseId: exerciseId, profiles: profiles)
             ?? .weightStack
         _source = State(initialValue: initial.resistanceSource)
-        _chainType = State(initialValue: initial.chainType ?? .inverseChains)
-        _chainPercent = State(initialValue: initial.chainPercent ?? 0)
-        _eccentricPercent = State(initialValue: initial.eccentricPercent ?? 0)
+        _voltra = State(initialValue: VOLTRAProfileDraft(initial))
     }
 
     var body: some View {
         Button {
+            let initial = profile?.value
+                ?? ResistanceProfileService.lastUsedValue(exerciseId: exerciseId, profiles: profiles)
+                ?? .weightStack
+            source = initial.resistanceSource
+            voltra = VOLTRAProfileDraft(initial)
             isEditing = true
         } label: {
             Label(
@@ -140,16 +235,8 @@ struct CableResistanceProfileControl: View {
                         .pickerStyle(.segmented)
                     }
                     if source == .voltra {
-                        Section("VOLTRA Percentage Profile") {
-                            Picker("Chain mode", selection: $chainType) {
-                                ForEach(VOLTRAChainType.allCases, id: \.self) {
-                                    Text($0.displayName).tag($0)
-                                }
-                            }
-                            if chainType != .none {
-                                Stepper("Chain: \(chainPercent)%", value: $chainPercent, in: 0...100, step: 5)
-                            }
-                            Stepper("Eccentric: \(eccentricPercent)%", value: $eccentricPercent, in: 0...100, step: 5)
+                        Section("VOLTRA Profile") {
+                            VOLTRAProfileFields(draft: $voltra)
                         }
                     }
                     Section {
@@ -178,6 +265,7 @@ struct CableResistanceProfileControl: View {
                                 save(confirmed: false)
                             }
                         }
+                        .disabled(!draftValue.isComplete)
                     }
                 }
                 .alert("Correct Entire Occurrence?", isPresented: $pendingFrozenSave) {
@@ -193,11 +281,7 @@ struct CableResistanceProfileControl: View {
     private var draftValue: ResistanceProfileValue {
         source == .weightStack
             ? .weightStack
-            : .voltra(
-                chainType: chainType,
-                chainPercent: chainPercent,
-                eccentricPercent: eccentricPercent
-            )
+            : voltra.value
     }
 
     private func save(confirmed: Bool) {
@@ -248,18 +332,12 @@ struct CableResistanceProfileDraftControl: View {
     @Binding var value: ResistanceProfileValue?
     @State private var isEditing = false
     @State private var source: ResistanceSource = .weightStack
-    @State private var chainType: VOLTRAChainType = .inverseChains
-    @State private var chainPercent = 0
-    @State private var eccentricPercent = 0
+    @State private var voltra = VOLTRAProfileDraft()
 
     var body: some View {
         Button {
-            if let value {
-                source = value.resistanceSource
-                chainType = value.chainType ?? .inverseChains
-                chainPercent = value.chainPercent ?? 0
-                eccentricPercent = value.eccentricPercent ?? 0
-            }
+            source = value?.resistanceSource ?? .weightStack
+            voltra = VOLTRAProfileDraft(value)
             isEditing = true
         } label: {
             Label(
@@ -278,15 +356,7 @@ struct CableResistanceProfileDraftControl: View {
                     }
                     .pickerStyle(.segmented)
                     if source == .voltra {
-                        Picker("Chain mode", selection: $chainType) {
-                            ForEach(VOLTRAChainType.allCases, id: \.self) {
-                                Text($0.displayName).tag($0)
-                            }
-                        }
-                        if chainType != .none {
-                            Stepper("Chain: \(chainPercent)%", value: $chainPercent, in: 0...100, step: 5)
-                        }
-                        Stepper("Eccentric: \(eccentricPercent)%", value: $eccentricPercent, in: 0...100, step: 5)
+                        VOLTRAProfileFields(draft: $voltra)
                     }
                     Text(draftValue.displayName).foregroundStyle(.secondary)
                 }
@@ -300,6 +370,7 @@ struct CableResistanceProfileDraftControl: View {
                             value = draftValue
                             isEditing = false
                         }
+                        .disabled(!draftValue.isComplete)
                     }
                 }
             }
@@ -309,11 +380,7 @@ struct CableResistanceProfileDraftControl: View {
     private var draftValue: ResistanceProfileValue {
         source == .weightStack
             ? .weightStack
-            : .voltra(
-                chainType: chainType,
-                chainPercent: chainPercent,
-                eccentricPercent: eccentricPercent
-            )
+            : voltra.value
     }
 }
 
@@ -396,7 +463,9 @@ enum ResistanceProfileService {
             resistanceSource: profile.resistanceSource,
             chainType: profile.chainType,
             chainPercent: profile.chainPercent,
-            eccentricPercent: profile.eccentricPercent
+            eccentricPercent: profile.eccentricPercent,
+            chainPounds: profile.chainPounds,
+            eccentricPounds: profile.eccentricPounds
         )
         return value.isComplete ? value : nil
     }
@@ -479,6 +548,8 @@ enum ResistanceProfileService {
             chainType: value.chainType,
             chainPercent: value.chainPercent,
             eccentricPercent: value.eccentricPercent,
+            chainPounds: value.chainPounds,
+            eccentricPounds: value.eccentricPounds,
             createdAt: now,
             updatedAt: now
         )
@@ -557,6 +628,8 @@ enum ResistanceProfileService {
         profile.chainType = value.chainType
         profile.chainPercent = value.chainPercent
         profile.eccentricPercent = value.eccentricPercent
+        profile.chainPounds = value.chainPounds
+        profile.eccentricPounds = value.eccentricPounds
         profile.updatedAt = now
         if profile.frozenAt != nil {
             try markExportPending(for: profile, modelContext: modelContext)
@@ -646,12 +719,16 @@ struct ResistanceProfilePayload: Codable, Equatable, Sendable {
     let chain_type: String?
     let chain_percent: Int?
     let eccentric_percent: Int?
+    let chain_pounds: Double?
+    let eccentric_pounds: Double?
 
     init(_ value: ResistanceProfileValue) {
         resistance_source = value.resistanceSource.rawValue
         chain_type = value.chainType?.rawValue
         chain_percent = value.chainPercent
         eccentric_percent = value.eccentricPercent
+        chain_pounds = value.chainPounds
+        eccentric_pounds = value.eccentricPounds
     }
 
     var value: ResistanceProfileValue? {
@@ -660,7 +737,9 @@ struct ResistanceProfilePayload: Codable, Equatable, Sendable {
             resistanceSource: source,
             chainType: chain_type.flatMap(VOLTRAChainType.init(rawValue:)),
             chainPercent: chain_percent,
-            eccentricPercent: eccentric_percent
+            eccentricPercent: eccentric_percent,
+            chainPounds: chain_pounds,
+            eccentricPounds: eccentric_pounds
         )
         return decoded.isComplete ? decoded : nil
     }

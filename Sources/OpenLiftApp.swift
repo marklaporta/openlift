@@ -4,7 +4,7 @@ import BackgroundTasks
 
 @main
 struct OpenLiftApp: App {
-    private static let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+    private static let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
 
     private static let startup: OpenLiftContainerStartup = {
         AppRuntime.prepareForUITesting()

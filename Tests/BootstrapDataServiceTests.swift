@@ -415,7 +415,7 @@ final class BootstrapDataServiceTests: XCTestCase {
 
     @MainActor
     func testTargetedFixedRetryReplacesEverySameSessionCopyWithResistanceProfile() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV12.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let exercise = Exercise(
