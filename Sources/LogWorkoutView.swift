@@ -56,7 +56,10 @@ struct LogWorkoutView: View {
 
                         if exercises.first(where: { $0.id == exerciseDraft.exerciseId })?
                             .equipment.supportsResistanceProfile == true {
-                            CableResistanceProfileDraftControl(value: $exerciseDraft.resistanceProfile)
+                            CableResistanceProfileDraftControl(
+                                value: $exerciseDraft.resistanceProfile,
+                                baseWeights: exerciseDraft.sets.map(\.weight)
+                            )
                         }
 
                         ForEach($exerciseDraft.sets) { $set in

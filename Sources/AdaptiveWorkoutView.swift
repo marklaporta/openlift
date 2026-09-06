@@ -2025,6 +2025,7 @@ private struct AdaptiveExerciseSection: View {
                     occurrenceId: occurrenceId,
                     profile: resistanceProfile,
                     profiles: resistanceProfiles,
+                    baseWeights: entries.map(\.weight),
                     onError: onError
                 )
             }

@@ -104,8 +104,66 @@ struct VOLTRAProfileDraft {
     }
 }
 
+/// Read-only conversions: an occurrence may contain several different base loads.
+/// Never use the converted amount to rewrite the selected durable input unit.
+enum VOLTRAEquivalent {
+    static func bases(_ weights: [Double]) -> [Double] {
+        var seen = Set<Double>()
+        return weights.filter { $0.isFinite && $0 > 0 && seen.insert($0).inserted }
+    }
+
+    static func amount(_ amount: Double, unit: VOLTRAModifierUnit, base: Double) -> Double? {
+        guard base.isFinite, base > 0, amount.isFinite, amount >= 0 else { return nil }
+        let result = unit == .percent ? base * (amount / 100) : (amount / base) * 100
+        return result.isFinite ? result : nil
+    }
+
+    static func caption(_ amount: Double, unit: VOLTRAModifierUnit, base: Double) -> String? {
+        guard let result = self.amount(amount, unit: unit, base: base) else { return nil }
+        let rounded = (result * 10).rounded() / 10
+        guard rounded.isFinite else { return nil }
+        let marker = abs(rounded - result) > max(1, abs(result)) * 1e-12 ? "≈" : "="
+        let suffix = unit == .percent ? " lb" : "%"
+        let value = rounded.formatted(WeightFormatting.style)
+        let baseText = base.formatted(.number.precision(.fractionLength(0 ... 6)))
+        return "\(marker)\(value)\(suffix) at \(baseText) lb base"
+    }
+}
+
+/// Existing fractional pound values remain intact until explicitly replaced.
+/// New keypad/paste edits accept only nonnegative whole numbers (empty means zero).
+enum VOLTRAWholeNumberInput {
+    static func parse(_ text: String) -> Int? {
+        guard text.allSatisfy({ $0 >= "0" && $0 <= "9" }) else { return nil }
+        guard let value = text.isEmpty ? 0 : Int(text), Double(exactly: value) != nil else { return nil }
+        return value
+    }
+}
+
+private struct VOLTRAAmountField: View {
+    @Binding var amount: Double
+    let title: String
+    @State private var editedText: String?
+
+    var body: some View {
+        TextField("Amount", text: Binding(
+            get: { editedText ?? amount.formatted(.number.grouping(.never)) },
+            set: { text in
+                guard let whole = VOLTRAWholeNumberInput.parse(text) else { return }
+                editedText = text
+                amount = Double(whole)
+            }
+        ))
+        .keyboardType(.numberPad)
+        .accessibilityIdentifier("voltra\(title)Amount")
+        .accessibilityLabel("\(title) amount")
+    }
+}
+
 private struct VOLTRAProfileFields: View {
     @Binding var draft: VOLTRAProfileDraft
+    let baseWeights: [Double]
+
     var body: some View {
         Picker("Chain mode", selection: $draft.chainType) {
             ForEach(VOLTRAChainType.allCases, id: \.self) { Text($0.displayName).tag($0) }
@@ -114,11 +172,19 @@ private struct VOLTRAProfileFields: View {
             modifier("Chain", unit: $draft.chainUnit, percent: $draft.chainPercent, pounds: $draft.chainPounds)
         }
         modifier("Eccentric", unit: $draft.eccentricUnit, percent: $draft.eccentricPercent, pounds: $draft.eccentricPounds)
+        if VOLTRAEquivalent.bases(baseWeights).isEmpty {
+            Text("Enter a base weight in your sets to see lb / % equivalents.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func modifier(_ title: String, unit: Binding<VOLTRAModifierUnit>,
                           percent: Binding<Int>, pounds: Binding<Double>) -> some View {
-        VStack(alignment: .leading) {
+        let amount = unit.wrappedValue == .percent
+            ? Binding<Double>(get: { Double(percent.wrappedValue) }, set: { percent.wrappedValue = Int($0) })
+            : pounds
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(title)
                 Spacer()
@@ -130,20 +196,16 @@ private struct VOLTRAProfileFields: View {
                 .accessibilityIdentifier("voltra\(title)Unit")
             }
             HStack {
-                if unit.wrappedValue == .percent {
-                    TextField("Amount", value: percent, format: .number)
-                        .keyboardType(.numberPad)
-                        .accessibilityIdentifier("voltra\(title)Amount")
-                        .accessibilityLabel("\(title) amount")
-                    Text("%")
-                    Stepper(title, value: percent, in: 0...100, step: 5).labelsHidden()
-                } else {
-                    TextField("Amount", value: pounds, format: .number)
-                        .keyboardType(.decimalPad)
-                        .accessibilityIdentifier("voltra\(title)Amount")
-                        .accessibilityLabel("\(title) amount")
-                    Text("lb")
-                    Stepper(title, value: pounds, in: 0...Double.greatestFiniteMagnitude, step: 1).labelsHidden()
+                VOLTRAAmountField(amount: amount, title: title)
+                    .id(unit.wrappedValue)
+                Text(unit.wrappedValue.rawValue)
+            }
+            ForEach(VOLTRAEquivalent.bases(baseWeights), id: \.self) { base in
+                if let caption = VOLTRAEquivalent.caption(amount.wrappedValue, unit: unit.wrappedValue, base: base) {
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("voltra\(title)Equivalent.\(base)")
                 }
             }
         }
@@ -175,6 +237,7 @@ struct CableResistanceProfileControl: View {
     let profile: ResistanceProfileSnapshot?
     let profiles: [ResistanceProfileSnapshot]
     let isCompletedOccurrence: Bool
+    let baseWeights: [Double]
     let onError: (String) -> Void
 
     @State private var isEditing = false
@@ -190,6 +253,7 @@ struct CableResistanceProfileControl: View {
         profile: ResistanceProfileSnapshot?,
         profiles: [ResistanceProfileSnapshot],
         isCompletedOccurrence: Bool = false,
+        baseWeights: [Double],
         onError: @escaping (String) -> Void
     ) {
         self.workoutKind = workoutKind
@@ -199,6 +263,7 @@ struct CableResistanceProfileControl: View {
         self.profile = profile
         self.profiles = profiles
         self.isCompletedOccurrence = isCompletedOccurrence
+        self.baseWeights = baseWeights
         self.onError = onError
         let initial = profile?.value
             ?? ResistanceProfileService.lastUsedValue(exerciseId: exerciseId, profiles: profiles)
@@ -236,7 +301,7 @@ struct CableResistanceProfileControl: View {
                     }
                     if source == .voltra {
                         Section("VOLTRA Profile") {
-                            VOLTRAProfileFields(draft: $voltra)
+                            VOLTRAProfileFields(draft: $voltra, baseWeights: baseWeights)
                         }
                     }
                     Section {
@@ -330,6 +395,7 @@ struct CableResistanceProfileControl: View {
 
 struct CableResistanceProfileDraftControl: View {
     @Binding var value: ResistanceProfileValue?
+    let baseWeights: [Double]
     @State private var isEditing = false
     @State private var source: ResistanceSource = .weightStack
     @State private var voltra = VOLTRAProfileDraft()
@@ -356,7 +422,7 @@ struct CableResistanceProfileDraftControl: View {
                     }
                     .pickerStyle(.segmented)
                     if source == .voltra {
-                        VOLTRAProfileFields(draft: $voltra)
+                        VOLTRAProfileFields(draft: $voltra, baseWeights: baseWeights)
                     }
                     Text(draftValue.displayName).foregroundStyle(.secondary)
                 }

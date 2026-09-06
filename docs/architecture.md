@@ -395,3 +395,15 @@ Run:
 ```bash
 xcodebuild test -scheme OpenLift -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
+
+### VOLTRA modifier entry and live equivalents
+
+Both occurrence and ad hoc draft editors use whole-number keypad inputs (no
+steppers) with independent lb/% selectors. Existing fractional-pound profiles
+remain exact when opened and re-saved; only explicit new edits require whole
+numbers. Read-only reciprocal-unit captions show each distinct positive set base
+explicitly, using current buffered weights in Fixed Cycle. They update as the
+modifier changes, retain useful tenths without trailing `.0`, and mark rounding
+with `≈`. Zero/missing/nonfinite bases produce no fabricated conversion. Selected
+units and stored amounts remain authoritative; this is UI-only with no schema or
+training-history rewrite.

@@ -475,6 +475,7 @@ private struct AdaptiveSessionDetailView: View {
                                             resistanceProfiles
                                         ),
                                         isCompletedOccurrence: true,
+                                        baseWeights: rows.map(\.weight),
                                         onError: { profileError = $0 }
                                     )
                                 }
@@ -716,6 +717,7 @@ private struct SessionDetailView: View {
                             profile: profile.map(ResistanceProfileService.snapshot),
                             profiles: ResistanceProfileService.snapshots(resistanceProfiles),
                             isCompletedOccurrence: true,
+                            baseWeights: group.sets.map(\.weight),
                             onError: { exportError = $0 }
                         )
                     }
