@@ -13,7 +13,7 @@ final class ClusteredProgramTests: XCTestCase {
         [Exercise], CycleTemplate, ActiveCycleInstance, [ClusterRotationState]
     ) {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let exercises = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -298,7 +298,7 @@ final class ClusteredProgramTests: XCTestCase {
     }
 
     func testClusteredSwapMutationPersistsResetsAndRefusesLockedWork() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let exercises = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -441,7 +441,7 @@ final class ClusteredProgramTests: XCTestCase {
     }
 
     func testPersistentClusterSwapRefusesCollisionWithFutureIndependentClusterDay() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let exercises = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -488,7 +488,7 @@ final class ClusteredProgramTests: XCTestCase {
     }
 
     func testResetPersistentClusterSwapRefusesReintroducedFutureCollision() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let exercises = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -866,7 +866,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testTemplateReusesExistingCatalogIdentitiesBeforeFreshFallbacks() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let existingFlye = Exercise(
@@ -912,7 +912,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testCatalogDoesNotDuplicateEstablishedNamesAfterPartialPatchSeeding() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let partialPatchFlye = Exercise(
@@ -1022,6 +1022,14 @@ final class ClusteredProgramTests: XCTestCase {
     }
 
     func testOccurrenceFreezesExactVOLTRAProfileAndProgressionIdentity() throws {
+        try assertFrozenVOLTRAProfile(.voltra(chainType: .inverseChains, chainPercent: 70, eccentricPercent: 30))
+    }
+
+    func testOccurrenceFreezesAbsoluteVOLTRAProfileAndProgressionIdentity() throws {
+        try assertFrozenVOLTRAProfile(.voltra(chainType: .inverseChains, chainPounds: 35, eccentricPounds: 35))
+    }
+
+    private func assertFrozenVOLTRAProfile(_ profileValue: ResistanceProfileValue) throws {
         let (exercises, template, cycle, states) = try program()
         let selection = try FixedCycleClusterProgramService.selection(
             cluster: .cluster3,
@@ -1041,11 +1049,6 @@ final class ClusteredProgramTests: XCTestCase {
         )
         let wrist = try XCTUnwrap(selection.day.slots.last)
         let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
-        let profileValue = ResistanceProfileValue.voltra(
-            chainType: .inverseChains,
-            chainPercent: 70,
-            eccentricPercent: 30
-        )
         let profile = ExerciseResistanceProfile(
             workoutKind: .fixed,
             sessionId: session.id,
@@ -1053,7 +1056,9 @@ final class ClusteredProgramTests: XCTestCase {
             resistanceSource: profileValue.resistanceSource,
             chainType: profileValue.chainType,
             chainPercent: profileValue.chainPercent,
-            eccentricPercent: profileValue.eccentricPercent
+            eccentricPercent: profileValue.eccentricPercent,
+            chainPounds: profileValue.chainPounds,
+            eccentricPounds: profileValue.eccentricPounds
         )
         let entry = SetEntry(
             sessionId: session.id,
@@ -1073,6 +1078,11 @@ final class ClusteredProgramTests: XCTestCase {
         )
         let snapshot = try XCTUnwrap(occurrence.exerciseSnapshots.last)
         XCTAssertEqual(snapshot.resistanceProfile, profileValue)
+        profile.chainPounds = 99
+        profile.eccentricPounds = 99
+        XCTAssertEqual(occurrence.exerciseSnapshots.last?.resistanceProfile, profileValue)
+        let encoded = try JSONEncoder().encode(occurrence.exerciseSnapshots)
+        XCTAssertEqual(try JSONDecoder().decode([ClusterExerciseProgressionSnapshot].self, from: encoded).last?.resistanceProfile, profileValue)
         XCTAssertEqual(snapshot.completionStatus, .performed)
         XCTAssertEqual(
             snapshot.progressionKey,
@@ -1360,7 +1370,7 @@ final class ClusteredProgramTests: XCTestCase {
     }
 
     func testClusterMetadataRoundTripsOccurrenceAndExplicitPointers() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let sourceContainer = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let sourceContext = ModelContext(sourceContainer)
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: sourceContext)
@@ -1497,7 +1507,7 @@ final class ClusteredProgramTests: XCTestCase {
     }
 
     func testRecoveryResetsInvalidPersistentClusterCollisionAndKeepsHistory() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let sourceContainer = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let sourceContext = ModelContext(sourceContainer)
         let sourceCatalog = try BootstrapDataService.ensureExerciseCatalog(
@@ -1650,7 +1660,7 @@ final class ClusteredProgramTests: XCTestCase {
     }
 
     func testRecoveryIngestsOldCustomSwapDefinitionAfterNewerResetSnapshot() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let sourceContainer = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let sourceContext = ModelContext(sourceContainer)
         let sourceCatalog = try BootstrapDataService.ensureExerciseCatalog(
@@ -1906,7 +1916,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testExplicitRolloutPreservesLegacyHistoryAndCreatesFreshPointers() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -1963,7 +1973,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testExportRecoveryThenRolloutAdoptsPointersWithoutRewinding() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let exercises = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -2052,7 +2062,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testExplicitRolloutRejectsUnknownRecoveredPointerState() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         context.insert(
@@ -2079,7 +2089,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testExplicitRolloutRejectsPartialRecoveredPointerState() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         context.insert(
@@ -2106,7 +2116,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testClusteredRolloutRequiresBackupConfirmationForUnlockedPrefillWithoutMutation() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let template = CycleTemplate(name: "Legacy", days: [])
@@ -2152,7 +2162,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testClusteredRolloutRetiresUnlockedPrefillWithBackupConfirmation() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let template = CycleTemplate(name: "Legacy", days: [])
@@ -2196,7 +2206,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testConfirmedDraftRetirementRollsBackWithLaterRolloutFailure() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let template = CycleTemplate(name: "Legacy", days: [])
@@ -2258,7 +2268,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testClusteredRolloutBackupConfirmationNeverRetiresLockedFixedCycleWork() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let template = CycleTemplate(name: "Legacy", days: [])
@@ -2298,7 +2308,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testClusteredRolloutBackupConfirmationDoesNotAuthorizeAdaptiveDraftRetirement() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let session = AdaptiveWorkoutSession(generatedPlanId: UUID())
@@ -2340,7 +2350,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testClusteredRolloutRejectsDraftWithCompletedAllSkippedCluster() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let template = CycleTemplate(name: "Legacy", days: [])
@@ -2394,7 +2404,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testClusteredRolloutRejectsConflictingNamedTemplate() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let conflicting = CycleTemplate(
@@ -2460,7 +2470,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testV4HydrationNeverRewindsAnExistingCycleOwnedPointer() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -2500,7 +2510,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testWorkoutExportReconciliationRefusesDirtyCallerContextWithoutMutation() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -2558,7 +2568,7 @@ final class ClusteredProgramTests: XCTestCase {
             ModelContext, [Exercise], CycleTemplate, ActiveCycleInstance
         ) {
             let container = OpenLiftModelContainerFactory.makeInMemory(
-                schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+                schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
             )
             let context = ModelContext(container)
             let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -2709,7 +2719,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testExplicitBootstrapChangesSurviveRecoveryFailureWithoutImportRows() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -2806,7 +2816,7 @@ final class ClusteredProgramTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let schema = Schema(versionedSchema: OpenLiftSchemaV14.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let storeURL = root.appendingPathComponent("default.store")
         let configurationName = "AtomicRecoverySaveFailure"
         let cycleID: UUID
@@ -2892,7 +2902,7 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testLegacyV3ExportCannotInventClusterIdentityOrPointers() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV13.self)
+            schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -2949,7 +2959,7 @@ final class ClusteredProgramTests: XCTestCase {
 
 extension ClusteredProgramTests {
     private func revisionFixture() throws -> (ModelContainer, ModelContext, [Exercise], CycleTemplate, ActiveCycleInstance) {
-        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV14.self))
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
         let context = ModelContext(container)
         _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
         let exercises = try context.fetch(FetchDescriptor<Exercise>())
@@ -3090,7 +3100,7 @@ extension ClusteredProgramTests {
         }
         XCTAssertEqual(exports.first { $0.session_id == session.id.uuidString }?.fixed_cycle?.program_version, 2)
         XCTAssertEqual(exports.first { $0.session_id != session.id.uuidString }?.fixed_cycle?.program_version, 1)
-        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV14.self))
+        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
         let recovered = ModelContext(destination)
         _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: recovered)
         let destinationCycle = try XCTUnwrap(try recovered.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
@@ -3163,7 +3173,7 @@ extension ClusteredProgramTests {
 
 extension ClusteredProgramTests {
     func testOldSafetyBarOverlayAliasHydratesIntoOneCatalogIdentity() throws {
-        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV14.self))
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
         let context = ModelContext(container)
         _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
         let template = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first)

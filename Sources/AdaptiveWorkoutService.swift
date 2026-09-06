@@ -351,7 +351,9 @@ enum AdaptiveWorkoutService {
             workoutKind: .adaptive, sessionId: sessionId, exerciseId: exerciseId,
             occurrenceId: occurrenceId, resistanceSource: value.resistanceSource,
             chainType: value.chainType, chainPercent: value.chainPercent,
-            eccentricPercent: value.eccentricPercent, createdAt: now, updatedAt: now
+            eccentricPercent: value.eccentricPercent,
+            chainPounds: value.chainPounds,
+            eccentricPounds: value.eccentricPounds, createdAt: now, updatedAt: now
         ))
     }
 
@@ -1094,7 +1096,9 @@ enum AdaptiveWorkoutService {
                 workoutKind: .adaptive, sessionId: session.id, exerciseId: exercise.id,
                 occurrenceId: occurrenceId, resistanceSource: replacementProfile.resistanceSource,
                 chainType: replacementProfile.chainType, chainPercent: replacementProfile.chainPercent,
-                eccentricPercent: replacementProfile.eccentricPercent, createdAt: now, updatedAt: now
+                eccentricPercent: replacementProfile.eccentricPercent,
+                chainPounds: replacementProfile.chainPounds,
+                eccentricPounds: replacementProfile.eccentricPounds, createdAt: now, updatedAt: now
             )
             modelContext.insert(created)
             if setEntries.contains(where: {

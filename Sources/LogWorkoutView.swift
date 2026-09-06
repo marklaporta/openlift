@@ -373,6 +373,8 @@ struct LogWorkoutView: View {
                         chainType: value.chainType,
                         chainPercent: value.chainPercent,
                         eccentricPercent: value.eccentricPercent,
+                        chainPounds: value.chainPounds,
+                        eccentricPounds: value.eccentricPounds,
                         frozenAt: date,
                         createdAt: date,
                         updatedAt: date

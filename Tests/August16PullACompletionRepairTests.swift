@@ -84,7 +84,7 @@ final class August16PullACompletionRepairTests: XCTestCase {
     }
 
     func testRepairIdentifiesStoresWithoutTargetSession() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV12.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let context = ModelContext(OpenLiftModelContainerFactory.makeInMemory(schema: schema))
 
         XCTAssertThrowsError(
@@ -103,7 +103,7 @@ final class August16PullACompletionRepairTests: XCTestCase {
         ActiveCycleInstance,
         Session
     ) {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV12.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let template = CycleTemplate(

@@ -26,6 +26,38 @@ final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
         XCTAssertTrue(cableProfile.exists)
     }
 
+    func testVOLTRAModifiersAcceptIndependentPoundsAndPercentInputs() throws {
+        let app = launchApp()
+        submitFixedReadiness(in: app)
+        let profile = app.buttons["fixed.resistanceProfile.Cable Crossover Lateral Raise"]
+        scrollToElement(profile, in: app)
+        profile.tap()
+        app.buttons["VOLTRA"].tap()
+        let chainUnit = app.segmentedControls["voltraChainUnit"]
+        XCTAssertTrue(chainUnit.waitForExistence(timeout: 5))
+        chainUnit.buttons["lb"].tap()
+        app.segmentedControls["voltraEccentricUnit"].buttons["lb"].tap()
+        for id in ["voltraChainAmount", "voltraEccentricAmount"] {
+            let field = app.textFields[id]
+            field.tap()
+            let existing = field.value as? String ?? ""
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + "35")
+        }
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Independent VOLTRA pounds inputs"; shot.lifetime = .keepAlways; add(shot)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(profile.waitForExistence(timeout: 5))
+        XCTAssertTrue(profile.label.contains("35 lb"))
+        profile.tap()
+        XCTAssertTrue(chainUnit.buttons["lb"].isSelected)
+        XCTAssertEqual(app.textFields["voltraChainAmount"].value as? String, "35")
+        app.segmentedControls["voltraEccentricUnit"].buttons["%"].tap()
+        XCTAssertTrue(chainUnit.buttons["lb"].isSelected)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(profile.label.contains("Inverse Chains 35 lb"))
+        XCTAssertTrue(profile.label.contains("Eccentric 0%"))
+    }
+
     func testRotationWorkoutFinishShowsRecapAndNonEditableTomorrowPreview() throws {
         let app = launchApp()
 

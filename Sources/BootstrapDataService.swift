@@ -787,6 +787,8 @@ enum BootstrapDataService {
                                 chainType: value.chainType,
                                 chainPercent: value.chainPercent,
                                 eccentricPercent: value.eccentricPercent,
+                                chainPounds: value.chainPounds,
+                                eccentricPounds: value.eccentricPounds,
                                 frozenAt: finishedAt,
                                 createdAt: finishedAt,
                                 updatedAt: finishedAt

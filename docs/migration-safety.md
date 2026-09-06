@@ -40,6 +40,15 @@ store preserves rotation state and occurrence history and creates no inferred
 substitutions. The persistent key is exact program version + canonical template
 day position + slot position; it is deliberately not a progression key.
 
+V15 adds nullable `chainPounds` and `eccentricPounds` fields to the live
+`ExerciseResistanceProfile`. V12–V14 use a frozen copy of the shipped profile
+class, preserving their schema checksums. The lightweight V14→V15 migration
+preserves all existing percentages/identities/timestamps, leaving new pound
+fields nil. There is no profile backfill or percentage conversion. Completed
+cluster snapshots and legacy session/set models remain unchanged. The real-store
+scratch gate additionally compares every profile and all cluster pointers and
+immutable occurrence evidence across migration.
+
 The clustered architecture has no persisted draft-context or sub-rotation
 entity. One `ClusterRotationState` owns each whole cluster. A completed cluster's
 `ClusterOccurrenceRecord` freezes its structural step, stable progression keys,
@@ -201,7 +210,7 @@ represented by fake cycle IDs or sentinel day indices.
 ## Current migration gates
 
 The maintained suite covers unversioned-store recognition, every additive schema
-stage through V14, full legacy-entity readback, rollback readback, deliberate
+stage through V15, full legacy-entity readback, rollback readback, deliberate
 migration failure with unchanged file hashes, clustered rollout idempotency,
 three-state hydration, immutable occurrence recovery, progression-key isolation,
 and completed-cluster export filtering. The real-store migration helper works on
@@ -233,7 +242,7 @@ recognized v1 cycle with exactly three valid pointers and no fixed/adaptive
 drafts. Any preflight/save failure rolls back. It preserves absolute pointer
 values (reviewed store: 12/12/11), archives v1 state, creates v2 state, and records
 an idempotence marker. Repeating the operation verifies the resulting state and
-does not reapply the revision. The standard schema plan remains V14 unchanged.
+does not reapply the revision. The revision itself does not alter the schema; the current schema plan also includes V15 resistance units.
 
 Success logs `OPENLIFT_CLUSTERED_REVISION_RESULT`. A name-only correction for the
 reviewed Sept 5 safety-bar session is re-exported after commit and reports

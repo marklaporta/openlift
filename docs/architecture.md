@@ -64,7 +64,7 @@ Design intent:
 - `ClusterOccurrenceRecord` is immutable completion evidence for one whole
   cluster and references the unchanged legacy `Session` by UUID
 
-### Cable Resistance Profiles (V12)
+### Cable Resistance Profiles (V12, V15 units)
 
 `Exercise.equipment` continues to describe movement mechanics, so a
 conventional stack and VOLTRA remain one `cable` exercise. The parallel
@@ -76,8 +76,15 @@ Lat Pulldown is cable equipment, and catalog bootstrap narrowly upgrades the
 legacy machine-classified Lat Pulldown row without rewriting other equipment.
 
 Canonical settings are `weightStack`, or `voltra` with exactly one of `none`,
-`chains`, `inverseChains` plus raw chain/eccentric percentages. Effective load
-is derived and never stored. A missing row means unknown, including all
+`chains`, `inverseChains` plus independent chain/eccentric amounts in percent
+or pounds. Each modifier stores exactly one unit: legacy integer percentages
+(0–100), or nonnegative finite pounds (fractional pounds supported). A 35 lb
+modifier remains 35 lb when a set's base weight changes; percentages are not
+silently converted. The shared editor offers direct entry and a per-modifier
+%/lb selector; switching units retains separate draft amounts, not a calculated
+conversion. Profile equality includes the units, so a percent and pound setting
+are not assumed comparable even if they coincide at one base weight. Effective
+load is not stored. A missing row means unknown, including all
 unmigrated legacy cable work.
 
 The profile freezes when its first set is locked. Correction then requires an
@@ -87,7 +94,10 @@ profile for Mark's usually-stable setup. The two new clustered cable-wrist
 movements instead start at the approved VOLTRA default of 70% inverse chains
 and 30% eccentric. A complete selection is still required before the first set
 locks. Repeat-last and progression scoring require an exact complete match.
-Unlike/unknown history remains visible as reference.
+Unlike/unknown history remains visible as reference. Inline last-session summaries
+show the date, literal sets, and cable resistance when relevant; redundant
+comparison headings and cycle/type names are omitted, while unlike/unknown
+resistance retains an explicit not-comparable note.
 
 ### Clustered Fixed Cycle (V13)
 
