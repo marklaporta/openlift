@@ -82,11 +82,17 @@ final class BootstrapDataServiceTests: XCTestCase {
     }
 
     func testSessionExportWritesVisibleLocalDocumentsMirror() throws {
-        let docs = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
-        let exportDir = docs
-            .appendingPathComponent("OpenLift", isDirectory: true)
-            .appendingPathComponent("exports", isDirectory: true)
-        try? FileManager.default.removeItem(at: exportDir)
+        let docs = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: docs) }
+        let exportDir = docs.appendingPathComponent("OpenLift/exports", isDirectory: true)
+        var directDeliveries: [(Data, UUID)] = []
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: nil, iCloudContainerURL: nil, localDocumentsURL: docs,
+            coordinatedWrite: { data, url in try data.write(to: url, options: .atomic) },
+            ubiquityMetadata: { _ in .init(isUbiquitousItem: false, isUploaded: false,
+                isUploading: false, uploadingErrorDescription: nil) },
+            enqueueDirectExport: { directDeliveries.append(($0, $1)) }
+        )
 
         let exercise = Exercise(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000111")!,
@@ -120,7 +126,8 @@ final class BootstrapDataServiceTests: XCTestCase {
             session: session,
             cycleName: "Export Visibility Test",
             exercises: [exercise],
-            setEntries: entries
+            setEntries: entries,
+            environment: environment
         )
 
         let files = try FileManager.default.contentsOfDirectory(
@@ -130,6 +137,9 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(files.count, 1)
 
         let data = try Data(contentsOf: files[0])
+        XCTAssertEqual(directDeliveries.count, 1)
+        XCTAssertEqual(directDeliveries.first?.0, data)
+        XCTAssertEqual(directDeliveries.first?.1, session.id)
         let payload = try JSONDecoder().decode(SessionExportService.ExportPayload.self, from: data)
         XCTAssertEqual(payload.session_id, session.id.uuidString)
         XCTAssertEqual(payload.cycle_name, "Export Visibility Test")
@@ -766,12 +776,12 @@ final class BootstrapDataServiceTests: XCTestCase {
     }
 
     func testInferredNextDayIndexFiltersSessionsByCycleName() {
-        let oldFB2D = Session(
+        let newerUnrelatedFB2D = Session(
             cycleInstanceId: UUID(),
             cycleDayIndex: 1,
             cycleNameSnapshot: "FB 2D",
-            createdAt: Date(timeIntervalSince1970: 100),
-            finishedAt: Date(timeIntervalSince1970: 120),
+            createdAt: Date(timeIntervalSince1970: 300),
+            finishedAt: Date(timeIntervalSince1970: 320),
             status: .completed,
             exportStatus: .success
         )
@@ -787,7 +797,7 @@ final class BootstrapDataServiceTests: XCTestCase {
 
         let next = BootstrapDataService.inferredNextDayIndex(
             dayCount: 4,
-            sessions: [oldFB2D, latestUpperLower],
+            sessions: [newerUnrelatedFB2D, latestUpperLower],
             targetCycleName: "4d-upper-lower",
             latestExport: nil
         )
@@ -1204,7 +1214,7 @@ final class WorkoutEntryEditingTests: XCTestCase {
         XCTAssertEqual(WorkoutEntryEditing.displayWeight(entries[0].weight), 22.6)
     }
 
-    func testRapidNumericEditsKeepTheLastDecimalAndRepValues() {
+    func testSequentialNumericHelperEditsKeepTheLastDecimalAndRepValues() {
         var entries = [
             WorkoutEntryEditing.EntryState(setIndex: 1, weight: 0, reps: 0, isLocked: false),
             WorkoutEntryEditing.EntryState(setIndex: 2, weight: 0, reps: 0, isLocked: false)
@@ -1352,8 +1362,8 @@ final class WorkoutDraftSelectionTests: XCTestCase {
             status: .draft
         )
 
-        let selected = preferredDraftSession(
-            from: [staleDraft, correctDraft],
+        let selected = OpenLiftStateResolver.preferredDraftSession(
+            sessions: [staleDraft, correctDraft],
             activeCycle: activeCycle
         )
 
@@ -1375,74 +1385,14 @@ final class WorkoutDraftSelectionTests: XCTestCase {
             status: .draft
         )
 
-        let selected = preferredDraftSession(
-            from: [olderDraft, newerDraft],
+        let selected = OpenLiftStateResolver.preferredDraftSession(
+            sessions: [olderDraft, newerDraft],
             activeCycle: activeCycle
         )
 
         XCTAssertEqual(selected?.id, newerDraft.id)
     }
 
-    private func preferredDraftSession(
-        from sessions: [Session],
-        activeCycle: ActiveCycleInstance?
-    ) -> Session? {
-        let drafts = sessions
-            .filter { $0.status == .draft }
-            .sorted { $0.createdAt > $1.createdAt }
-
-        guard let activeCycle else {
-            return drafts.first
-        }
-
-        return drafts.first(where: {
-            $0.cycleInstanceId == activeCycle.id && $0.cycleDayIndex == activeCycle.currentDayIndex
-        }) ?? drafts.first(where: {
-            $0.cycleInstanceId == activeCycle.id
-        }) ?? drafts.first
-    }
-}
-
-final class CycleActivationConfirmationTests: XCTestCase {
-    func testRequiresConfirmationWhenSwitchingToDifferentTemplate() {
-        let activeTemplateId = UUID()
-        let requestedTemplateId = UUID()
-
-        let shouldConfirm = cycleActivationShouldConfirm(
-            activeTemplateId: activeTemplateId,
-            requestedTemplateId: requestedTemplateId
-        )
-
-        XCTAssertTrue(shouldConfirm)
-    }
-
-    func testSkipsConfirmationWhenReactivatingCurrentTemplate() {
-        let activeTemplateId = UUID()
-
-        let shouldConfirm = cycleActivationShouldConfirm(
-            activeTemplateId: activeTemplateId,
-            requestedTemplateId: activeTemplateId
-        )
-
-        XCTAssertFalse(shouldConfirm)
-    }
-
-    func testSkipsConfirmationWhenNoCycleIsActive() {
-        let shouldConfirm = cycleActivationShouldConfirm(
-            activeTemplateId: nil,
-            requestedTemplateId: UUID()
-        )
-
-        XCTAssertFalse(shouldConfirm)
-    }
-
-    private func cycleActivationShouldConfirm(
-        activeTemplateId: UUID?,
-        requestedTemplateId: UUID
-    ) -> Bool {
-        guard let activeTemplateId else { return false }
-        return activeTemplateId != requestedTemplateId
-    }
 }
 
 final class OpenLiftStateResolverTests: XCTestCase {

@@ -12,23 +12,12 @@ final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
         XCTAssertFalse(app.navigationBars["Log Workout"].exists)
     }
 
-    func testResistanceProfilesAppearOnlyForCableMovements() throws {
-        let app = launchApp()
-
-        submitFixedReadiness(in: app)
-        XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["fixed.resistanceProfile.Flat Dumbbell Press"].exists)
-
-        let cableProfile = app.buttons[
-            "fixed.resistanceProfile.Cable Crossover Lateral Raise"
-        ]
-        scrollToElement(cableProfile, in: app)
-        XCTAssertTrue(cableProfile.exists)
-    }
 
     func testVOLTRAModifiersAcceptIndependentPoundsAndPercentInputs() throws {
         let app = launchApp()
         submitFixedReadiness(in: app)
+        XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["fixed.resistanceProfile.Flat Dumbbell Press"].exists)
         let profile = app.buttons["fixed.resistanceProfile.Cable Crossover Lateral Raise"]
         scrollToElement(profile, in: app)
         let weight = app.textFields["fixed.weight.Cable Crossover Lateral Raise.1"]
@@ -120,7 +109,7 @@ final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
         XCTAssertFalse(app.textFields["fixed.weight.Leg Press.1"].exists)
     }
 
-    func testClusteredWorkoutCanPersistentlySwapOneExactRotationSlot() throws {
+    func testClusteredGoingForwardSwapKeepsRowsEditableAndRequiresClusterCompletion() throws {
         let app = assertClusteredReplacementRowsAreEditable(
             scopeButton: "This Rotation Slot Going Forward"
         )
@@ -184,7 +173,7 @@ final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
         rotations.name = "Independent next rotations"; rotations.lifetime = .keepAlways; add(rotations)
     }
 
-    func testClusteredWorkoutCanSwapOneSlotForThisWorkoutOnly() throws {
+    func testClusteredWorkoutOnlySwapKeepsRowsEditableAndCanReset() throws {
         let app = assertClusteredReplacementRowsAreEditable(scopeButton: "This Workout Only")
 
         let more = app.buttons["workout.more.cluster-1.0.0"]

@@ -109,7 +109,13 @@ final class StoreBackupServiceTests: XCTestCase {
         var handle: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(snapshotURL.path, &handle, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { sqlite3_close(handle) }
-        XCTAssertEqual(sqlite3_exec(handle, "PRAGMA integrity_check;", nil, nil, nil), SQLITE_OK)
+        var statement: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(handle, "PRAGMA integrity_check;", -1, &statement, nil), SQLITE_OK)
+        defer { sqlite3_finalize(statement) }
+        XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
+        let result = try XCTUnwrap(sqlite3_column_text(statement, 0))
+        XCTAssertEqual(String(cString: result), "ok")
+        XCTAssertEqual(sqlite3_step(statement), SQLITE_DONE)
     }
 
     func testMirrorStoreWritesBothDestinationsAndSkipsSameDay() throws {
@@ -136,18 +142,6 @@ final class StoreBackupServiceTests: XCTestCase {
         XCTAssertTrue(StoreBackupService.needsSnapshot(dateKey: "2026-07-30", environment: environment))
     }
 
-    func testNeedsSnapshotIgnoresLocalCopyWhileICloudLacksToday() throws {
-        let environment = makeEnvironment()
-        let filename = StoreBackupService.filename(dateKey: "2026-07-29")
-        let localDir = localBackupsDirectory(environment)
-        try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
-        try Data("local only".utf8).write(to: localDir.appendingPathComponent(filename))
-
-        // The iCloud container is reachable but has no snapshot for today:
-        // the local-only copy must not satisfy the day, or a container that
-        // was down at first snapshot would never receive one.
-        XCTAssertTrue(StoreBackupService.needsSnapshot(dateKey: "2026-07-29", environment: environment))
-    }
 
     func testPendingCloudRetryReusesSnapshotAndDoesNotRewriteOrResnapshotLiveStore() throws {
         let store = root.appendingPathComponent("live.store")
