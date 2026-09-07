@@ -204,11 +204,18 @@ the three explicit rotation states. Only clusters intentionally completed in
 the session are exported. Unfinished clusters and unperformed exercises are
 omitted from completed-workout exercise lists; an all-skipped completed cluster
 still exports its empty occurrence as advancement evidence. Export retries use
-the frozen occurrence rather than the mutable live template. The exporter also
+the frozen occurrence rather than the mutable live template. Exported exercise
+names, muscles, and resistance profiles also use that snapshot, including an
+unknown profile; a changed or missing live catalog/profile record cannot rewrite
+or remove the performed evidence. The exporter also
 rechecks that every set row is locked, positive-rep, and backed by a performed
 occurrence snapshot, so a retry cannot leak rows from an untouched cluster.
 Hydration restores explicit exported states when present and otherwise derives a
 state only from gap-free, non-conflicting occurrence steps.
+An explicitly confirmed occurrence-wide profile correction updates both the
+live profile and that performed exercise's frozen cluster profile, marks the
+session export-pending, and leaves progression identity, structure, and sets
+unchanged. Ordinary edits never rewrite completed cluster snapshots.
 The same optional metadata exports the current durable exact-slot preferences
 and active session overrides, including exercise descriptors needed for
 recovery. Hydration restores preferences from the newest clustered snapshot and
@@ -221,6 +228,9 @@ version, ordered frozen complex and component snapshots, planned occurrence
 IDs, actual locked sets, overrides, and feedback. Hydration deduplicates
 Adaptive work by session UUID and reconstructs parallel Adaptive records; it
 never creates or advances a Rotation cycle.
+Adaptive hydration requires a clean caller context and rolls back rejected
+nested snapshots, invalid set identities, or failed saves. It neither commits
+unrelated draft edits nor leaves partial recovered objects for a later save.
 
 History badges Rotation, Ad hoc, and Adaptive explicitly. Adaptive detail
 renders frozen complex/component order and duplicate exercise occurrences

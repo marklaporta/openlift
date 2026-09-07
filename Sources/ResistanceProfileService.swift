@@ -651,6 +651,7 @@ enum ResistanceProfileService {
         )
         profile.frozenAt = now
         profile.updatedAt = now
+        try correctClusterSnapshots(for: profile, to: value, modelContext: modelContext)
         try markExportPending(for: profile, modelContext: modelContext)
         try modelContext.save()
         SessionExportService.scheduleBackgroundExportRetry()
@@ -666,7 +667,17 @@ enum ResistanceProfileService {
         now: Date = .now
     ) throws {
         guard value.isComplete else { throw ResistanceProfileError.incomplete }
-        guard Self.value(profile) != value else { return }
+        guard Self.value(profile) != value else {
+            // A previously corrected live profile may still have an older frozen
+            // snapshot. Reconcile it only through explicit correction authority.
+            if confirmedOccurrenceWideCorrection,
+               try correctClusterSnapshots(for: profile, to: value, modelContext: modelContext) {
+                try markExportPending(for: profile, modelContext: modelContext)
+                try modelContext.save()
+                SessionExportService.scheduleBackgroundExportRetry()
+            }
+            return
+        }
         guard profile.frozenAt == nil || confirmedOccurrenceWideCorrection else {
             throw ResistanceProfileError.frozenConfirmationRequired
         }
@@ -697,6 +708,9 @@ enum ResistanceProfileService {
         profile.chainPounds = value.chainPounds
         profile.eccentricPounds = value.eccentricPounds
         profile.updatedAt = now
+        if confirmedOccurrenceWideCorrection {
+            try correctClusterSnapshots(for: profile, to: value, modelContext: modelContext)
+        }
         if profile.frozenAt != nil {
             try markExportPending(for: profile, modelContext: modelContext)
         }
@@ -760,6 +774,24 @@ enum ResistanceProfileService {
             throw ResistanceProfileError.profileRequiredBeforeLock
         }
         try freezeBeforeLock(profile, modelContext: modelContext, now: now)
+    }
+
+    @MainActor
+    @discardableResult
+    private static func correctClusterSnapshots(
+        for profile: ExerciseResistanceProfile,
+        to value: ResistanceProfileValue,
+        modelContext: ModelContext
+    ) throws -> Bool {
+        guard profile.workoutKind == .fixed else { return false }
+        var changed = false
+        for occurrence in try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        where occurrence.sessionId == profile.sessionId {
+            if try occurrence.correctResistanceProfile(exerciseId: profile.exerciseId, to: value) {
+                changed = true
+            }
+        }
+        return changed
     }
 
     @MainActor
