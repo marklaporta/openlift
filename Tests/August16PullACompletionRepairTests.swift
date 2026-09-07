@@ -4,7 +4,7 @@ import XCTest
 @testable import OpenLift
 
 final class August16PullACompletionRepairTests: XCTestCase {
-    func testRepairBackdatesOnlyTargetSessionAndMakesPushAAvailableToday() throws {
+    func testRepairBackdatesTargetSessionAndMakesPushAAvailableToday() throws {
         let (_, context, cycle, session) = try makeFixture()
         let entriesBefore = try context.fetch(FetchDescriptor<SetEntry>())
             .filter { $0.sessionId == session.id }
@@ -58,7 +58,7 @@ final class August16PullACompletionRepairTests: XCTestCase {
         XCTAssertEqual(cycle.currentDayIndex, 1)
     }
 
-    func testRepairFailsClosedAndRollsBackOnSetDrift() throws {
+    func testRepairRejectsSetDriftBeforeMutation() throws {
         let (_, context, cycle, session) = try makeFixture()
         let entries = try context.fetch(FetchDescriptor<SetEntry>())
         let target = try XCTUnwrap(entries.first { $0.sessionId == session.id })

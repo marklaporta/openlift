@@ -53,10 +53,7 @@ final class SwapExerciseUITests: OpenLiftUITestCase {
         XCTAssertTrue(app.staticTexts["UI Test Belt Squat"].waitForExistence(timeout: 5))
     }
 
-    func testLogWorkoutExportsToICloudMirror() throws {
-        guard ProcessInfo.processInfo.environment["OPENLIFT_RUN_ICLOUD_E2E"] == "1" else {
-            throw XCTSkip("Real-device iCloud export smoke test is opt-in.")
-        }
+    func testLogWorkoutSavesEnteredSetToLocalHistory() throws {
 
         let app = launchApp()
 
@@ -79,9 +76,15 @@ final class SwapExerciseUITests: OpenLiftUITestCase {
         }
 
         let saveButton = app.buttons["Save to History"].firstMatch
-        XCTAssertTrue(saveButton.waitForExistence(timeout: 10))
+        scrollToElement(saveButton, in: app)
         saveButton.tap()
 
         XCTAssertTrue(app.staticTexts["Saved to History."].waitForExistence(timeout: 20))
+        app.tabBars.buttons["History"].tap()
+        let savedWorkout = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Off-Schedule")).firstMatch
+        XCTAssertTrue(savedWorkout.waitForExistence(timeout: 10))
+        savedWorkout.tap()
+        XCTAssertTrue(app.staticTexts["Set 1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["1 x 1"].exists)
     }
 }

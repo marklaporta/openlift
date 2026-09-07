@@ -54,11 +54,42 @@ The ignored local override:
 
 ## Common Xcode Commands
 
-Simulator tests:
+Simulator unit checkpoint (use a disposable simulator without staged personal stores):
 
 ```bash
-xcodebuild test -scheme OpenLift -destination 'platform=iOS Simulator,name=iPhone 17'
+xcodebuild test -scheme OpenLift -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -only-testing:OpenLiftTests OPENLIFT_DIRECT_EXPORT_ENDPOINT= OPENLIFT_DIRECT_EXPORT_BEARER_TOKEN=
 ```
+
+During edits, select the affected service class with
+`-only-testing:OpenLiftTests/ServiceTests`. Run the ordinary unit target at an
+integration checkpoint; synthetic migrations are included. Select UI flows for
+changed screen wiring, for example:
+
+```bash
+xcodebuild test -scheme OpenLift -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -only-testing:OpenLiftUITests/FixedCycleWorkoutUITests/testVOLTRAModifiersAcceptIndependentPoundsAndPercentInputs \
+  -only-testing:OpenLiftUITests/SwapExerciseUITests/testLogWorkoutSavesEnteredSetToLocalHistory \
+  -maximum-parallel-testing-workers 3 \
+  OPENLIFT_DIRECT_EXPORT_ENDPOINT= OPENLIFT_DIRECT_EXPORT_BEARER_TOKEN=
+```
+
+Use broader UI runs for broad navigation changes or release validation, not
+for every service edit. Report the selected checks and opt-in skips; a unit-only
+run is not a full-suite pass. Repeat passing checks only for a relevant change
+or unresolved failure.
+
+Export tests inject temporary paths and direct-delivery callbacks. Constructed
+`ExportEnvironment` values do not schedule direct delivery unless explicitly
+supplied a callback; production `.live()` retains that behavior. UI-test launches
+use an in-memory model and a process-local temporary export directory, with no
+live iCloud or direct-export transport. The ad hoc save flow verifies the entered
+set in local History, not cloud upload or persistence across app launches.
+
+Copied-store migration and September content-revision tests remain opt-in;
+follow [migration safety](migration-safety.md) when schema/startup/recovery or
+that explicit rollout changes. Neither a skipped copied-store gate nor synthetic
+fixtures establish compatibility with every installed historical store.
 
 Device build:
 

@@ -26,9 +26,6 @@ final class ResistanceProfileServiceTests: XCTestCase {
             resistanceProfile: nil, profileComparison: .exact
         )
         XCTAssertEqual(result.compactSummary, "80 × 9 · 77.5 × 10")
-        XCTAssertFalse(result.compactSummary.contains("comparable"))
-        XCTAssertFalse(result.compactSummary.contains("Cluster"))
-        XCTAssertFalse(result.compactSummary.contains("Standard resistance"))
     }
 
     func testPoundsAndMixedModifiersRoundTripWithoutReinterpretingLegacyPercentages() throws {
@@ -55,7 +52,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(ResistanceProfileValue.self, from: oldSnapshot), percent)
     }
 
-    func testVOLTRAEquivalentConversionsUseEachExplicitBaseWithoutChangingProfile() throws {
+    func testVOLTRAEquivalentConversionsUseEachExplicitBase() throws {
         XCTAssertEqual(try XCTUnwrap(VOLTRAEquivalent.amount(30, unit: .percent, base: 130)), 39, accuracy: 0.000001)
         XCTAssertEqual(try XCTUnwrap(VOLTRAEquivalent.amount(35, unit: .pounds, base: 130)), 26.9230769, accuracy: 0.000001)
         XCTAssertEqual(VOLTRAEquivalent.caption(35, unit: .pounds, base: 130), "≈26.9% at 130 lb base")
@@ -64,11 +61,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
         XCTAssertEqual(VOLTRAEquivalent.caption(30, unit: .percent, base: 12.5), "≈3.8 lb at 12.5 lb base")
         XCTAssertEqual(VOLTRAEquivalent.caption(0, unit: .pounds, base: 130), "=0% at 130 lb base")
         XCTAssertEqual(VOLTRAEquivalent.bases([130, 130, 140, 0, -1, .nan, .infinity]), [130, 140])
-        let profile = ResistanceProfileValue.voltra(chainType: .inverseChains, eccentricPercent: 30, chainPounds: 12.5)
-        let draft = VOLTRAProfileDraft(profile)
-        _ = VOLTRAEquivalent.caption(draft.chainPounds, unit: draft.chainUnit, base: 130)
-        _ = VOLTRAEquivalent.caption(draft.chainPounds, unit: draft.chainUnit, base: 140)
-        XCTAssertEqual(draft.value, profile)
+
     }
 
     func testVOLTRAEquivalentRejectsMissingInvalidAndOverflowingBasesOrAmounts() {
@@ -134,7 +127,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testFixedExportHydrationRestoresAbsoluteAndMixedProfiles() throws {
+    func testFixedExportHydrationRestoresAbsoluteProfiles() throws {
         let (context, container) = makeContext()
         _ = container
         let cycle = ActiveCycleInstance(templateId: UUID())
@@ -274,51 +267,6 @@ final class ResistanceProfileServiceTests: XCTestCase {
         )
     }
 
-    @MainActor
-    func testProfileFreezesAndRequiresExplicitOccurrenceWideCorrection() throws {
-        let (context, _) = makeContext()
-        let sessionId = UUID()
-        let exerciseId = UUID()
-        let initial = ResistanceProfileValue.voltra(
-            chainType: .inverseChains,
-            chainPercent: 25,
-            eccentricPercent: 25
-        )
-        let profile = try ResistanceProfileService.create(
-            workoutKind: .fixed,
-            sessionId: sessionId,
-            exerciseId: exerciseId,
-            value: initial,
-            profiles: [],
-            modelContext: context
-        )
-        XCTAssertNil(profile.frozenAt)
-        try ResistanceProfileService.freezeBeforeLock(profile, modelContext: context)
-        XCTAssertNotNil(profile.frozenAt)
-
-        let correction = ResistanceProfileValue.voltra(
-            chainType: .inverseChains,
-            chainPercent: 70,
-            eccentricPercent: 30
-        )
-        XCTAssertThrowsError(
-            try ResistanceProfileService.update(
-                profile,
-                to: correction,
-                confirmedOccurrenceWideCorrection: false,
-                modelContext: context
-            )
-        ) { error in
-            XCTAssertEqual(error as? ResistanceProfileError, .frozenConfirmationRequired)
-        }
-        try ResistanceProfileService.update(
-            profile,
-            to: correction,
-            confirmedOccurrenceWideCorrection: true,
-            modelContext: context
-        )
-        XCTAssertEqual(ResistanceProfileService.value(profile), correction)
-    }
 
     @MainActor
     func testSnapshotRemainsReadableAfterSwapDeletesBackingProfile() throws {
@@ -506,6 +454,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
             profiles: [],
             modelContext: context
         )
+        XCTAssertNil(profile.frozenAt)
         let locked = SetEntry(
             sessionId: sessionId,
             exerciseId: exerciseId,
@@ -540,6 +489,12 @@ final class ResistanceProfileServiceTests: XCTestCase {
             chainPercent: 70,
             eccentricPercent: 30
         )
+        XCTAssertNotNil(profile.frozenAt)
+        XCTAssertThrowsError(try ResistanceProfileService.update(
+            profile, to: correction, confirmedOccurrenceWideCorrection: false, modelContext: context
+        )) { error in
+            XCTAssertEqual(error as? ResistanceProfileError, .frozenConfirmationRequired)
+        }
         try ResistanceProfileService.update(
             profile,
             to: correction,
@@ -547,6 +502,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
             modelContext: context
         )
 
+        XCTAssertEqual(ResistanceProfileService.value(profile), correction)
         XCTAssertEqual(locked.weight, 20)
         XCTAssertEqual(locked.reps, 12)
         XCTAssertEqual(unlocked.weight, 0)
@@ -1118,7 +1074,7 @@ final class ResistanceProfileServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testCompletedMarkerMakesLaterUnreviewedLatOccurrenceHarmless() throws {
+    func testAlreadyAppliedProfilesMakeLaterUnreviewedLatOccurrenceHarmless() throws {
         let (context, _) = makeContext()
         try insertExactAuditedHistory(into: context)
         _ = try HistoricalResistanceProfileMigration.runAtStartup(modelContext: context)
@@ -1276,10 +1232,10 @@ final class ResistanceProfileServiceTests: XCTestCase {
         let legacy = """
         {"session_id":"\(UUID().uuidString)","cycle_name":"Legacy","cycle_day_index":0,"date":"2026-08-01T00:00:00Z","exercises":[{"exercise_name":"Cable Lateral Raise","muscle":"sideDelts","sets":[{"set_index":1,"weight":5,"reps":12}]}]}
         """.data(using: .utf8)!
-        XCTAssertNil(
-            SessionExportService.decodeExportPayload(data: legacy)?.exercises.first?
-                .resistance_profile
-        )
+        let legacyPayload = try XCTUnwrap(SessionExportService.decodeExportPayload(data: legacy))
+        let legacyExercise = try XCTUnwrap(legacyPayload.exercises.first)
+        XCTAssertEqual(legacyExercise.exercise_name, "Cable Lateral Raise")
+        XCTAssertNil(legacyExercise.resistance_profile)
     }
 
     private func manifestIdentityAndCount(

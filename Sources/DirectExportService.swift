@@ -66,6 +66,7 @@ enum DirectExportService {
         let send: (URLRequest) async throws -> Int
 
         static func live() -> Environment? {
+            guard !AppRuntime.isUITesting else { return nil }
             guard let applicationSupport = FileManager.default.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask

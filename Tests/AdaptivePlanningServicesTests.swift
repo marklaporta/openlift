@@ -924,40 +924,38 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertEqual(idsA, idsB)
     }
 
-    func testPlannerPropertyLoopNeverExceedsAutomaticExposureTarget() {
-        let exercises = (1...8).map { exercise("Chest \($0)", muscle: .chest) }
-        for seed in 1...80 {
-            let movementCap = (seed % 5) + 1
-            let difficultyCap = (seed % 7) + 2
-            let complexes = exercises.enumerated().map { index, exercise in
-                makeComplex(
-                    id: uuid(index + 1),
-                    position: (seed * (index + 3)) % 11,
-                    primary: .chest,
-                    components: [component(exercise, difficulty: MovementDifficulty.allCases[(seed + index) % 3])]
-                )
+    func testPlannerExposureTargetBindsWithFeasibleNonemptyCandidates() {
+        let press = exercise("Press", muscle: .chest)
+        let fly = exercise("Fly", muscle: .chest, type: .isolation)
+        let squat = exercise("Belt Squat", muscle: .quads)
+        let hinge = exercise("Stiff-Leg Deadlift", muscle: .hamstrings)
+        let exercises = [press, fly, squat, hinge]
+        let muscles: [MuscleGroup] = [.chest, .quads, .hamstrings]
+        let complexes = [
+            makeComplex(id: uuid(1), position: 0, primary: .chest,
+                components: [component(press), component(fly, position: 1)]),
+            makeComplex(id: uuid(2), position: 1, primary: .quads,
+                components: [component(squat)]),
+            makeComplex(id: uuid(3), position: 2, primary: .hamstrings,
+                components: [component(hinge)])
+        ]
+        // Each cap binds below (or at) the three feasible exposures. Reversing
+        // catalog order must not turn selection into an empty upper-bound pass.
+        for catalog in [exercises, Array(exercises.reversed())] {
+            for exposureCap in 1...3 {
+                let program = makeProgram(movements: exposureCap, difficulty: 60,
+                    enabled: muscles, complexes: complexes)
+                let proposal = unwrapProposal(AdaptivePlanService.generate(
+                    program: program, exercises: catalog, readiness: readyInputs,
+                    ledger: recentLedger(muscles), now: now, calendar: utcCalendar
+                ))
+                XCTAssertEqual(proposal.complexes.count, exposureCap)
+                XCTAssertEqual(proposal.complexes.map(\.primaryMuscle), Array(muscles.prefix(exposureCap)))
+                XCTAssertEqual(proposal.totalMovements,
+                    proposal.complexes.reduce(0) { $0 + $1.components.count })
+                XCTAssertEqual(proposal.totalDifficultyCost,
+                    proposal.complexes.flatMap(\.components).reduce(0) { $0 + $1.difficulty.cost })
             }
-            let program = makeProgram(
-                movements: movementCap,
-                difficulty: difficultyCap,
-                enabled: [.chest],
-                exerciseCaps: [.chest: 10],
-                complexes: complexes
-            )
-            let proposal = unwrapProposal(AdaptivePlanService.generate(
-                program: program,
-                exercises: Array(exercises.reversed()),
-                readiness: readyInputs,
-                ledger: recentLedger([.chest]),
-                now: now,
-                calendar: utcCalendar
-            ))
-            XCTAssertLessThanOrEqual(proposal.complexes.count, movementCap, "seed \(seed)")
-            XCTAssertEqual(proposal.totalMovements, proposal.complexes.reduce(0) { $0 + $1.components.count })
-            XCTAssertEqual(
-                proposal.totalDifficultyCost,
-                proposal.complexes.flatMap(\.components).reduce(0) { $0 + $1.difficulty.cost }
-            )
         }
     }
 
@@ -1534,7 +1532,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         )
     }
 
-    func testEligibleRankingUsesOverdueThenFixedPriorityThenSorenessAndRecency() {
+    func testEligibleRankingUsesOverdueThenFixedPriority() {
         var statuses = dueStatuses(
             [.chest, .back, .quads, .biceps],
             overdueDays: [.biceps: 3, .quads: 3, .chest: 1, .back: 1]
@@ -1985,7 +1983,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         XCTAssertNil(back.muscleSetDose[.biceps])
     }
 
-    func testNoneRanksBeforeLightWithNormalDoseWhileModerateIsHeld() throws {
+    func testLightSorenessKeepsNormalBackDoseWhileModerateChestIsHeld() throws {
         let chestPress = exercise("Chest Press", muscle: .chest)
         let fly = exercise("Cable Fly", muscle: .chest, type: .isolation)
         let row = exercise("Cable Row", muscle: .back)
@@ -2047,7 +2045,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
         )
     }
 
-    func testFourthSetVariationAppliesToChestAndBackButNotIsolationOrLegWork() {
+    func testSpareCapacityKeepsNormalChestBackAndQuadDoses() {
         let press = exercise("Chest Press", muscle: .chest)
         let fly = exercise("Cable Fly", muscle: .chest, type: .isolation)
         let pulldown = exercise("Lat Pulldown", muscle: .back)
@@ -2215,6 +2213,7 @@ final class AdaptivePlanningServicesTests: XCTestCase {
             calendar: utcCalendar
         ))
         let components = proposal.complexes.flatMap(\.components)
+        XCTAssertFalse(proposal.complexes.isEmpty)
         XCTAssertLessThanOrEqual(proposal.complexes.count, 5)
         XCTAssertLessThanOrEqual(components.count, 7)
         XCTAssertLessThanOrEqual(

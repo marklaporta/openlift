@@ -43,7 +43,7 @@ private enum UnsupportedMigrationPlan: SchemaMigrationPlan {
 }
 
 final class MigrationSafetyTests: XCTestCase {
-    func testHistoricalSchemasNeverReferenceLiveAppModelTypes() {
+    func testHistoricalSchemasFreezeChangedReadinessModelTypes() {
         // V1-V8 still carry broad historical-schema debt: unchanged entities
         // reference their live model classes. This guard is deliberately scoped
         // to entities whose persisted shape changed after introduction.
@@ -717,7 +717,7 @@ final class MigrationSafetyTests: XCTestCase {
         )
     }
 
-    func testV6StoreMigratesToV7WithoutChangingWorkoutOrDesignData() throws {
+    func testV6StoreMigratesToV8WithoutChangingWorkoutOrDesignData() throws {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let storeURL = fixture.working.appendingPathComponent("default.store")

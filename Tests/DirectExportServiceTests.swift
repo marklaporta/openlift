@@ -332,8 +332,8 @@ final class DirectExportServiceTests: XCTestCase {
         )
         try firstPayload.write(to: exports.appendingPathComponent("workout-1.json"))
         try oversizedPayload.write(to: exports.appendingPathComponent("workout-2.json"))
-        try workoutPayload(sessionId: UUID(), kind: "adaptive")
-            .write(to: exports.appendingPathComponent("workout-3.json"))
+        let newestPayload = workoutPayload(sessionId: UUID(), kind: "adaptive")
+        try newestPayload.write(to: exports.appendingPathComponent("workout-3.json"))
 
         let count = try DirectExportService.backfillLocalWorkoutExports(
             configuration: configuration,
@@ -346,7 +346,7 @@ final class DirectExportServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(count, 1)
-        XCTAssertEqual(DirectExportService.loadEntries(queueDirectory: queue).count, 1)
+        XCTAssertEqual(DirectExportService.loadEntries(queueDirectory: queue).map(\.payload), [newestPayload])
         XCTAssertTrue(defaults.bool(forKey: "bounded-backfill"))
     }
 

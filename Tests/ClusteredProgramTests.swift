@@ -315,6 +315,7 @@ final class ClusteredProgramTests: XCTestCase {
             states: states
         )
         let slot = try XCTUnwrap(CycleOrdering.sortedSlots(selection.day.slots).first)
+        let originalExerciseID = slot.exerciseId
         let replacement = try XCTUnwrap(exercises.first { $0.name == "Flat Dumbbell Press" })
         let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
         context.insert(template)
@@ -345,7 +346,7 @@ final class ClusteredProgramTests: XCTestCase {
         let preferences = try context.fetch(FetchDescriptor<ClusterExercisePreference>())
         XCTAssertEqual(preferences.count, 1)
         XCTAssertEqual(preferences.first?.exerciseId, replacement.id)
-        XCTAssertEqual(slot.exerciseId, selection.day.slots.first { $0.position == slot.position }?.exerciseId)
+        XCTAssertEqual(slot.exerciseId, originalExerciseID)
 
         let locked = SetEntry(
             sessionId: session.id,
@@ -770,7 +771,7 @@ final class ClusteredProgramTests: XCTestCase {
         )
     }
 
-    func testClusteredFinishAcceptsEnteredWorkAfterClusterOccurrenceAndDoesNotReadvance() throws {
+    func testClusteredFinishValidationAndExportRetainOnlyPerformedOccurrenceWork() throws {
         let (exercises, template, cycle, states) = try program()
         let selections = try FixedCycleClusterProgramService.selections(
             template: template,
@@ -2065,16 +2066,19 @@ final class ClusteredProgramTests: XCTestCase {
             schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
         let context = ModelContext(container)
-        context.insert(
-            ClusterRotationState(
-                cycleInstanceId: UUID(),
-                templateId: UUID(),
-                programVersionID: "openlift.clustered-hypertrophy.v999",
-                clusterID: "unknown-cluster",
-                positionIndex: 1,
-                isDerived: true
-            )
+        let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let template = try FixedCycleClusterProgramService.makeTemplate(exercises: catalog)
+        let cycle = ActiveCycleInstance(templateId: template.id)
+        context.insert(template)
+        context.insert(cycle)
+        let states = FixedCycleClusterProgramService.makeRotationStates(
+            cycleInstanceId: cycle.id, templateId: template.id
         )
+        XCTAssertEqual(states.count, 3)
+        // Complete owned roster: only the version is unknown, so this reaches
+        // version validation rather than failing the earlier partial-roster guard.
+        states[0].programVersionID = "openlift.clustered-hypertrophy.v999"
+        states.forEach(context.insert)
         try context.save()
 
         XCTAssertThrowsError(
@@ -2204,7 +2208,7 @@ final class ClusteredProgramTests: XCTestCase {
         })
     }
 
-    func testConfirmedDraftRetirementRollsBackWithLaterRolloutFailure() throws {
+    func testMissingRecoveredPointerOwnerRejectsRolloutBeforeDraftRetirement() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
             schema: Schema(versionedSchema: OpenLiftSchemaV15.self)
         )
@@ -2450,9 +2454,12 @@ final class ClusteredProgramTests: XCTestCase {
 
     func testActivationCleanupReplacesOnlyCycleOwnedRotationStates() throws {
         let (_, template, cycle, states) = try program()
+        let foreignStates = FixedCycleClusterProgramService.makeRotationStates(
+            cycleInstanceId: UUID(), templateId: template.id
+        )
         let cleanup = FixedCycleClusterProgramService.activationCleanupPlan(
             existingCycles: [cycle],
-            states: states
+            states: states + foreignStates
         )
 
         XCTAssertEqual(cleanup.pointerIDs, Set(states.map(\.id)))
@@ -3067,9 +3074,9 @@ extension ClusteredProgramTests {
         let (sourceContainer, context, exercises, old, cycle) = try revisionFixture()
         _ = sourceContainer
         let oldOccurrences = try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        let frozen = try encoder.encode(oldOccurrences.sorted { $0.id.uuidString < $1.id.uuidString }.map(\.exerciseSnapshots))
+        let originalSnapshots = Dictionary(uniqueKeysWithValues: oldOccurrences.map {
+            ($0.key, $0.exerciseSnapshots)
+        })
         let revision = try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context, backupConfirmed: true)
         let revised = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == revision.templateId })
         let states = try context.fetch(FetchDescriptor<ClusterRotationState>())
@@ -3118,7 +3125,45 @@ extension ClusteredProgramTests {
         // original names/keys/dose remain unchanged, including old pairings.
         XCTAssertEqual(hydratedOld.count, oldOccurrences.count)
         XCTAssertEqual(Set(hydratedOld.flatMap(\.exerciseSnapshots).map(\.progressionKey)), Set(oldOccurrences.flatMap(\.exerciseSnapshots).map(\.progressionKey)))
-        XCTAssertEqual(frozen, try encoder.encode(oldOccurrences.sorted { $0.id.uuidString < $1.id.uuidString }.map(\.exerciseSnapshots)))
+        let recoveredCatalog = try recovered.fetch(FetchDescriptor<Exercise>())
+        let recoveredNames = Dictionary(uniqueKeysWithValues: recoveredCatalog.map { ($0.id, $0.name) })
+        let sourceNames = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0.name) })
+        for original in oldOccurrences {
+            let hydrated = try XCTUnwrap(hydratedOld.first {
+                $0.sessionId == original.sessionId && $0.clusterID == original.clusterID
+            })
+            XCTAssertEqual(hydrated.cycleInstanceId, destinationCycle.id)
+            XCTAssertEqual(hydrated.programVersionID, original.programVersionID)
+            XCTAssertEqual(hydrated.absoluteStep, original.absoluteStep)
+            XCTAssertEqual(hydrated.templateDayPosition, original.templateDayPosition)
+            XCTAssertEqual(hydrated.dayLabel, original.dayLabel)
+            XCTAssertEqual(hydrated.completedAt, original.completedAt)
+            let actual = hydrated.exerciseSnapshots.sorted { $0.position < $1.position }
+            let expected = try XCTUnwrap(originalSnapshots[original.key]).sorted { $0.position < $1.position }
+            XCTAssertEqual(actual.count, expected.count)
+            for (restored, source) in zip(actual, expected) {
+                // Recovery may map catalog UUIDs, never the occurrence identity,
+                // frozen descriptors, progression namespace, status, or dose.
+                XCTAssertEqual(recoveredNames[restored.exerciseId], sourceNames[source.exerciseId])
+                XCTAssertEqual(restored.position, source.position)
+                XCTAssertEqual(restored.exerciseName, source.exerciseName)
+                XCTAssertEqual(restored.muscle, source.muscle)
+                XCTAssertEqual(restored.prescribedSetCount, source.prescribedSetCount)
+                XCTAssertEqual(restored.progressionKey, source.progressionKey)
+                XCTAssertEqual(restored.resistanceProfile, source.resistanceProfile)
+                XCTAssertEqual(restored.completionStatus, source.completionStatus)
+            }
+        }
+        func normalizedRows(_ entries: [SetEntry], names: [UUID: String]) throws -> [String] {
+            try entries.map { row in
+                let name = try XCTUnwrap(names[row.exerciseId])
+                return "\(row.sessionId)|\(name)|\(row.setIndex)|\(row.weight)|\(row.reps)|\(row.isLocked)"
+            }.sorted()
+        }
+        XCTAssertEqual(
+            try normalizedRows(recovered.fetch(FetchDescriptor<SetEntry>()), names: recoveredNames),
+            try normalizedRows(rows, names: sourceNames)
+        )
         // Replaying v1 alone must not erase v2 preference state.
         _ = try BootstrapDataService.reconcileWorkoutExports(exports.filter { $0.fixed_cycle?.program_version == 1 }, cycle: destinationCycle, modelContext: recovered)
         XCTAssertEqual(try recovered.fetch(FetchDescriptor<ClusterExercisePreference>()).count, 2)

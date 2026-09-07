@@ -290,27 +290,6 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         )
     }
 
-    func testOpeningWorkflowCreatesNoSessionBeforeProposalIsAccepted() throws {
-        let (context, _) = makeContext()
-        let (program, exercise) = makeProgram()
-        let check = try AdaptiveWorkoutService.makeReadinessCheck(
-            program: program,
-            inputs: readyInputs,
-            localDateKey: "2026-07-20",
-            timeZoneIdentifier: "America/Los_Angeles",
-            revision: 1
-        )
-        let proposal = try makeProposal(program: program, exercise: exercise, check: check)
-        context.insert(check)
-        context.insert(proposal)
-        try context.save()
-
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyReadinessCheck>()), 1)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<GeneratedWorkoutPlan>()), 1)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutSession>()), 0)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveSetEntry>()), 0)
-        XCTAssertEqual(proposal.status, .proposed)
-    }
 
     func testProposalAppliesPerMuscleExerciseSelectionWithoutChangingTheComplexDefinition() throws {
         let (program, configuredExercise) = makeProgram()
@@ -704,6 +683,12 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         context.insert(check)
         context.insert(plan)
         try context.save()
+
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyReadinessCheck>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<GeneratedWorkoutPlan>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutSession>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveSetEntry>()), 0)
+        XCTAssertEqual(plan.status, .proposed)
 
         let session = try AdaptiveWorkoutService.freeze(plan: plan, modelContext: context)
         let snapshot = plan.complexes.first!
@@ -1590,8 +1575,8 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveOverrideEvent>()), 0)
     }
 
-    func testTodayExposureTargetPersistsWithoutChangingProfileDefault() throws {
-        let (context, _) = makeContext()
+    func testDesignStatePersistsSeparateTargetFromProfileDefault() throws {
+        let (context, container) = makeContext()
         let (program, exercise) = makeProgram()
         let preference = AdaptiveWorkoutSizePreference(
             adaptiveProgramId: program.id,
@@ -1616,6 +1601,11 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         context.insert(state)
         try context.save()
 
+        let reloaded = ModelContext(container)
+        let savedState = try XCTUnwrap(try reloaded.fetch(FetchDescriptor<AdaptivePlanDesignState>()).first)
+        let savedPreference = try XCTUnwrap(try reloaded.fetch(FetchDescriptor<AdaptiveWorkoutSizePreference>()).first)
+        XCTAssertEqual(savedState.targetComplexCount, 2)
+        XCTAssertEqual(savedPreference.defaultComplexCount, 4)
         XCTAssertEqual(state.targetComplexCount, 2)
         XCTAssertEqual(preference.defaultComplexCount, 4)
         XCTAssertEqual(plan.complexes.count, 1)

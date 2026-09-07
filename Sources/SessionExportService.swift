@@ -21,8 +21,25 @@ enum SessionExportService {
         let localDocumentsURL: URL?
         let coordinatedWrite: (Data, URL) throws -> Void
         let ubiquityMetadata: (URL) throws -> UbiquityMetadata
+        // Constructed environments are isolated; live explicitly opts into delivery.
+        var enqueueDirectExport: (Data, UUID) -> Void = { _, _ in }
+
+        private static let uiTestDocumentsURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenLift-UITests-\(UUID().uuidString)", isDirectory: true)
 
         static func live() -> ExportEnvironment {
+            if AppRuntime.isUITesting {
+                return ExportEnvironment(
+                    containerIdentifier: nil,
+                    iCloudContainerURL: nil,
+                    localDocumentsURL: uiTestDocumentsURL,
+                    coordinatedWrite: { data, url in try data.write(to: url, options: .atomic) },
+                    ubiquityMetadata: { _ in UbiquityMetadata(
+                        isUbiquitousItem: false, isUploaded: false,
+                        isUploading: false, uploadingErrorDescription: nil
+                    ) }
+                )
+            }
             let identifier = configuredContainerIdentifier()
             return ExportEnvironment(
                 containerIdentifier: identifier,
@@ -31,7 +48,8 @@ enum SessionExportService {
                 },
                 localDocumentsURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
                 coordinatedWrite: SessionExportService.coordinatedWrite,
-                ubiquityMetadata: SessionExportService.liveUbiquityMetadata
+                ubiquityMetadata: SessionExportService.liveUbiquityMetadata,
+                enqueueDirectExport: DirectExportService.enqueueAndSchedule
             )
         }
     }
@@ -1057,7 +1075,7 @@ enum SessionExportService {
         )
 
         let data = try JSONEncoder.pretty.encode(payload)
-        DirectExportService.enqueueAndSchedule(payload: data, sessionId: session.id)
+        environment.enqueueDirectExport(data, session.id)
         try replaceExistingWorkoutExportCopies(
             data: data,
             sessionId: session.id,
@@ -2081,7 +2099,7 @@ enum AdaptiveExportService {
             resistanceProfiles: resistanceProfiles
         )
         let data = try encode(payload)
-        DirectExportService.enqueueAndSchedule(payload: data, sessionId: session.id)
+        environment.enqueueDirectExport(data, session.id)
         try SessionExportService.replaceExistingWorkoutExportCopies(
             data: data,
             sessionId: session.id,

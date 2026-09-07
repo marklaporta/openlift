@@ -514,6 +514,7 @@ final class FixedCyclePushPullTests: XCTestCase {
             .appendingPathComponent("OpenLiftJuly27CurlRepair-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        var directDeliveries: [(Data, UUID)] = []
         let environment = SessionExportService.ExportEnvironment(
             containerIdentifier: "iCloud.test.openlift",
             iCloudContainerURL: root.appendingPathComponent("iCloud", isDirectory: true),
@@ -528,7 +529,8 @@ final class FixedCyclePushPullTests: XCTestCase {
                     isUploading: false,
                     uploadingErrorDescription: nil
                 )
-            }
+            },
+            enqueueDirectExport: { directDeliveries.append(($0, $1)) }
         )
         let exercises = try context.fetch(FetchDescriptor<Exercise>())
         let checks = try context.fetch(FetchDescriptor<DailyReadinessCheck>())
@@ -548,6 +550,9 @@ final class FixedCyclePushPullTests: XCTestCase {
         )
         let canonicalURL = try XCTUnwrap(originalOutcome.iCloudDestinationURL)
         let localCanonicalURL = try XCTUnwrap(originalOutcome.localMirrorURL)
+        XCTAssertEqual(directDeliveries.count, 1)
+        XCTAssertEqual(directDeliveries.first?.0, try Data(contentsOf: canonicalURL))
+        XCTAssertEqual(directDeliveries.first?.1, fixture.adaptiveSession.id)
         let originalPayload = try XCTUnwrap(
             AdaptiveExportService.decode(Data(contentsOf: canonicalURL))
         )
@@ -1178,7 +1183,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         XCTAssertEqual(result?.matchKind, .sameCycleDay)
     }
 
-    func testFixedCycleLookupFallsBackAcrossAdHocAndAdaptiveWithStableTieBreak() {
+    func testFixedCycleLookupFallsBackToLatestAcrossAdHocAndAdaptive() {
         let exerciseId = UUID()
         let adHoc = completedSession(
             cycleId: UUID(),
@@ -1546,7 +1551,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         XCTAssertEqual(created.first?.reps, rows.first?.reps)
     }
 
-    func testReadinessRolloverClosesGateWithoutMutatingPartialDraft() {
+    func testReadinessRolloverClosesGateForExistingPartialDraft() {
         let sessionId = UUID()
         let exerciseId = UUID()
         let firstDate = Date(timeIntervalSince1970: 1_769_299_200)

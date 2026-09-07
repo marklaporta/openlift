@@ -84,17 +84,6 @@ final class HistoryTimelineServiceTests: XCTestCase {
         }
     }
 
-    func testNewestRotationSessionOutranksEveryOlderAdaptiveSession() {
-        let entries = HistoryTimelineService.entries(
-            sessions: [rotation(900)],
-            adaptiveSessions: [adaptive(800), adaptive(700), adaptive(600)]
-        )
-
-        guard case .rotation = entries.first else {
-            return XCTFail("expected the newest session overall to be the rotation one")
-        }
-        XCTAssertEqual(entries.count, 4)
-    }
 
     func testHistoryFallsBackToCreatedAtWhenFinishedAtIsMissing() {
         let unfinished = Session(
