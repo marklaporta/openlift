@@ -391,20 +391,10 @@ enum BootstrapDataService {
         allExportSummaries().first
     }
 
-    static func allExportSummaries() -> [SessionExportService.ExportPayload] {
+    static func allExportSummaries(environment: SessionExportService.ExportEnvironment = .live()) -> [SessionExportService.ExportPayload] {
         if AppRuntime.isUITesting { return [] }
         let fileManager = FileManager.default
-        var directories: [URL] = []
-
-        if let iCloudDir = SessionExportService.iCloudContainerURL()?
-            .appendingPathComponent("Documents", isDirectory: true)
-            .appendingPathComponent("OpenLift/exports", isDirectory: true) {
-            directories.append(iCloudDir)
-        }
-        if let docsDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("OpenLift/exports", isDirectory: true) {
-            directories.append(docsDir)
-        }
+        let directories = environment.exportDirectories
 
         var parsed: [(payload: SessionExportService.ExportPayload, date: Date)] = []
 

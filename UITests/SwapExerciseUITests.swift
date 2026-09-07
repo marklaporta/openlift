@@ -56,6 +56,10 @@ final class SwapExerciseUITests: OpenLiftUITestCase {
     func testLogWorkoutSavesEnteredSetToLocalHistory() throws {
 
         let app = launchApp()
+        app.tabBars.buttons["History"].tap()
+        XCTAssertTrue(app.navigationBars["History"].waitForExistence(timeout: 10))
+        let offSchedule = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Off-Schedule"))
+        XCTAssertEqual(offSchedule.count, 0, "A new UI process must not discover previous sandbox exports")
 
         app.tabBars.buttons["Log"].tap()
         XCTAssertTrue(app.navigationBars["Log Workout"].waitForExistence(timeout: 10))
@@ -86,5 +90,11 @@ final class SwapExerciseUITests: OpenLiftUITestCase {
         savedWorkout.tap()
         XCTAssertTrue(app.staticTexts["Set 1"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["1 x 1"].exists)
+
+        app.terminate()
+        app.launch()
+        app.tabBars.buttons["History"].tap()
+        XCTAssertTrue(app.navigationBars["History"].waitForExistence(timeout: 10))
+        XCTAssertEqual(offSchedule.count, 0, "A reused sandbox must not recover the prior UI process's export")
     }
 }
