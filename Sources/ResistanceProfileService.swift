@@ -639,6 +639,9 @@ enum ResistanceProfileService {
         guard confirmedOccurrenceWideCorrection else {
             throw ResistanceProfileError.frozenConfirmationRequired
         }
+        let corrections = try prepareClusterSnapshotCorrections(
+            workoutKind: workoutKind, sessionId: sessionId, exerciseId: exerciseId,
+            to: value, modelContext: modelContext)
         let profile = try create(
             workoutKind: workoutKind,
             sessionId: sessionId,
@@ -651,7 +654,7 @@ enum ResistanceProfileService {
         )
         profile.frozenAt = now
         profile.updatedAt = now
-        try correctClusterSnapshots(for: profile, to: value, modelContext: modelContext)
+        corrections.forEach { $0() }
         try markExportPending(for: profile, modelContext: modelContext)
         try modelContext.save()
         SessionExportService.scheduleBackgroundExportRetry()
@@ -667,11 +670,16 @@ enum ResistanceProfileService {
         now: Date = .now
     ) throws {
         guard value.isComplete else { throw ResistanceProfileError.incomplete }
+        let corrections = confirmedOccurrenceWideCorrection
+            ? try prepareClusterSnapshotCorrections(
+                workoutKind: profile.workoutKind, sessionId: profile.sessionId,
+                exerciseId: profile.exerciseId, to: value, modelContext: modelContext)
+            : []
         guard Self.value(profile) != value else {
             // A previously corrected live profile may still have an older frozen
             // snapshot. Reconcile it only through explicit correction authority.
-            if confirmedOccurrenceWideCorrection,
-               try correctClusterSnapshots(for: profile, to: value, modelContext: modelContext) {
+            if !corrections.isEmpty {
+                corrections.forEach { $0() }
                 try markExportPending(for: profile, modelContext: modelContext)
                 try modelContext.save()
                 SessionExportService.scheduleBackgroundExportRetry()
@@ -708,9 +716,7 @@ enum ResistanceProfileService {
         profile.chainPounds = value.chainPounds
         profile.eccentricPounds = value.eccentricPounds
         profile.updatedAt = now
-        if confirmedOccurrenceWideCorrection {
-            try correctClusterSnapshots(for: profile, to: value, modelContext: modelContext)
-        }
+        corrections.forEach { $0() }
         if profile.frozenAt != nil {
             try markExportPending(for: profile, modelContext: modelContext)
         }
@@ -777,21 +783,23 @@ enum ResistanceProfileService {
     }
 
     @MainActor
-    @discardableResult
-    private static func correctClusterSnapshots(
-        for profile: ExerciseResistanceProfile,
+    private static func prepareClusterSnapshotCorrections(
+        workoutKind: ResistanceProfileWorkoutKind,
+        sessionId: UUID,
+        exerciseId: UUID,
         to value: ResistanceProfileValue,
         modelContext: ModelContext
-    ) throws -> Bool {
-        guard profile.workoutKind == .fixed else { return false }
-        var changed = false
+    ) throws -> [() -> Void] {
+        guard workoutKind == .fixed else { return [] }
+        var corrections: [() -> Void] = []
         for occurrence in try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
-        where occurrence.sessionId == profile.sessionId {
-            if try occurrence.correctResistanceProfile(exerciseId: profile.exerciseId, to: value) {
-                changed = true
+        where occurrence.sessionId == sessionId {
+            if let correction = try occurrence.prepareResistanceProfileCorrection(
+                exerciseId: exerciseId, to: value) {
+                corrections.append(correction)
             }
         }
-        return changed
+        return corrections
     }
 
     @MainActor
