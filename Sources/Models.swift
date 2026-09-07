@@ -1732,6 +1732,31 @@ final class ClusterOccurrenceRecord {
         exerciseSnapshotsData = try JSONEncoder().encode(updated)
     }
 
+    /// Explicit occurrence-wide correction only. Structural/progression evidence
+    /// stays frozen; normal profile edits never call this entry point.
+    @discardableResult
+    func correctResistanceProfile(exerciseId: UUID, to value: ResistanceProfileValue) throws -> Bool {
+        guard value.isComplete else { throw ResistanceProfileError.incomplete }
+        let snapshots = try JSONDecoder().decode(
+            [ClusterExerciseProgressionSnapshot].self, from: exerciseSnapshotsData)
+        let updated = snapshots.map { snapshot in
+            ClusterExerciseProgressionSnapshot(
+                position: snapshot.position,
+                exerciseId: snapshot.exerciseId,
+                exerciseName: snapshot.exerciseName,
+                muscle: snapshot.muscle,
+                prescribedSetCount: snapshot.prescribedSetCount,
+                progressionKey: snapshot.progressionKey,
+                resistanceProfile: snapshot.exerciseId == exerciseId && snapshot.completionStatus == .performed
+                    ? value : snapshot.resistanceProfile,
+                completionStatus: snapshot.completionStatus
+            )
+        }
+        guard updated != snapshots else { return false }
+        exerciseSnapshotsData = try JSONEncoder().encode(updated)
+        return true
+    }
+
     var positionIndex: Int { absoluteStep }
 
     static func key(sessionId: UUID, clusterID: String) -> String {

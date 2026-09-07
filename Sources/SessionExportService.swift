@@ -988,8 +988,33 @@ enum SessionExportService {
             } ?? [],
             uniquingKeysWith: min
         )
+        let frozenExercises = Dictionary(
+            (fixedCycleMetadata?.cluster_occurrences ?? [])
+                .flatMap(\.exercises)
+                .filter { $0.completion_status == ClusterExerciseCompletionStatus.performed.rawValue }
+                .compactMap { snapshot in
+                    UUID(uuidString: snapshot.exercise_id).map { ($0, snapshot) }
+                },
+            uniquingKeysWith: { first, _ in first }
+        )
         let exportExercises: [ExportExercise] = grouped.compactMap { exerciseId, entries in
-            guard let ex = exercises.first(where: { $0.id == exerciseId }) else { return nil }
+            let frozen = frozenExercises[exerciseId]
+            let live = exercises.first(where: { $0.id == exerciseId })
+            guard let name = frozen?.exercise_name ?? live?.name,
+                  let muscle = frozen?.muscle ?? live?.primaryMuscle.rawValue else { return nil }
+            let profile: ResistanceProfilePayload?
+            if let frozen {
+                // Unknown is frozen evidence too; never fill it from a later live profile.
+                profile = frozen.resistance_profile
+            } else {
+                profile = (try? ResistanceProfileService.profile(
+                    workoutKind: session.dayLabelSnapshot == "Off-Schedule" ? .adHoc : .fixed,
+                    sessionId: session.id,
+                    exerciseId: exerciseId,
+                    occurrenceId: nil,
+                    in: resistanceProfiles
+                )).flatMap(ResistanceProfileService.value).map(ResistanceProfilePayload.init)
+            }
             let sets = entries
                 .sorted { $0.setIndex < $1.setIndex }
                 .map {
@@ -1001,21 +1026,15 @@ enum SessionExportService {
                     )
                 }
             return ExportExercise(
-                exercise_id: ex.id.uuidString,
-                exercise_name: ex.name,
-                muscle: ex.primaryMuscle.rawValue,
+                exercise_id: exerciseId.uuidString,
+                exercise_name: name,
+                muscle: muscle,
                 sets: sets,
                 volume_feedback: adHocFeedback
                     .filter { $0.sessionId == session.id && $0.exerciseId == exerciseId }
                     .max(by: { $0.createdAt < $1.createdAt })?
                     .rating.rawValue,
-                resistance_profile: (try? ResistanceProfileService.profile(
-                    workoutKind: session.dayLabelSnapshot == "Off-Schedule" ? .adHoc : .fixed,
-                    sessionId: session.id,
-                    exerciseId: exerciseId,
-                    occurrenceId: nil,
-                    in: resistanceProfiles
-                )).flatMap(ResistanceProfileService.value).map(ResistanceProfilePayload.init)
+                resistance_profile: profile
             )
         }
         .sorted {
@@ -1771,6 +1790,14 @@ enum AdaptiveReadinessExportService {
 }
 
 enum AdaptiveExportService {
+    enum HydrationError: LocalizedError {
+        case pendingModelChanges
+
+        var errorDescription: String? {
+            "Save pending changes before recovering Adaptive workouts."
+        }
+    }
+
     enum CompletedSessionRetryError: LocalizedError {
         case sessionMissing(UUID)
         case planMissing(UUID)
@@ -2272,6 +2299,22 @@ enum AdaptiveExportService {
         _ payload: PayloadV2,
         modelContext: ModelContext
     ) throws -> Bool {
+        guard !modelContext.hasChanges else { throw HydrationError.pendingModelChanges }
+        do {
+            let recovered = try hydrateInCleanContext(payload, modelContext: modelContext)
+            if !recovered { modelContext.rollback() }
+            return recovered
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    @MainActor
+    private static func hydrateInCleanContext(
+        _ payload: PayloadV2,
+        modelContext: ModelContext
+    ) throws -> Bool {
         guard let sessionId = UUID(uuidString: payload.session_id),
               let planId = UUID(uuidString: payload.plan.plan_id),
               let checkId = UUID(uuidString: payload.readiness.check_id),
@@ -2347,7 +2390,7 @@ enum AdaptiveExportService {
                 var localExerciseId = exerciseById[exportedExerciseId]?.id
                 for row in exercise.sets {
                     guard let actual = resolvedExercise(row),
-                          let rowId = UUID(uuidString: row.set_entry_id) else { continue }
+                          let rowId = UUID(uuidString: row.set_entry_id) else { return nil }
                     localExerciseId = localExerciseId ?? actual.id
                     recoveredEntries.append(
                         AdaptiveSetEntry(
