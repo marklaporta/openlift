@@ -153,6 +153,38 @@ final class BootstrapDataServiceTests: XCTestCase {
             entries[0].lockedAt
         )
         XCTAssertNil(payload.exercises.first?.sets.last?.locked_at)
+
+        XCTAssertEqual(ExportedSessionSummary.loadAll(environment: environment).map(\.id), [session.id.uuidString])
+        XCTAssertEqual(BootstrapDataService.allExportSummaries(environment: environment).map(\.session_id), [session.id.uuidString])
+
+        // Reuse a discovered filename in the chosen environment, not a second canonical copy.
+        let renamed = exportDir.appendingPathComponent("workout-existing-copy.json")
+        try FileManager.default.moveItem(at: files[0], to: renamed)
+        try SessionExportService.export(
+            session: session, cycleName: "Updated Export", exercises: [exercise],
+            setEntries: entries, environment: environment
+        )
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDir.path), [renamed.lastPathComponent])
+        XCTAssertEqual(try JSONDecoder().decode(SessionExportService.ExportPayload.self,
+            from: Data(contentsOf: renamed)).cycle_name, "Updated Export")
+
+        let otherDocs = docs.appendingPathComponent("OtherLaunch", isDirectory: true)
+        let otherEnvironment = SessionExportService.ExportEnvironment(
+            containerIdentifier: nil, iCloudContainerURL: nil, localDocumentsURL: otherDocs,
+            coordinatedWrite: environment.coordinatedWrite, ubiquityMetadata: environment.ubiquityMetadata
+        )
+        XCTAssertTrue(ExportedSessionSummary.loadAll(environment: otherEnvironment).isEmpty)
+        XCTAssertTrue(BootstrapDataService.allExportSummaries(environment: otherEnvironment).isEmpty)
+        let draftName = "draft-\(session.id.uuidString).json"
+        let draft = exportDir.appendingPathComponent("drafts/\(draftName)")
+        let unrelatedDraft = otherDocs.appendingPathComponent("OpenLift/exports/drafts/\(draftName)")
+        for url in [draft, unrelatedDraft] {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("preserve other launch".utf8).write(to: url)
+        }
+        SessionExportService.deleteDraftSnapshot(sessionId: session.id, environment: environment)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draft.path))
+        XCTAssertEqual(try Data(contentsOf: unrelatedDraft), Data("preserve other launch".utf8))
     }
 
     func testConfiguredICloudIdentifierRequiresExpandedValue() {

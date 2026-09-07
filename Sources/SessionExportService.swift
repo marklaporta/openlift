@@ -24,6 +24,15 @@ enum SessionExportService {
         // Constructed environments are isolated; live explicitly opts into delivery.
         var enqueueDirectExport: (Data, UUID) -> Void = { _, _ in }
 
+        var exportDirectories: [URL] {
+            [
+                iCloudContainerURL.map {
+                    SessionExportService.exportDirectory(containerURL: $0, relativeSubdirectory: "exports")
+                },
+                localDocumentsURL?.appendingPathComponent("OpenLift/exports", isDirectory: true)
+            ].compactMap { $0 }
+        }
+
         private static let uiTestDocumentsURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenLift-UITests-\(UUID().uuidString)", isDirectory: true)
 
@@ -1081,7 +1090,7 @@ enum SessionExportService {
             sessionId: session.id,
             environment: environment
         )
-        let filename = existingLocalExportFilename(sessionId: session.id)
+        let filename = existingLocalExportFilename(sessionId: session.id, environment: environment)
             ?? "workout-\(filenameDateFormatter.string(from: session.finishedAt ?? .now))-\(session.id.uuidString).json"
         return try writeExportData(
             data: data,
@@ -1320,8 +1329,11 @@ enum SessionExportService {
         return (sessionIDs(in: localDirectory) ?? [], sessionIDs(in: iCloudDirectory))
     }
 
-    private static func existingLocalExportFilename(sessionId: UUID) -> String? {
-        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+    private static func existingLocalExportFilename(
+        sessionId: UUID,
+        environment: ExportEnvironment
+    ) -> String? {
+        let directory = environment.localDocumentsURL?
             .appendingPathComponent("OpenLift/exports", isDirectory: true)
         guard let directory,
               let files = try? FileManager.default.contentsOfDirectory(
@@ -1338,16 +1350,11 @@ enum SessionExportService {
         }?.lastPathComponent
     }
 
-    static func deleteDraftSnapshot(sessionId: UUID) {
+    static func deleteDraftSnapshot(sessionId: UUID, environment: ExportEnvironment = .live()) {
         let filename = "draft-\(sessionId.uuidString).json"
-        let candidates: [URL] = [
-            iCloudContainerURL().map {
-                $0.appendingPathComponent("Documents/OpenLift/exports/drafts/\(filename)")
-            },
-            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first.map {
-                $0.appendingPathComponent("OpenLift/exports/drafts/\(filename)")
-            }
-        ].compactMap { $0 }
+        let candidates = environment.exportDirectories.map {
+            $0.appendingPathComponent("drafts/\(filename)")
+        }
         for url in candidates {
             try? FileManager.default.removeItem(at: url)
         }
@@ -2275,17 +2282,9 @@ enum AdaptiveExportService {
         }
     }
 
-    static func loadPayloads() -> [PayloadV2] {
+    static func loadPayloads(environment: SessionExportService.ExportEnvironment = .live()) -> [PayloadV2] {
         let fileManager = FileManager.default
-        var directories: [URL] = []
-        if let iCloud = SessionExportService.iCloudContainerURL()?
-            .appendingPathComponent("Documents/OpenLift/exports", isDirectory: true) {
-            directories.append(iCloud)
-        }
-        if let local = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("OpenLift/exports", isDirectory: true) {
-            directories.append(local)
-        }
+        let directories = environment.exportDirectories
         var found: [PayloadV2] = []
         for directory in directories {
             guard let files = try? fileManager.contentsOfDirectory(

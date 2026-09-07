@@ -3336,17 +3336,7 @@ struct WorkoutView: View {
 
     private func exportedEfforts(exerciseName: String) -> [ExerciseEffort] {
         let fileManager = FileManager.default
-        var directories: [URL] = []
-
-        if let iCloudRoot = SessionExportService.iCloudContainerURL()?
-            .appendingPathComponent("Documents", isDirectory: true)
-            .appendingPathComponent("OpenLift/exports", isDirectory: true) {
-            directories.append(iCloudRoot)
-        }
-        if let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("OpenLift/exports", isDirectory: true) {
-            directories.append(docs)
-        }
+        let directories = SessionExportService.ExportEnvironment.live().exportDirectories
 
         var efforts: [ExerciseEffort] = []
         let targetName = exerciseName.lowercased()

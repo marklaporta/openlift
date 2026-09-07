@@ -873,20 +873,9 @@ struct ExportedSessionSummary: Identifiable {
                     dayLabelSnapshot: payload.fixed_cycle?.day_label ?? (payload.workout_kind == "ad_hoc" ? "Off-Schedule" : nil))
     }
 
-    static func loadAll() -> [ExportedSessionSummary] {
+    static func loadAll(environment: SessionExportService.ExportEnvironment = .live()) -> [ExportedSessionSummary] {
         let fileManager = FileManager.default
-        var directories: [URL] = []
-
-        if let iCloudRoot = SessionExportService.iCloudContainerURL()?
-            .appendingPathComponent("Documents", isDirectory: true)
-            .appendingPathComponent("OpenLift/exports", isDirectory: true) {
-            directories.append(iCloudRoot)
-        }
-
-        if let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("OpenLift/exports", isDirectory: true) {
-            directories.append(docs)
-        }
+        let directories = environment.exportDirectories
 
         var results: [ExportedSessionSummary] = []
 

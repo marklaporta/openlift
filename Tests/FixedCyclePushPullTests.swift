@@ -556,6 +556,13 @@ final class FixedCyclePushPullTests: XCTestCase {
         let originalPayload = try XCTUnwrap(
             AdaptiveExportService.decode(Data(contentsOf: canonicalURL))
         )
+        XCTAssertEqual(AdaptiveExportService.loadPayloads(environment: environment), [originalPayload])
+        let emptyEnvironment = SessionExportService.ExportEnvironment(
+            containerIdentifier: nil, iCloudContainerURL: nil,
+            localDocumentsURL: root.appendingPathComponent("OtherLaunch", isDirectory: true),
+            coordinatedWrite: environment.coordinatedWrite, ubiquityMetadata: environment.ubiquityMetadata
+        )
+        XCTAssertTrue(AdaptiveExportService.loadPayloads(environment: emptyEnvironment).isEmpty)
         let originalInclineSets = originalPayload.plan.complexes
             .flatMap(\.exercises)
             .first { $0.occurrence_id == fixture.inclineOccurrenceId.uuidString }?
