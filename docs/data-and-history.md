@@ -216,6 +216,9 @@ An explicitly confirmed occurrence-wide profile correction updates both the
 live profile and that performed exercise's frozen cluster profile, marks the
 session export-pending, and leaves progression identity, structure, and sets
 unchanged. Ordinary edits never rewrite completed cluster snapshots.
+All affected snapshot corrections are validated and encoded before changing live
+or frozen records; malformed snapshot data rejects the correction without
+partially applying it or discarding unrelated pending edits.
 The same optional metadata exports the current durable exact-slot preferences
 and active session overrides, including exercise descriptors needed for
 recovery. Hydration restores preferences from the newest clustered snapshot and
