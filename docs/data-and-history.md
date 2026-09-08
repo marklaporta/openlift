@@ -25,6 +25,21 @@ Core models live in [`Models.swift`](../Sources/Models.swift):
 - V14 clustered exercise overlays: exact-slot `ClusterExercisePreference` and
   session-scoped `ClusterExerciseOccurrenceOverride`
 
+## Exercise setup notes
+
+Tap “Add exercise note” or an existing note above the set rows in Fixed Cycle
+(including clustered workouts), Adaptive execution, or the Log tab. Save updates
+the note; Cancel leaves it unchanged. Clear Note empties the editor and Save
+commits the removal. The Log tab allows editing any selected exercise without
+starting or saving a workout.
+
+Notes use the existing `Exercise.notes` field and stable catalog identity, so the
+same exercise shares its editable note across sessions, slots, and modes. A
+substitution shows the replacement exercise's own note. No schema migration or
+workout-program change is required. Notes survive app restarts and full-store
+backup/restore; workout JSON exports remain performance evidence and do not
+include these mutable catalog notes.
+
 ## Resistance units and recovery
 
 V15 adds optional `chainPounds` and `eccentricPounds` to occurrence profiles.

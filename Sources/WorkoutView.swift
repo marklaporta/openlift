@@ -3612,6 +3612,9 @@ private struct ExerciseSection: View {
 
     var body: some View {
         Section {
+            if let exercise {
+                ExerciseNotesControl(exercise: exercise)
+            }
             if let prefillSource {
                 Label(prefillSource, systemImage: "arrow.uturn.backward.circle")
                     .font(.caption)

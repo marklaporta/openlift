@@ -2007,6 +2007,9 @@ private struct AdaptiveExerciseSection: View {
 
     var body: some View {
         Section {
+            if let exercise {
+                ExerciseNotesControl(exercise: exercise)
+            }
             if let previousEffort {
                 Text(previousEffort)
                     .font(.caption)
