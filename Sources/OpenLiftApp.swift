@@ -17,6 +17,10 @@ struct OpenLiftApp: App {
                     modelContext: modelContext,
                     clusteredDraftBackupConfirmed: true
                 )
+                if AppRuntime.shouldPrepareSeatedShrugClusterRevision {
+                    _ = try? BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: modelContext, backupConfirmed: true)
+                    _ = try? BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: modelContext, backupConfirmed: true)
+                }
             }
             return OpenLiftContainerStartup(
                 container: container,
@@ -75,6 +79,23 @@ struct OpenLiftApp: App {
                 }
             } catch {
                 print("OPENLIFT_CLUSTERED_REVISION_FAILED \(error.localizedDescription)")
+            }
+        }
+        if startup.issue == nil, AppRuntime.shouldPrepareSeatedShrugClusterRevision {
+            let context = ModelContext(startup.container)
+            do {
+                let result = try BootstrapDataService.prepareSeatedShrugClusterRevision(
+                    modelContext: context, backupConfirmed: AppRuntime.seatedShrugRevisionBackupIsConfirmed)
+                print("OPENLIFT_CLUSTERED_SHRUGS_RESULT applied=\(result.didApply) template=\(result.templateId) cycle=\(result.cycleId)")
+                print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT \(try BootstrapDataService.seatedShrugRevisionAudit(modelContext: context))")
+            } catch {
+                print("OPENLIFT_CLUSTERED_SHRUGS_FAILED \(error.localizedDescription)")
+            }
+        } else if startup.issue == nil, AppRuntime.shouldAuditSeatedShrugRevision {
+            do {
+                print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT \(try BootstrapDataService.seatedShrugRevisionAudit(modelContext: ModelContext(startup.container)))")
+            } catch {
+                print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT_FAILED \(error.localizedDescription)")
             }
         }
         if startup.issue == nil, AppRuntime.shouldRepairJuly27AdaptiveInclineCurl {

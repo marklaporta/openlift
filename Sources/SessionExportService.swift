@@ -840,7 +840,7 @@ enum SessionExportService {
                 : nil,
             program_version: isClustered
                 ? (programVersion?.version
-                    ?? (FixedCycleClusterProgramService.versionID(for: template) == FixedCycleClusterProgramService.revisionVersionID ? 2 : 1))
+                    ?? FixedCycleClusterProgramService.versionNumber(for: template))
                 : nil,
             cluster_key: nil,
             absolute_cluster_step: nil,

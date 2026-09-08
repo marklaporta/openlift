@@ -30,6 +30,7 @@
 		F10000000000000000000005 /* TrainingModeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000005 /* TrainingModeService.swift */; };
 		F10000000000000000000042 /* StoreBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000042 /* StoreBackupService.swift */; };
 		F10000000000000000000044 /* ResistanceProfileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000044 /* ResistanceProfileService.swift */; };
+		F10000000000000000000046 /* ClusteredShrugRevision.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000046 /* ClusteredShrugRevision.swift */; };
 		F10000000000000000000007 /* AdaptiveProgramService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000007 /* AdaptiveProgramService.swift */; };
 		F10000000000000000000008 /* AdaptiveProgramEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000008 /* AdaptiveProgramEditorView.swift */; };
 		F1000000000000000000000A /* AdaptivePlanningServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000A /* AdaptivePlanningServices.swift */; };
@@ -88,6 +89,7 @@
 		F20000000000000000000005 /* TrainingModeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingModeService.swift; sourceTree = "<group>"; };
 		F20000000000000000000042 /* StoreBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreBackupService.swift; sourceTree = "<group>"; };
 		F20000000000000000000044 /* ResistanceProfileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResistanceProfileService.swift; sourceTree = "<group>"; };
+		F20000000000000000000046 /* ClusteredShrugRevision.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClusteredShrugRevision.swift; sourceTree = "<group>"; };
 		F20000000000000000000007 /* AdaptiveProgramService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveProgramService.swift; sourceTree = "<group>"; };
 		F20000000000000000000008 /* AdaptiveProgramEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveProgramEditorView.swift; sourceTree = "<group>"; };
 		F2000000000000000000000A /* AdaptivePlanningServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptivePlanningServices.swift; sourceTree = "<group>"; };
@@ -150,6 +152,7 @@
 				5BFA6838778B4C1F8BD337E6 /* AppRuntime.swift */,
 				F6973607E1B44FC016352114 /* Assets.xcassets */,
 				A35F65E5A97D67A2045F686F /* BootstrapDataService.swift */,
+				F20000000000000000000046 /* ClusteredShrugRevision.swift */,
 				C6D2E5FA0D8760A475D05B1A /* CycleOrdering.swift */,
 				D30000000000000000000001 /* DirectExportService.swift */,
 				94D35FC8C396AB62398530B2 /* CycleView.swift */,
@@ -311,6 +314,7 @@
 				F1000000000000000000000E /* AdaptiveWorkoutView.swift in Sources */,
 				02DA37FA2EF34418B76A2695 /* AppRuntime.swift in Sources */,
 				8B52A251828F8378E3602B5B /* BootstrapDataService.swift in Sources */,
+				F10000000000000000000046 /* ClusteredShrugRevision.swift in Sources */,
 				B3F3E7F7A5493C6B842CA86D /* CycleOrdering.swift in Sources */,
 				D30000000000000000000002 /* DirectExportService.swift in Sources */,
 				C960CB659748E17E46C7B3C5 /* CycleView.swift in Sources */,

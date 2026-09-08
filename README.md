@@ -90,6 +90,9 @@ That file is ignored by git. Start from:
   completed lane counts for replacements. A two-row lane remains two rows.
 - The backup-gated [v2 revision](docs/templates.md#september-2026-clustered-revision-v2)
   reorders chest/back and legs without resetting progression or arm/accessory rotations.
+- The explicit [v3 revision](docs/templates.md#seated-dumbbell-shrug-revision-v3)
+  adds two starting rows of seated dumbbell shrugs to Cluster 3 A/C/E,
+  preserving existing work and independent rotation positions.
 - Completed workouts export to `OpenLift/exports`.
 - Draft snapshots export to `OpenLift/exports/drafts`.
 - Published cycle JSON files are discovered from `OpenLift/cycles`.

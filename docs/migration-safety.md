@@ -271,3 +271,43 @@ revision. Durable preferences are authoritative independently per version; an
 old v1 retry cannot delete current v2 preferences. Recovered pointers and frozen
 occurrences attach to matching-version templates. Safety-bar naming aliases
 resolve to one catalog identity during recovery.
+
+## Seated shrug content revision (v3)
+
+`BootstrapDataService.prepareSeatedShrugClusterRevision` revises an active v2
+program to v3 without changing the V15 SwiftData schema or any completed
+history. It adds two starting shrug rows only at Cluster 3 A/C/E, preserves all
+existing slot doses and substitution identities, and copies the three active
+v2 raw pointers exactly. Archived v1/v2 state is retained. The operation refuses
+pending model changes, any Fixed/Adaptive draft, incomplete pointers, and
+conflicting v3 state; failure rolls the transaction back.
+
+After closing OpenLift and verifying a backup of `default.store` plus present
+`-wal`/`-shm` sidecars, launch with both:
+
+- `OPENLIFT_ADD_CLUSTERED_SHRUGS_2026_09_08`
+- `OPENLIFT_CLUSTERED_SHRUGS_BACKUP_CONFIRMED`
+
+Successful application prints `OPENLIFT_CLUSTERED_SHRUGS_RESULT` and
+`OPENLIFT_CLUSTERED_SHRUGS_AUDIT`. The audit must report v3, the unchanged three
+raw pointers, `shrugPositions=9,11,13`, and `shrugRows=2,2,2`. The durable marker
+`clustered-program-revision-2026-09-08-v3` makes a repeated application validate
+and return `applied=false`, even after subsequent workouts advance the pointers.
+Do not combine this with the older v1-to-v2 revision flag.
+
+`OPENLIFT_AUDIT_CLUSTERED_SHRUGS` invokes the read-only audit separately. Ordinary
+argument-free launch does not revise the program. Audit again after an ordinary
+relaunch to verify persistence; the audit itself creates no drafts or exports.
+
+Before live application, stage a verified copy in the test host's
+`Documents/OpenLiftCopiedShrugRevisionStore` and run
+`MigrationSafetyTests/testCopiedRealStoreSeatedShrugRevisionWhenOptedIn`.
+The test opens another scratch copy, checks all historical sets, snapshots,
+profiles and old pointers, verifies new placement and copied substitutions,
+checks idempotence, and verifies the supplied source manifest is unchanged.
+
+Schema-v4 JSON recovery supports program versions 1–3 and reconstructs each
+missing versioned template needed by frozen history. Preferences and pointers
+stay in their original version namespaces; older v2 retries cannot downgrade an
+active v3 template. Shrug occurrences preserve their new shared progression key
+and literal performed rows through export and hydration.
