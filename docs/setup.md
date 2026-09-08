@@ -54,6 +54,61 @@ The ignored local override:
 
 ## Common Xcode Commands
 
+### Fast everyday checkpoints
+
+```bash
+scripts/test.py                       # all unit/service + synthetic migration tests
+scripts/test.py unit ExportIntegrityTests  # affected class while editing
+scripts/test.py ui ResistanceProfileUITests/testVOLTRAModifiersAcceptIndependentPoundsAndPercentInputs
+scripts/test.py full                  # all unit and UI methods, no filters
+```
+
+The runner keeps incremental DerivedData and ownership records for dedicated,
+reusable **disposable** iPhone 17 simulators in `.build/tests/`. Unit or focused
+UI runs need one simulator; all-UI/full runs use three. First use creates fresh
+simulators; subsequent runs never choose a personal simulator by name. Do not
+stage personal stores or use these simulators for manual data recovery.
+
+Unit tests run serially. The full UI target is partitioned into three balanced,
+disjoint groups on distinct simulators, avoiding Xcode's variable clone startup
+and late dispatch of long classes. Two groups name existing long flows; the third
+is **the entire UI target minus those groups**, so new UI classes remain included
+automatically. No UI methods are omitted from an unfiltered `ui` or `full` run.
+The ordinary Xcode scheme remains available for debugging and direct test runs.
+
+Each invocation performs incremental `build-for-testing`, then runs those
+just-validated products with `test-without-building`. The three UI processes only
+read shared build products; they never build concurrently. There is no unchecked
+skip-build mode, so edits cannot silently run stale binaries. The runner disables
+signing, forces empty direct-export settings, and ignores inherited copied-store
+fixture paths; use the separate [migration gates](migration-safety.md) for those.
+
+Each dated run directory contains `build.log`, boot logs, per-part test logs and
+`.xcresult` bundles, per-part summaries, and aggregate `summary.json`. Zero-test
+selections and test/build failures fail the checkpoint. `unit` is the default fast
+lane, **not** a full-suite pass; `full` runs units and all UI groups and refuses
+filters. First-build/first-boot costs still apply on a fresh checkout. Simulators
+are kept for reuse; exact IDs are in `.build/tests/simulator-1.json` through
+`simulator-3.json` (created as needed).
+
+### Measured checkpoint timing
+
+On an M4 with iPhone 17 / iOS 26.5 simulators (September 7, 2026), the same
+13 UI methods took **397.5s → 287.8s** using prepared simulators: about **28% less
+wall time**. The new runner's time includes its incremental build check. Aggregate
+UI method time fell **841.4s → 615.2s**; all assertions and screenshots remain.
+A warm all-unit checkpoint took **23.2s** (348 passed, two copied-store opt-in
+skips). All 363 methods are retained: 350 unit and 13 UI.
+
+These are measured runs, not a universal timing guarantee. First-boot migration,
+build caches and Xcode worker scheduling materially affect wall time; an initial
+fresh-clone baseline took 647.1s and is deliberately not the comparison above.
+The long adaptive end-to-end flow remains intact and still sets a useful lower
+bound. Copied personal-store gates and physical-device/cloud delivery are not
+part of these simulator measurements.
+
+### Direct Xcode commands
+
 Simulator unit checkpoint (use a disposable simulator without staged personal stores):
 
 ```bash
@@ -68,7 +123,7 @@ changed screen wiring, for example:
 
 ```bash
 xcodebuild test -scheme OpenLift -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -only-testing:OpenLiftUITests/FixedCycleWorkoutUITests/testVOLTRAModifiersAcceptIndependentPoundsAndPercentInputs \
+  -only-testing:OpenLiftUITests/ResistanceProfileUITests/testVOLTRAModifiersAcceptIndependentPoundsAndPercentInputs \
   -only-testing:OpenLiftUITests/SwapExerciseUITests/testLogWorkoutSavesEnteredSetToLocalHistory \
   -maximum-parallel-testing-workers 3 \
   OPENLIFT_DIRECT_EXPORT_ENDPOINT= OPENLIFT_DIRECT_EXPORT_BEARER_TOKEN=

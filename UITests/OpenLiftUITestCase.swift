@@ -6,11 +6,10 @@ import XCTest
 // test sources explicitly; the test targets are file-system synchronized groups now, so
 // a new file compiles on its own and one class per file is free.
 //
-// Run with `-maximum-parallel-testing-workers 3`. Measured on the M4 (10 cores, 4 of
-// them performance): 3 workers is green and fastest; 5 oversubscribes the performance
-// cores and the resulting scroll lag makes scrollToElement flaky. Test plans cannot pin
-// the worker count -- Xcode's test-plan schema has no such option -- so runs started
-// from Xcode's GUI pick their own and can still hit that flake.
+// scripts/test.py runs at most 3 UI simulators, with balanced, disjoint shards.
+// Earlier M4 measurements found 3 workers stable and 5 oversubscribed performance
+// cores, making scrolling flaky. This is a conservative known-good cap, not a
+// universal optimum. Direct Xcode runs still choose their own class ordering.
 class OpenLiftUITestCase: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -48,9 +47,10 @@ class OpenLiftUITestCase: XCTestCase {
 
         // The submit button sits below the per-muscle sections, so the list is left
         // scrolled down when the workout content replaces the readiness form.
-        for _ in 0..<8 {
-            app.swipeDown()
-        }
+        let draft = app.staticTexts.matching(
+            NSPredicate(format: "label ENDSWITH %@", " · Draft session")
+        ).firstMatch
+        scrollToElement(draft, in: app, toward: .top)
     }
 
     func dismissExpectedICloudCycleAlertIfPresent(in app: XCUIApplication) {
@@ -69,23 +69,36 @@ class OpenLiftUITestCase: XCTestCase {
         confirmation.tap()
     }
 
-    // `for ... where` is a filter, not a break: the original form kept iterating and
-    // re-evaluated `isHittable` all 32 times even once the element was on screen, and
-    // each of those checks forces a full accessibility snapshot of the list.
-    //
-    // Those redundant checks were also acting as an accidental ~30s settle while a
-    // screen transition finished. Breaking early removes that, so wait for existence
-    // explicitly first. It returns immediately when the element is already present, and
-    // genuinely off-screen rows in a lazy List still fall through to the scroll loops.
-    func scrollToElement(_ element: XCUIElement, in app: XCUIApplication) {
-        if element.waitForExistence(timeout: 5), element.isHittable { return }
-        for _ in 0..<16 {
-            if element.isHittable { break }
-            app.swipeUp()
+    enum ScrollDestination {
+        case top, bottom
+
+        var opposite: Self { self == .top ? .bottom : .top }
+
+        func swipe(in app: XCUIApplication) {
+            switch self {
+            case .top: app.swipeDown()
+            case .bottom: app.swipeUp()
+            }
         }
-        for _ in 0..<16 {
-            if element.isHittable { break }
-            app.swipeDown()
+    }
+
+    // A lazy List cannot realize an off-screen row merely by waiting for it to
+    // exist. Start scrolling immediately; XCTest still synchronizes every query
+    // and gesture, and the final existence/hittability safety waits are unchanged.
+    // Callers returning to an earlier section can name the direction instead of
+    // spending 16 gestures searching toward the wrong end of the list first.
+    func scrollToElement(
+        _ element: XCUIElement,
+        in app: XCUIApplication,
+        toward destination: ScrollDestination = .bottom
+    ) {
+        for direction in [destination, destination.opposite] {
+            for _ in 0..<16 {
+                // isHittable alone retries a missing lazy node for several seconds.
+                // exists is a nonwaiting query; only ask hittability once realized.
+                if element.exists && element.isHittable { return }
+                direction.swipe(in: app)
+            }
         }
         XCTAssertTrue(element.waitForExistence(timeout: 5))
 
