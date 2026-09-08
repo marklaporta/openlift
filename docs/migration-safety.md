@@ -282,6 +282,32 @@ v2 raw pointers exactly. Archived v1/v2 state is retained. The operation refuses
 pending model changes, any Fixed/Adaptive draft, incomplete pointers, and
 conflicting v3 state; failure rolls the transaction back.
 
+### On-device activation
+
+After finishing the current workout, open **Cycle → Add alternating shrugs**.
+The action is available only for an active v2 program and is disabled while any
+Fixed/Adaptive draft exists. It never discards a draft or manufactures a skipped
+workout to make the revision eligible.
+
+The user-tapped path creates a fresh, uniquely named `VACUUM INTO` snapshot in
+`Documents/OpenLift/revision-backups`, outside daily snapshot pruning, and checks
+the actual `PRAGMA quick_check` result before applying. It does not reuse today's
+daily backup, which may predate recent work. SQLite consolidates committed WAL
+contents into this consistent single file; separate sidecars are not needed.
+The main-actor operation has no suspension between snapshot and application.
+Pending model changes and drafts are refused before creating a backup; backup
+failure prevents application. A verified snapshot is retained if later program
+validation refuses the change. Repeated successful application creates no new
+backup. Ordinary launch still never applies the revision.
+
+The copied V15-store test opens a copy of the generated snapshot to verify its
+pre-revision session/set values, frozen occurrences, profiles, overrides and
+archived pointers against the source. This verified consolidated snapshot is the
+on-device equivalent of a consistent store-and-sidecar backup for this content
+revision; it does not introduce automatic full-store restoration.
+
+### Developer launch route
+
 After closing OpenLift and verifying a backup of `default.store` plus present
 `-wal`/`-shm` sidecars, launch with both:
 

@@ -29,6 +29,9 @@ enum AppRuntime {
     static let shouldAuditSeatedShrugRevision = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_AUDIT_CLUSTERED_SHRUGS"
     )
+    static let isSeatedShrugActivationUITesting = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_UI_TESTING_SHRUG_ACTIVATION"
+    )
     static let clusteredDraftBackupIsConfirmed = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_CLUSTERED_DRAFT_BACKUP_CONFIRMED"
     )

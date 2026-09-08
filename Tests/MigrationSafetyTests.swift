@@ -1994,6 +1994,7 @@ final class MigrationSafetyTests: XCTestCase {
 
 extension MigrationSafetyTests {
     /// Never opens the supplied backup: only a second scratch copy is writable.
+    @MainActor
     func testCopiedRealStoreSeatedShrugRevisionWhenOptedIn() throws {
         let documents = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
         let supplied = documents.appendingPathComponent("OpenLiftCopiedShrugRevisionStore", isDirectory: true)
@@ -2015,13 +2016,13 @@ extension MigrationSafetyTests {
             cycle in oldTemplates.contains { $0.id == cycle.templateId && Program.versionID(for: $0) == Program.revisionVersionID }
         })
         let old = try XCTUnwrap(oldTemplates.first { $0.id == cycle.templateId })
-        func rows() throws -> [String] {
-            try context.fetch(FetchDescriptor<SetEntry>()).map {
+        func rows(in source: ModelContext) throws -> [String] {
+            try source.fetch(FetchDescriptor<SetEntry>()).map {
                 "\($0.id)|\($0.sessionId)|\($0.exerciseId)|\($0.setIndex)|\($0.weight)|\($0.reps)|\($0.isLocked)|\(String(describing: $0.lockedAt))"
             }.sorted()
         }
-        func pointers() throws -> [String] {
-            try context.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.programVersionID != Program.shrugVersionID }.map {
+        func pointers(in source: ModelContext) throws -> [String] {
+            try source.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.programVersionID != Program.shrugVersionID }.map {
                 "\($0.id)|\($0.cycleInstanceId)|\($0.templateId)|\($0.programVersionID)|\($0.clusterID)|\($0.positionIndex)|\($0.updatedAt)|\(String(describing: $0.lastCompletedOccurrenceID))|\($0.isDerived)"
             }.sorted()
         }
@@ -2030,8 +2031,8 @@ extension MigrationSafetyTests {
                 "\(template.id)|\(template.name)|\(day.position)|\(day.label)|\($0.position)|\($0.muscle.rawValue)|\($0.exerciseId)|\($0.defaultSetCount)"
             } } }.sorted()
         }
-        let beforeRows = try rows()
-        let beforePointers = try pointers()
+        let beforeRows = try rows(in: context)
+        let beforePointers = try pointers(in: context)
         let beforeTemplates = templateShapes()
         let beforeSessionIDs = try context.fetch(FetchDescriptor<Session>()).map(\.id).sorted { $0.uuidString < $1.uuidString }
         let beforeOccurrences = try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
@@ -2043,11 +2044,29 @@ extension MigrationSafetyTests {
             $0.cycleInstanceId == cycle.id && $0.templateId == old.id && $0.programVersionID == Program.revisionVersionID
         }.sorted { $0.clusterID < $1.clusterID }
         let expectedPositions = oldStates.map(\.positionIndex)
-        let result = try BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: context, backupConfirmed: true)
+        let application = try BootstrapDataService.applySeatedShrugRevisionWithFreshBackup(modelContext: context,
+            backupDirectory: fixture.root.appendingPathComponent("revision-backups"))
+        let result = application.revision
+        let backupURL = try XCTUnwrap(application.backupURL)
+        XCTAssertTrue(StoreBackupService.isValidSnapshot(at: backupURL))
+        let verifiedBytes = try Data(contentsOf: backupURL)
+        let inspectionURL = fixture.root.appendingPathComponent("snapshot-inspection.store")
+        try FileManager.default.copyItem(at: backupURL, to: inspectionURL)
+        let inspectionContainer = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configurations: [ModelConfiguration("ShrugSnapshotInspection", schema: schema, url: inspectionURL, cloudKitDatabase: .none)])
+        let saved = ModelContext(inspectionContainer)
+        XCTAssertEqual(try rows(in: saved), beforeRows)
+        XCTAssertEqual(try pointers(in: saved), beforePointers)
+        XCTAssertEqual(try saved.fetch(FetchDescriptor<ActiveCycleInstance>()).first { $0.id == cycle.id }?.templateId, old.id)
+        XCTAssertEqual(try saved.fetch(FetchDescriptor<Session>()).map(\.id).sorted { $0.uuidString < $1.uuidString }, beforeSessionIDs)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: try saved.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).map { ($0.id, $0.exerciseSnapshots) }), beforeSnapshots)
+        XCTAssertEqual(ResistanceProfileService.snapshots(try saved.fetch(FetchDescriptor<ExerciseResistanceProfile>())).sorted { $0.id.uuidString < $1.id.uuidString }, beforeProfiles)
+        XCTAssertEqual(try saved.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>()).map(\.id).sorted { $0.uuidString < $1.uuidString }, beforeOverrideIDs)
+        XCTAssertFalse(try saved.fetch(FetchDescriptor<TrainingPreference>()).contains { $0.key == BootstrapDataService.seatedShrugRevisionMarker })
         XCTAssertTrue(result.didApply)
         XCTAssertEqual(result.cycleId, cycle.id)
-        XCTAssertEqual(try rows(), beforeRows)
-        XCTAssertEqual(try pointers(), beforePointers)
+        XCTAssertEqual(try rows(in: context), beforeRows)
+        XCTAssertEqual(try pointers(in: context), beforePointers)
         XCTAssertEqual(templateShapes(), beforeTemplates)
         XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).map(\.id).sorted { $0.uuidString < $1.uuidString }, beforeSessionIDs)
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).map { ($0.id, $0.exerciseSnapshots) }), beforeSnapshots)
@@ -2067,8 +2086,9 @@ extension MigrationSafetyTests {
             XCTAssertEqual(copy.updatedAt, old.updatedAt)
         }
         XCTAssertFalse(try BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: context).didApply)
+        XCTAssertEqual(try Data(contentsOf: backupURL), verifiedBytes)
         XCTAssertEqual(try completeStoreManifest(in: supplied), manifest)
-        print("OPENLIFT_COPIED_SHRUG_REVISION_VERIFIED sessions=\(beforeSessionIDs.count) sets=\(beforeRows.count) occurrences=\(beforeSnapshots.count) \(try BootstrapDataService.seatedShrugRevisionAudit(modelContext: context))")
+        print("OPENLIFT_COPIED_SHRUG_REVISION_VERIFIED freshSnapshotFidelity=true sessions=\(beforeSessionIDs.count) sets=\(beforeRows.count) occurrences=\(beforeSnapshots.count) \(try BootstrapDataService.seatedShrugRevisionAudit(modelContext: context))")
     }
 
     /// Service-only opt-in: no app launch arguments, no export calls and no

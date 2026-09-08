@@ -1,6 +1,43 @@
 import XCTest
 
 final class ClusteredWorkoutUITests: OpenLiftUITestCase {
+    func testCycleTabAddsAlternatingShrugsOnlyAfterCurrentWorkoutIsFinished() throws {
+        let app = launchApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SHRUG_ACTIVATION"])
+        app.tabBars.buttons["Cycle"].tap()
+        let apply = app.buttons["cycle.addAlternatingShrugs"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 5))
+        XCTAssertFalse(apply.isEnabled)
+        XCTAssertTrue(app.staticTexts["cycle.shrugDraftBlocker"].exists)
+        app.tabBars.buttons["Workout"].tap()
+        submitFixedReadiness(in: app)
+        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        scrollToElement(weight, in: app)
+        weight.tap(); weight.typeText("45")
+        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        reps.tap(); reps.typeText("12")
+        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        let complete = app.buttons["Complete Cluster 1"]
+        scrollToElement(complete, in: app); complete.tap()
+        let finish = app.buttons["Finish Workout"]
+        scrollToElement(finish, in: app); finish.tap()
+        app.tabBars.buttons["Cycle"].tap()
+        XCTAssertTrue(apply.waitForExistence(timeout: 5))
+        XCTAssertTrue(apply.isEnabled)
+        apply.tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "cycle.shrugUpdateSuccess").firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(apply.exists)
+        XCTAssertTrue(app.staticTexts["Clustered Hypertrophy v3"].firstMatch.exists)
+        app.tabBars.buttons["Workout"].tap()
+        let nextFirst = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-1").firstMatch
+        scrollToElement(nextFirst, in: app)
+        XCTAssertTrue(nextFirst.label.contains("Next: B"))
+        let nextThird = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-3").firstMatch
+        scrollToElement(nextThird, in: app)
+        XCTAssertTrue(nextThird.label.contains("Unchanged"))
+        XCTAssertTrue(nextThird.label.contains("Next: A"))
+        XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrug"))
+    }
+
     func testAlternatingShrugRevisionStartsBlankAndAdvancesOnlyCompletedThirdCluster() throws {
         let app = launchApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_ADD_CLUSTERED_SHRUGS_2026_09_08"])
         submitFixedReadiness(in: app)

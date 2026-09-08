@@ -221,4 +221,6 @@ resistance profiles, and v1/v2 progression identities. All three independent raw
 pointers are copied unchanged; activation neither advances a cluster nor forces
 an immediate shrug exposure. V1/v2 templates, preferences, pointers, and completed
 history remain archived. Apply only through the explicit, backup-gated
-[v3 content revision](migration-safety.md#seated-shrug-content-revision-v3).
+[v3 content revision](migration-safety.md#seated-shrug-content-revision-v3):
+finish the current workout, then use **Cycle → Add alternating shrugs**. The app
+makes and verifies a fresh pre-revision store snapshot before applying.

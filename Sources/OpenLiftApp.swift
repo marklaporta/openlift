@@ -10,15 +10,28 @@ struct OpenLiftApp: App {
         AppRuntime.prepareForUITesting()
 
         if AppRuntime.isUITesting {
-            let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+            let container: ModelContainer
+            if AppRuntime.isSeatedShrugActivationUITesting {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("OpenLift-ShrugUI-\(UUID().uuidString)")
+                do {
+                    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                    container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
+                        configurations: [ModelConfiguration("ShrugUI", schema: schema,
+                            url: root.appendingPathComponent("default.store"), cloudKitDatabase: .none)])
+                } catch { fatalError("Unable to create the isolated shrug UI fixture: \(error)") }
+            } else {
+                container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
+            }
             if AppRuntime.shouldPrepareClusteredProgramRollout {
                 let modelContext = ModelContext(container)
                 _ = try? BootstrapDataService.prepareClusteredProgramRollout(
                     modelContext: modelContext,
                     clusteredDraftBackupConfirmed: true
                 )
-                if AppRuntime.shouldPrepareSeatedShrugClusterRevision {
+                if AppRuntime.shouldPrepareSeatedShrugClusterRevision || AppRuntime.isSeatedShrugActivationUITesting {
                     _ = try? BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: modelContext, backupConfirmed: true)
+                }
+                if AppRuntime.shouldPrepareSeatedShrugClusterRevision {
                     _ = try? BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: modelContext, backupConfirmed: true)
                 }
             }
