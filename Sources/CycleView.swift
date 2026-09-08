@@ -12,6 +12,7 @@ struct CycleView: View {
     @Query private var templates: [CycleTemplate]
     @Query private var activeCycles: [ActiveCycleInstance]
     @Query private var sessions: [Session]
+    @Query private var adaptiveSessions: [AdaptiveWorkoutSession]
     @Query private var setEntries: [SetEntry]
     @Query private var clusterPointers: [ClusterRotationState]
     @Query private var progressionOccurrences: [ClusterOccurrenceRecord]
@@ -32,6 +33,7 @@ struct CycleView: View {
     @State private var presentingNewAdaptiveProgram = false
     @State private var editingAdaptiveProgram: AdaptiveProgram?
     @State private var presentingExerciseSelection = false
+    @State private var didAddAlternatingShrugs = false
 
     private var activeTemplate: CycleTemplate? {
         OpenLiftStateResolver.activeTemplate(
@@ -73,19 +75,35 @@ struct CycleView: View {
                 Section {
                     if let activeTemplate {
                         Text(activeTemplate.name)
+                            .onTapGesture { recordDebugTap() }
+                        if FixedCycleClusterProgramService.isProgramTemplate(activeTemplate),
+                           FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.revisionVersionID {
+                            Text("Add 2 sets of seated dumbbell shrugs on calf days (Cluster 3 A/C/E).")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Button("Add alternating shrugs") { addAlternatingShrugs() }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("cycle.addAlternatingShrugs")
+                                .disabled(hasPendingWorkout)
+                            if hasPendingWorkout {
+                                Text("Finish your current workout first.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("cycle.shrugDraftBlocker")
+                            }
+                        }
+                        if didAddAlternatingShrugs {
+                            Label("Alternating seated shrugs added.", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .accessibilityIdentifier("cycle.shrugUpdateSuccess")
+                        }
                     } else {
                         Text("No active cycle")
                             .foregroundStyle(.secondary)
+                            .onTapGesture { recordDebugTap() }
                     }
                 } header: {
                     Text("Active Cycle")
-                }
-                .onTapGesture {
-                    debugTapCount += 1
-                    if debugTapCount >= 7 {
-                        debugUnlocked = true
-                        debugTapCount = 0
-                    }
                 }
 
                 Section("Templates") {
@@ -271,6 +289,29 @@ struct CycleView: View {
             .task {
                 if trainingMode == .rotation { reloadPublishedCycles() }
             }
+        }
+    }
+
+    private func recordDebugTap() {
+        debugTapCount += 1
+        if debugTapCount >= 7 {
+            debugUnlocked = true
+            debugTapCount = 0
+        }
+    }
+
+    private var hasPendingWorkout: Bool {
+        sessions.contains { $0.status == .draft } || adaptiveSessions.contains { $0.status == .draft }
+    }
+
+    private func addAlternatingShrugs() {
+        do {
+            let result = try BootstrapDataService.applySeatedShrugRevisionWithFreshBackup(modelContext: modelContext)
+            didAddAlternatingShrugs = result.revision.didApply
+            print("OPENLIFT_CLUSTERED_SHRUGS_RESULT applied=\(result.revision.didApply) template=\(result.revision.templateId) cycle=\(result.revision.cycleId)")
+            print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT \(try BootstrapDataService.seatedShrugRevisionAudit(modelContext: modelContext))")
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

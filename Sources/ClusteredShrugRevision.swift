@@ -4,6 +4,69 @@ import SwiftData
 extension BootstrapDataService {
     static let seatedShrugRevisionMarker = "clustered-program-revision-2026-09-08-v3"
 
+    struct SeatedShrugApplicationResult {
+        let revision: ClusteredProgramRolloutResult
+        let backupURL: URL?
+    }
+
+    enum SeatedShrugBackupError: LocalizedError {
+        case persistentStoreRequired, verificationFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .persistentStoreRequired: return "The workout store is unavailable for a fresh backup. No program changes were made."
+            case .verificationFailed: return "The fresh workout backup could not be verified. No program changes were made."
+            }
+        }
+    }
+
+    /// User-initiated, synchronous on the main actor: no UI write can interleave
+    /// between the fresh consolidated snapshot and the revision transaction.
+    /// Daily snapshots are intentionally not reused; they can predate today's work.
+    @MainActor
+    static func applySeatedShrugRevisionWithFreshBackup(
+        modelContext: ModelContext,
+        backupDirectory: URL? = nil,
+        snapshot: (URL, URL) throws -> Void = StoreBackupService.snapshot
+    ) throws -> SeatedShrugApplicationResult {
+        guard !modelContext.hasChanges else { throw ClusterRevisionError.pendingChanges }
+        if try modelContext.fetch(FetchDescriptor<TrainingPreference>()).contains(where: { $0.key == seatedShrugRevisionMarker }) {
+            return SeatedShrugApplicationResult(
+                revision: try prepareSeatedShrugClusterRevision(modelContext: modelContext), backupURL: nil)
+        }
+        guard !(try modelContext.fetch(FetchDescriptor<Session>())).contains(where: { $0.status == .draft }),
+              !(try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())).contains(where: { $0.status == .draft }) else {
+            throw ClusterRevisionError.draftHasWork
+        }
+        guard let storeURL = modelContext.container.configurations.first?.url,
+              FileManager.default.fileExists(atPath: storeURL.path) else {
+            throw SeatedShrugBackupError.persistentStoreRequired
+        }
+        let directory = try backupDirectory ?? FileManager.default.url(for: .documentDirectory,
+            in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("OpenLift/revision-backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let backupURL = directory.appendingPathComponent("before-alternating-shrugs-\(UUID().uuidString).sqlite")
+        // A unique, previously absent destination proves this attempt cannot
+        // accidentally accept a valid but stale daily recovery point.
+        guard !FileManager.default.fileExists(atPath: backupURL.path) else {
+            throw SeatedShrugBackupError.verificationFailed
+        }
+        do {
+            try snapshot(storeURL, backupURL)
+            guard StoreBackupService.isValidSnapshot(at: backupURL) else {
+                throw SeatedShrugBackupError.verificationFailed
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: backupURL)
+            throw error
+        }
+        // Retain the verified backup even if program validation refuses the
+        // revision. Completed history and any pending draft remain untouched.
+        let revision = try prepareSeatedShrugClusterRevision(modelContext: modelContext, backupConfirmed: true)
+        return SeatedShrugApplicationResult(revision: revision, backupURL: backupURL)
+    }
+
     /// Explicit, backup-gated content revision. No schema or completed history
     /// changes; existing v2 progression identities remain authoritative.
     @discardableResult
