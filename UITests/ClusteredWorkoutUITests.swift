@@ -1,6 +1,40 @@
 import XCTest
 
 final class ClusteredWorkoutUITests: OpenLiftUITestCase {
+    func testAlternatingShrugRevisionStartsBlankAndAdvancesOnlyCompletedThirdCluster() throws {
+        let app = launchApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_ADD_CLUSTERED_SHRUGS_2026_09_08"])
+        submitFixedReadiness(in: app)
+        let target = app.staticTexts["workout.shrugRepTarget"]
+        scrollToElement(target, in: app)
+        XCTAssertTrue(target.exists)
+        XCTAssertEqual(target.label, "Target: 12–16 reps")
+        let weight = app.textFields["fixed.weight.Seated Dumbbell Shrug.1"]
+        scrollToElement(weight, in: app)
+        XCTAssertTrue(weight.exists)
+        XCTAssertEqual(weight.value as? String, "Weight")
+        let second = app.textFields["fixed.weight.Seated Dumbbell Shrug.2"]
+        XCTAssertTrue(second.exists)
+        XCTAssertFalse(app.textFields["fixed.weight.Seated Dumbbell Shrug.3"].exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "fixed.resistanceProfile.Seated Dumbbell Shrug").firstMatch.exists)
+        weight.tap(); weight.typeText("45")
+        let reps = app.textFields["fixed.reps.Seated Dumbbell Shrug.1"]
+        reps.tap(); reps.typeText("14")
+        app.buttons["fixed.lock.Seated Dumbbell Shrug.1"].tap()
+        let complete = app.buttons["Complete Cluster 3"]
+        scrollToElement(complete, in: app); complete.tap()
+        let finish = app.buttons["Finish Workout"]
+        scrollToElement(finish, in: app); finish.tap()
+        let nextFirst = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-1").firstMatch
+        scrollToElement(nextFirst, in: app)
+        XCTAssertTrue(nextFirst.label.contains("Unchanged"))
+        XCTAssertTrue(nextFirst.label.contains("Next: A"))
+        let nextThird = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-3").firstMatch
+        scrollToElement(nextThird, in: app)
+        XCTAssertTrue(nextThird.label.contains("Advanced"))
+        XCTAssertTrue(nextThird.label.contains("Next: B"))
+        XCTAssertFalse(nextThird.label.contains("Shrug"), "The next forearm variant must remain shrug-free")
+    }
+
     func testClusteredGoingForwardSwapKeepsRowsEditableAndRequiresClusterCompletion() throws {
         let app = assertClusteredReplacementRowsAreEditable(
             scopeButton: "This Rotation Slot Going Forward"

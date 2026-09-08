@@ -97,7 +97,7 @@ The Cycle tab supports:
 
 Changing to a different active template requires confirmation.
 
-`Clustered Hypertrophy v1` and `v2` are internal versioned program templates rather
+`Clustered Hypertrophy v1`, `v2`, and `v3` are internal versioned program templates rather
 than a general editable template. The Cycle tab disables editing and cloning it,
 and rejects a published import that tries to replace its reserved name. Its
 three cluster state rows and stable progression identities are created only by
@@ -202,3 +202,23 @@ and only that movement's frozen name evidence in session
 `734246BD-22B9-4D6E-BF88-130B5144B28A`. It preserves the exercise UUID, sets, dates,
 profiles, progression key, and all other completed snapshots. The corrected
 session is marked pending and re-exported after the revision transaction.
+
+## Seated dumbbell shrug revision (v3)
+
+V3 adds **Seated Dumbbell Shrug** after the existing movements in **Cluster 3
+A/C/E** (canonical template positions 9/11/13). Those calf-day variants start
+with two shrug rows and a displayed target of 12–16 reps. B/D/F retain only their
+existing shoulder and forearm movements. This is every other Cluster 3 exposure,
+not a calendar schedule; there is no SLDL exclusion or missed-work catchup.
+
+The first shrug inputs are blank: no working load or completed performance is
+invented. All three shrug slots share one new traps progression identity. Later
+drafts repeat its literal completed row count, weights, and reps, so completing
+one row carries forward one row. The normal add/remove/skip behavior remains.
+
+Existing movements keep their v2 prescriptions, exact-slot substitutions,
+resistance profiles, and v1/v2 progression identities. All three independent raw
+pointers are copied unchanged; activation neither advances a cluster nor forces
+an immediate shrug exposure. V1/v2 templates, preferences, pointers, and completed
+history remain archived. Apply only through the explicit, backup-gated
+[v3 content revision](migration-safety.md#seated-shrug-content-revision-v3).

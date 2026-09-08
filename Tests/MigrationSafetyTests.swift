@@ -1993,6 +1993,84 @@ final class MigrationSafetyTests: XCTestCase {
 }
 
 extension MigrationSafetyTests {
+    /// Never opens the supplied backup: only a second scratch copy is writable.
+    func testCopiedRealStoreSeatedShrugRevisionWhenOptedIn() throws {
+        let documents = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
+        let supplied = documents.appendingPathComponent("OpenLiftCopiedShrugRevisionStore", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: supplied.appendingPathComponent("default.store").path) else {
+            throw XCTSkip("Stage a verified v2 store copy in Documents/OpenLiftCopiedShrugRevisionStore.")
+        }
+        let manifest = try completeStoreManifest(in: supplied)
+        let fixture = try makeFixtureDirectories()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try copyDirectoryContents(from: supplied, to: fixture.working)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
+            configurations: [ModelConfiguration("ShrugRevisionCopy", schema: schema,
+                url: fixture.working.appendingPathComponent("default.store"), cloudKitDatabase: .none)])
+        let context = ModelContext(container)
+        typealias Program = FixedCycleClusterProgramService
+        let oldTemplates = try context.fetch(FetchDescriptor<CycleTemplate>())
+        let cycle = try XCTUnwrap(try context.fetch(FetchDescriptor<ActiveCycleInstance>()).first {
+            cycle in oldTemplates.contains { $0.id == cycle.templateId && Program.versionID(for: $0) == Program.revisionVersionID }
+        })
+        let old = try XCTUnwrap(oldTemplates.first { $0.id == cycle.templateId })
+        func rows() throws -> [String] {
+            try context.fetch(FetchDescriptor<SetEntry>()).map {
+                "\($0.id)|\($0.sessionId)|\($0.exerciseId)|\($0.setIndex)|\($0.weight)|\($0.reps)|\($0.isLocked)|\(String(describing: $0.lockedAt))"
+            }.sorted()
+        }
+        func pointers() throws -> [String] {
+            try context.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.programVersionID != Program.shrugVersionID }.map {
+                "\($0.id)|\($0.cycleInstanceId)|\($0.templateId)|\($0.programVersionID)|\($0.clusterID)|\($0.positionIndex)|\($0.updatedAt)|\(String(describing: $0.lastCompletedOccurrenceID))|\($0.isDerived)"
+            }.sorted()
+        }
+        func templateShapes() -> [String] {
+            oldTemplates.flatMap { template in template.days.flatMap { day in day.slots.map {
+                "\(template.id)|\(template.name)|\(day.position)|\(day.label)|\($0.position)|\($0.muscle.rawValue)|\($0.exerciseId)|\($0.defaultSetCount)"
+            } } }.sorted()
+        }
+        let beforeRows = try rows()
+        let beforePointers = try pointers()
+        let beforeTemplates = templateShapes()
+        let beforeSessionIDs = try context.fetch(FetchDescriptor<Session>()).map(\.id).sorted { $0.uuidString < $1.uuidString }
+        let beforeOccurrences = try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        let beforeSnapshots = Dictionary(uniqueKeysWithValues: beforeOccurrences.map { ($0.id, $0.exerciseSnapshots) })
+        let beforeProfiles = ResistanceProfileService.snapshots(try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())).sorted { $0.id.uuidString < $1.id.uuidString }
+        let beforePreferences = try context.fetch(FetchDescriptor<ClusterExercisePreference>()).filter { $0.programVersionID == Program.revisionVersionID }
+        let beforeOverrideIDs = try context.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>()).map(\.id).sorted { $0.uuidString < $1.uuidString }
+        let oldStates = try context.fetch(FetchDescriptor<ClusterRotationState>()).filter {
+            $0.cycleInstanceId == cycle.id && $0.templateId == old.id && $0.programVersionID == Program.revisionVersionID
+        }.sorted { $0.clusterID < $1.clusterID }
+        let expectedPositions = oldStates.map(\.positionIndex)
+        let result = try BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: context, backupConfirmed: true)
+        XCTAssertTrue(result.didApply)
+        XCTAssertEqual(result.cycleId, cycle.id)
+        XCTAssertEqual(try rows(), beforeRows)
+        XCTAssertEqual(try pointers(), beforePointers)
+        XCTAssertEqual(templateShapes(), beforeTemplates)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).map(\.id).sorted { $0.uuidString < $1.uuidString }, beforeSessionIDs)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).map { ($0.id, $0.exerciseSnapshots) }), beforeSnapshots)
+        XCTAssertEqual(ResistanceProfileService.snapshots(try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())).sorted { $0.id.uuidString < $1.id.uuidString }, beforeProfiles)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>()).map(\.id).sorted { $0.uuidString < $1.uuidString }, beforeOverrideIDs)
+        let template = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == result.templateId })
+        let states = try context.fetch(FetchDescriptor<ClusterRotationState>())
+        XCTAssertEqual(try Program.selections(template: template, cycleInstanceId: result.cycleId, states: states).map(\.absoluteStep), expectedPositions)
+        let shrugDays = template.days.filter { $0.slots.contains { $0.muscle == .traps } }.sorted { $0.position < $1.position }
+        XCTAssertEqual(shrugDays.map(\.position), [9, 11, 13])
+        XCTAssertEqual(shrugDays.compactMap { $0.slots.first { $0.muscle == .traps }?.defaultSetCount }, [2, 2, 2])
+        let newPreferences = try context.fetch(FetchDescriptor<ClusterExercisePreference>()).filter { $0.programVersionID == Program.shrugVersionID }
+        XCTAssertEqual(newPreferences.count, beforePreferences.count)
+        for old in beforePreferences {
+            let copy = try XCTUnwrap(newPreferences.first { $0.templateDayPosition == old.templateDayPosition && $0.slotPosition == old.slotPosition })
+            XCTAssertEqual(copy.exerciseId, old.exerciseId)
+            XCTAssertEqual(copy.updatedAt, old.updatedAt)
+        }
+        XCTAssertFalse(try BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: context).didApply)
+        XCTAssertEqual(try completeStoreManifest(in: supplied), manifest)
+        print("OPENLIFT_COPIED_SHRUG_REVISION_VERIFIED sessions=\(beforeSessionIDs.count) sets=\(beforeRows.count) occurrences=\(beforeSnapshots.count) \(try BootstrapDataService.seatedShrugRevisionAudit(modelContext: context))")
+    }
+
     /// Service-only opt-in: no app launch arguments, no export calls and no
     /// network writes. The supplied backup is copied before SwiftData opens it.
     func testCopiedRealStoreSeptember2026RevisionWhenOptedIn() throws {

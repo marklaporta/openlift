@@ -1477,6 +1477,13 @@ struct WorkoutView: View {
                                 slotPosition: slot.position,
                                 overrides: clusterExerciseOverrides
                             ) != nil
+                        if key == FixedCycleClusterProgramService.shrugProgressionKey,
+                           exercise?.name == FixedCycleClusterProgramService.shrugExerciseName {
+                            Text("Target: 12–16 reps")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("workout.shrugRepTarget")
+                        }
                         ExerciseSection(
                             slot: slot,
                             exercise: exercise,
