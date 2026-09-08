@@ -205,7 +205,7 @@ session is marked pending and re-exported after the revision transaction.
 
 ## Seated dumbbell shrug revision (v3)
 
-V3 adds **Seated Dumbbell Shrug** after the existing movements in **Cluster 3
+V3 adds **Seated Dumbbell Shrugs** after the existing movements in **Cluster 3
 A/C/E** (canonical template positions 9/11/13). Those calf-day variants start
 with two shrug rows and a displayed target of 12–16 reps. B/D/F retain only their
 existing shoulder and forearm movements. This is every other Cluster 3 exposure,
@@ -222,5 +222,10 @@ pointers are copied unchanged; activation neither advances a cluster nor forces
 an immediate shrug exposure. V1/v2 templates, preferences, pointers, and completed
 history remain archived. Apply only through the explicit, backup-gated
 [v3 content revision](migration-safety.md#seated-shrug-content-revision-v3):
-finish the current workout, then use **Cycle → Add alternating shrugs**. The app
+finish the current workout, then use **Cycle → Add Seated Dumbbell Shrugs**. The app
 makes and verifies a fresh pre-revision store snapshot before applying.
+
+Catalog bootstrap corrects the former singular label to **Seated Dumbbell
+Shrugs** using the same exercise UUID. It leaves existing slots, draft/completed
+sets, progression keys and frozen historical names unchanged. Old singular-name
+exports remain an import alias; conflicting existing identities are not merged.

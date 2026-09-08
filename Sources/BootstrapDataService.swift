@@ -188,12 +188,23 @@ enum BootstrapDataService {
         saveChanges: Bool = true
     ) throws -> [Exercise] {
         var currentExercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        // Label correction only: retain the seeded UUID referenced by templates,
+        // drafts and completed work. Never merge two existing exercise identities.
+        let oldShrugs = currentExercises.filter { $0.name.caseInsensitiveCompare("Seated Dumbbell Shrug") == .orderedSame }
+        let namedShrugs = currentExercises.filter { $0.name.caseInsensitiveCompare(FixedCycleClusterProgramService.shrugExerciseName) == .orderedSame }
+        guard oldShrugs.count <= 1, oldShrugs.isEmpty || namedShrugs.isEmpty else {
+            throw ExerciseCatalogError.duplicateName(FixedCycleClusterProgramService.shrugExerciseName)
+        }
+        var changed = false
+        if let old = oldShrugs.first {
+            old.name = FixedCycleClusterProgramService.shrugExerciseName
+            changed = true
+        }
         let currentNames = Set(currentExercises.map { $0.name.lowercased() })
         let defaultsByName = Dictionary(
             uniqueKeysWithValues: defaultExerciseCatalog.map { ($0.0.lowercased(), $0) }
         )
 
-        var changed = false
         for exercise in currentExercises {
             guard let canonical = defaultsByName[exercise.name.lowercased()] else { continue }
             if exercise.primaryMuscle != canonical.1 {
@@ -1220,6 +1231,8 @@ enum BootstrapDataService {
         switch canonical {
         case "safetybarsquat", "safetysquatbarsquat":
             return ["safetybarsquat", "safetysquatbarsquat"]
+        case "seateddumbbellshrug", "seateddumbbellshrugs":
+            return ["seateddumbbellshrug", "seateddumbbellshrugs"]
         case "stifflegdeadlift", "stiffleggedeadlift", "sldl":
             return ["stifflegdeadlift", "stiffleggedeadlift", "sldl"]
         case "singlearmdumbbellrow", "singlearmdumbellrow", "singlearmdbrow":
@@ -2465,7 +2478,7 @@ enum BootstrapDataService {
         ("Arnold Lateral Raise", .sideDelts, .isolation, .dumbbell),
         ("Dumbbell Lateral Raise", .sideDelts, .isolation, .dumbbell),
         ("Machine Lateral Raise", .sideDelts, .isolation, .machine),
-        ("Seated Dumbbell Shrug", .traps, .isolation, .dumbbell),
+        ("Seated Dumbbell Shrugs", .traps, .isolation, .dumbbell),
         ("Reverse Curl", .forearms, .isolation, .barbell),
         ("Bench-Supported Cable Wrist Curl (Supinated)", .forearms, .isolation, .cable),
         ("Bench-Supported Cable Wrist Extension (Pronated)", .forearms, .isolation, .cable),
@@ -2565,7 +2578,7 @@ enum FixedCycleClusterProgramService {
     static let shrugVersionID = "\(programIdentifier).v3"
     static let shrugTemplateName = "Clustered Hypertrophy v3"
     static let shrugIdentityKey = "openlift_clustered_hypertrophy_v3"
-    static let shrugExerciseName = "Seated Dumbbell Shrug"
+    static let shrugExerciseName = "Seated Dumbbell Shrugs"
     static let shrugProgressionKey = "\(shrugVersionID).cluster-3.traps.seated-dumbbell-shrug"
 
     static func isReservedTemplateName(_ name: String) -> Bool {

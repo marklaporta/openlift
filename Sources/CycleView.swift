@@ -78,10 +78,10 @@ struct CycleView: View {
                             .onTapGesture { recordDebugTap() }
                         if FixedCycleClusterProgramService.isProgramTemplate(activeTemplate),
                            FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.revisionVersionID {
-                            Text("Add 2 sets of seated dumbbell shrugs on calf days (Cluster 3 A/C/E).")
+                            Text("Add 2 sets of Seated Dumbbell Shrugs on calf days (Cluster 3 A/C/E).")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
-                            Button("Add alternating shrugs") { addAlternatingShrugs() }
+                            Button("Add Seated Dumbbell Shrugs") { addAlternatingShrugs() }
                                 .buttonStyle(.borderedProminent)
                                 .accessibilityIdentifier("cycle.addAlternatingShrugs")
                                 .disabled(hasPendingWorkout)
@@ -93,7 +93,7 @@ struct CycleView: View {
                             }
                         }
                         if didAddAlternatingShrugs {
-                            Label("Alternating seated shrugs added.", systemImage: "checkmark.circle.fill")
+                            Label("Seated Dumbbell Shrugs added.", systemImage: "checkmark.circle.fill")
                                 .foregroundStyle(.green)
                                 .accessibilityIdentifier("cycle.shrugUpdateSuccess")
                         }

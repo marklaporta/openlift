@@ -35,7 +35,7 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         scrollToElement(nextThird, in: app)
         XCTAssertTrue(nextThird.label.contains("Unchanged"))
         XCTAssertTrue(nextThird.label.contains("Next: A"))
-        XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrug"))
+        XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrugs"))
     }
 
     func testAlternatingShrugRevisionStartsBlankAndAdvancesOnlyCompletedThirdCluster() throws {
@@ -45,18 +45,18 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         scrollToElement(target, in: app)
         XCTAssertTrue(target.exists)
         XCTAssertEqual(target.label, "Target: 12–16 reps")
-        let weight = app.textFields["fixed.weight.Seated Dumbbell Shrug.1"]
+        let weight = app.textFields["fixed.weight.Seated Dumbbell Shrugs.1"]
         scrollToElement(weight, in: app)
         XCTAssertTrue(weight.exists)
         XCTAssertEqual(weight.value as? String, "Weight")
-        let second = app.textFields["fixed.weight.Seated Dumbbell Shrug.2"]
+        let second = app.textFields["fixed.weight.Seated Dumbbell Shrugs.2"]
         XCTAssertTrue(second.exists)
-        XCTAssertFalse(app.textFields["fixed.weight.Seated Dumbbell Shrug.3"].exists)
-        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "fixed.resistanceProfile.Seated Dumbbell Shrug").firstMatch.exists)
+        XCTAssertFalse(app.textFields["fixed.weight.Seated Dumbbell Shrugs.3"].exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "fixed.resistanceProfile.Seated Dumbbell Shrugs").firstMatch.exists)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Seated Dumbbell Shrug.1"]
+        let reps = app.textFields["fixed.reps.Seated Dumbbell Shrugs.1"]
         reps.tap(); reps.typeText("14")
-        app.buttons["fixed.lock.Seated Dumbbell Shrug.1"].tap()
+        app.buttons["fixed.lock.Seated Dumbbell Shrugs.1"].tap()
         let complete = app.buttons["Complete Cluster 3"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]
