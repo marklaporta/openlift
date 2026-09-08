@@ -49,6 +49,12 @@ struct LogWorkoutView: View {
                                 Text(exercise.name).tag(exercise.id)
                             }
                         }
+                        .accessibilityIdentifier("log.exercisePicker")
+
+                        if let exercise = exercises.first(where: { $0.id == exerciseDraft.exerciseId }) {
+                            ExerciseNotesControl(exercise: exercise)
+                                .id(exercise.id)
+                        }
 
                         Button("Create New Exercise…") {
                             newExerciseRequest = NewExerciseRequest(draftId: exerciseDraft.id)
