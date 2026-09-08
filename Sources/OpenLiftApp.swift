@@ -200,6 +200,16 @@ struct OpenLiftApp: App {
                 print("OPENLIFT_VOLTRA_BACKFILL_FAILED \(error.localizedDescription)")
             }
         }
+        if startup.issue == nil, !AppRuntime.isUITesting {
+            do {
+                let result = try ExerciseSetupNotesMigration.runAtStartup(
+                    modelContext: ModelContext(startup.container)
+                )
+                print("OPENLIFT_EXERCISE_SETUP_NOTES_RESULT status=\(result.status.rawValue) updated=\(result.updatedCount)")
+            } catch {
+                print("OPENLIFT_EXERCISE_SETUP_NOTES_FAILED \(error.localizedDescription)")
+            }
+        }
         return startup
     }()
 

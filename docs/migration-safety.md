@@ -337,3 +337,28 @@ missing versioned template needed by frozen history. Preferences and pointers
 stay in their original version namespaces; older v2 retries cannot downgrade an
 active v3 template. Shrug occurrences preserve their new shared progression key
 and literal performed rows through export and hydration.
+
+## September 8 exercise setup-note import
+
+`ExerciseSetupNotesMigration` reuses `Exercise.notes` and the existing
+`TrainingPreference` marker model; no schema change. The startup import requires
+all four reviewed exercise IDs and exact canonical names, a clean context, and a
+fresh integrity-checked consolidated backup. Notes and completion marker commit
+atomically. Existing nonblank notes win; edits and clears after completion
+survive relaunch and full-store restoration without reseeding.
+
+For an opt-in real-store check, copy a verified `default.store` and its matching
+`-wal`/`-shm` sidecars into the owned test simulator app's
+`Documents/OpenLiftCopiedSetupNotesStore` (never replace its live store), then run:
+
+```bash
+python3 scripts/test.py unit ExerciseSetupNotesMigrationTests/testCopiedRealStoreSetupNotesWhenOptedIn
+```
+
+The test creates another disposable copy before opening it, verifies the fresh
+backup's complete logical rows, and compares every unrelated entity/relationship
+table before and after import, including sessions, sets and rotation state.
+Only the four notes, completion marker and Core Data bookkeeping may change.
+It also verifies the staged source hashes and no-op repeat launch. Without a
+staged fixture this test skips; fixture-only checks run with
+`python3 scripts/test.py unit ExerciseSetupNotesMigrationTests ExerciseNotesTests`.
