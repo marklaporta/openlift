@@ -221,6 +221,61 @@ final class SeatedShrugRevisionTests: XCTestCase {
         XCTAssertFalse(try f.context.fetch(FetchDescriptor<CycleTemplate>()).contains { $0.name == Program.shrugTemplateName })
     }
 
+    func testCatalogLabelCorrectionKeepsExistingV3IdentityDraftAndFrozenHistory() throws {
+        let f = try fixture()
+        let result = try BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: f.context, backupConfirmed: true)
+        let template = try XCTUnwrap(try f.context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == result.templateId })
+        let shrug = try XCTUnwrap(f.exercises.first { $0.name == Program.shrugExerciseName })
+        shrug.name = "Seated Dumbbell Shrug" // Shipped catalog spelling.
+        try f.context.save()
+        _ = try completeSession(context: f.context, template: template, cycle: f.cycle, exercises: f.exercises, timestamp: 3_000)
+        _ = try completeSession(context: f.context, template: template, cycle: f.cycle, exercises: f.exercises, timestamp: 4_000)
+        let draft = Session(cycleInstanceId: f.cycle.id, cycleDayIndex: 0, status: .draft)
+        f.context.insert(draft)
+        f.context.insert(SetEntry(sessionId: draft.id, exerciseId: shrug.id, setIndex: 1, weight: 65, reps: 13))
+        try f.context.save()
+        let beforeHistory = try history(f.context)
+        XCTAssertTrue(beforeHistory.values.flatMap { $0 }.contains { $0.exerciseName == "Seated Dumbbell Shrug" })
+        let beforeRows = try rows(f.context)
+        let beforeShape = templateShape(template)
+        let beforePointers = try f.context.fetch(FetchDescriptor<ClusterRotationState>()).map {
+            "\($0.id)|\($0.programVersionID)|\($0.positionIndex)|\($0.updatedAt)|\(String(describing: $0.lastCompletedOccurrenceID))"
+        }.sorted()
+        let count = f.exercises.count
+        _ = try BootstrapDataService.ensureExerciseCatalog(modelContext: f.context)
+        let renamed = try BootstrapDataService.ensureExerciseCatalog(modelContext: f.context)
+        XCTAssertEqual(renamed.count, count)
+        XCTAssertEqual(renamed.filter { $0.name == "Seated Dumbbell Shrugs" }.map(\.id), [shrug.id])
+        XCTAssertFalse(renamed.contains { $0.name == "Seated Dumbbell Shrug" })
+        XCTAssertEqual(templateShape(template), beforeShape)
+        XCTAssertEqual(try history(f.context), beforeHistory)
+        XCTAssertEqual(try rows(f.context), beforeRows)
+        XCTAssertEqual(try f.context.fetch(FetchDescriptor<ClusterRotationState>()).map {
+            "\($0.id)|\($0.programVersionID)|\($0.positionIndex)|\($0.updatedAt)|\(String(describing: $0.lastCompletedOccurrenceID))"
+        }.sorted(), beforePointers)
+        XCTAssertEqual(f.cycle.templateId, template.id)
+        XCTAssertEqual(draft.status, .draft)
+        XCTAssertEqual(Program.shrugProgressionKey, "openlift.clustered-hypertrophy.v3.cluster-3.traps.seated-dumbbell-shrug")
+        let byID = Dictionary(uniqueKeysWithValues: renamed.map { ($0.id, $0) })
+        let byName = Dictionary(uniqueKeysWithValues: renamed.map { ($0.name.lowercased(), $0) })
+        XCTAssertEqual(BootstrapDataService.resolveImportedExercise(id: nil, name: "Seated Dumbbell Shrug", byId: byID, byName: byName)?.id, shrug.id)
+        XCTAssertEqual(BootstrapDataService.resolveImportedExercise(id: nil, name: "Seated Dumbbell Shrugs", byId: byID, byName: byName)?.id, shrug.id)
+    }
+
+    func testCatalogLabelCorrectionRefusesToMergeTwoExistingIdentities() throws {
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+        let context = ModelContext(container)
+        let old = Exercise(name: "Seated Dumbbell Shrug", primaryMuscle: .traps, type: .isolation, equipment: .dumbbell)
+        let current = Exercise(name: "Seated Dumbbell Shrugs", primaryMuscle: .traps, type: .isolation, equipment: .dumbbell)
+        context.insert(old); context.insert(current)
+        try context.save()
+        XCTAssertThrowsError(try BootstrapDataService.ensureExerciseCatalog(modelContext: context))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Exercise>()).count, 2)
+        XCTAssertEqual(old.name, "Seated Dumbbell Shrug")
+        XCTAssertEqual(current.name, "Seated Dumbbell Shrugs")
+        XCTAssertFalse(context.hasChanges)
+    }
+
     func testThreeVersionExportHydrationRetainsShrugsProfilesAndArchivedHistory() throws {
         let f = try fixture()
         let result = try BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: f.context, backupConfirmed: true)

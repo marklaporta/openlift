@@ -284,7 +284,7 @@ conflicting v3 state; failure rolls the transaction back.
 
 ### On-device activation
 
-After finishing the current workout, open **Cycle → Add alternating shrugs**.
+After finishing the current workout, open **Cycle → Add Seated Dumbbell Shrugs**.
 The action is available only for an active v2 program and is disabled while any
 Fixed/Adaptive draft exists. It never discards a draft or manufactures a skipped
 workout to make the revision eligible.
