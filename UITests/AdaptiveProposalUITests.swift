@@ -58,14 +58,11 @@ final class AdaptiveProposalUITests: OpenLiftUITestCase {
         generatePlan.tap()
 
         let proposedPlan = app.staticTexts["2 · Design"]
-        for _ in 0..<4 {
-            if proposedPlan.isHittable { break }
-            app.swipeDown()
-        }
+        scrollToElement(proposedPlan, in: app, toward: .top)
         XCTAssertTrue(proposedPlan.waitForExistence(timeout: 5))
-        for exercise in ["Flat Dumbbell Press", "Cable Row"] {
+        for (exercise, direction) in [("Flat Dumbbell Press", ScrollDestination.bottom), ("Cable Row", .top)] {
             let plannedExercise = app.staticTexts[exercise]
-            scrollToElement(plannedExercise, in: app)
+            scrollToElement(plannedExercise, in: app, toward: direction)
             XCTAssertTrue(plannedExercise.exists)
         }
 

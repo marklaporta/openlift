@@ -1,17 +1,9 @@
 import XCTest
 
-// This end-to-end walk is one test of ~215s and is the longest class in the suite, so
-// it sets the parallel floor. Splitting it into four phase classes was tried and
-// measured worse, because XCUITest gives each test a fresh app launch: every phase has
-// to re-run the setup of the phases before it, and the adaptive path's setup is most of
-// its cost. Total test work went from ~640s to ~925s, which no worker count recovered.
-//
-//   one class,  3 workers   296-301s (green)
-//   four classes, 3 workers      473s (green)
-//   four classes, 5 workers      363s (green)
-//
-// Lowering the floor is only worth it if the phases can be entered directly via a launch
-// argument rather than replayed through the UI. Until then, keep this whole.
+// Keep this end-to-end walk whole. A prior experiment split it into four phase
+// classes, but each fresh app launch replayed all earlier setup: aggregate test
+// work grew from ~640s to ~925s and parallel wall time got worse. Balance truly
+// independent flows across classes instead of replaying this workflow's phases.
 final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
     func testAdaptiveWorkoutReadinessPreviewFreezeLockAndComplete() throws {
         let app = launchApp(["OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW"])
@@ -100,7 +92,7 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
         useWorkout.tap()
 
         let executePhase = app.staticTexts["3 · Execute"]
-        scrollToElement(executePhase, in: app)
+        scrollToElement(executePhase, in: app, toward: .top)
         let executeAddComplex = app.buttons["adaptive.addComplex.execute"]
         XCTAssertTrue(executeAddComplex.waitForExistence(timeout: 5))
         executeAddComplex.tap()
@@ -135,7 +127,7 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
         XCTAssertEqual(correctedReps.value as? String, "10")
 
         let addToFrozen = app.buttons["Add exercise to Chest"].firstMatch
-        scrollToElement(addToFrozen, in: app)
+        scrollToElement(addToFrozen, in: app, toward: .top)
         addToFrozen.tap()
         XCTAssertTrue(app.navigationBars["Add Movement"].waitForExistence(timeout: 5))
         let addedAfterFreeze = app.buttons["Flat Dumbbell Press"].firstMatch
@@ -149,7 +141,7 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
         editFrozen.tap()
         app.buttons["Move Earlier"].tap()
         let editMoved = app.descendants(matching: .any)["Edit Flat Dumbbell Press"].firstMatch
-        scrollToElement(editMoved, in: app)
+        scrollToElement(editMoved, in: app, toward: .top)
         editMoved.tap()
         app.buttons["Skip"].tap()
         let restoreAddedAfterFreeze = app.buttons["Restore Flat Dumbbell Press"].firstMatch
