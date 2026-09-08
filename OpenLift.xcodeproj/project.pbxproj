@@ -28,6 +28,7 @@
 		F10000000000000000000001 /* OpenLiftSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* OpenLiftSchema.swift */; };
 		F10000000000000000000003 /* ExerciseCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000003 /* ExerciseCatalogService.swift */; };
 		F10000000000000000000048 /* ExerciseNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000048 /* ExerciseNotesView.swift */; };
+		F10000000000000000000050 /* ExerciseSetupNotesMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000050 /* ExerciseSetupNotesMigration.swift */; };
 		F10000000000000000000005 /* TrainingModeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000005 /* TrainingModeService.swift */; };
 		F10000000000000000000042 /* StoreBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000042 /* StoreBackupService.swift */; };
 		F10000000000000000000044 /* ResistanceProfileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000044 /* ResistanceProfileService.swift */; };
@@ -88,6 +89,7 @@
 		F20000000000000000000001 /* OpenLiftSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenLiftSchema.swift; sourceTree = "<group>"; };
 		F20000000000000000000003 /* ExerciseCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseCatalogService.swift; sourceTree = "<group>"; };
 		F20000000000000000000048 /* ExerciseNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseNotesView.swift; sourceTree = "<group>"; };
+		F20000000000000000000050 /* ExerciseSetupNotesMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExerciseSetupNotesMigration.swift; sourceTree = "<group>"; };
 		F20000000000000000000005 /* TrainingModeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingModeService.swift; sourceTree = "<group>"; };
 		F20000000000000000000042 /* StoreBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreBackupService.swift; sourceTree = "<group>"; };
 		F20000000000000000000044 /* ResistanceProfileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResistanceProfileService.swift; sourceTree = "<group>"; };
@@ -161,6 +163,7 @@
 				3A276F5E5098E9F746A85B25 /* ExerciseSwapService.swift */,
 				F20000000000000000000003 /* ExerciseCatalogService.swift */,
 				F20000000000000000000048 /* ExerciseNotesView.swift */,
+				F20000000000000000000050 /* ExerciseSetupNotesMigration.swift */,
 				36BC97ACBFC2F3135919BE0C /* HistoryView.swift */,
 				E7E50088A602E2773296E6DD /* ImportView.swift */,
 				A22222222222222222222222 /* LogWorkoutView.swift */,
@@ -324,6 +327,7 @@
 				5631A4B67B638E84567D4DA4 /* ExerciseSwapService.swift in Sources */,
 				F10000000000000000000003 /* ExerciseCatalogService.swift in Sources */,
 				F10000000000000000000048 /* ExerciseNotesView.swift in Sources */,
+				F10000000000000000000050 /* ExerciseSetupNotesMigration.swift in Sources */,
 				70C2298C3C511DC074837077 /* HistoryView.swift in Sources */,
 				1F6E588A059838A62777CE81 /* ImportView.swift in Sources */,
 				A11111111111111111111111 /* LogWorkoutView.swift in Sources */,

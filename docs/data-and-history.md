@@ -40,6 +40,15 @@ workout-program change is required. Notes survive app restarts and full-store
 backup/restore; workout JSON exports remain performance evidence and do not
 include these mutable catalog notes.
 
+The September 8 setup-note import runs once on the reviewed existing catalog IDs
+only. It fills four blank notes, preserves nonblank notes verbatim, and saves an
+in-store `TrainingPreference` completion marker in the same transaction. Later
+edits or clears are never reseeded. A fresh verified full-store snapshot under
+`Documents/OpenLift/revision-backups/before-exercise-setup-notes-*.sqlite` is
+required before any mutation. Snapshot/save failure leaves the marker absent
+and retries on a later launch; other catalogs are unchanged. No program,
+rotation, session, set, or resistance-profile data is modified.
+
 ## Resistance units and recovery
 
 V15 adds optional `chainPounds` and `eccentricPounds` to occurrence profiles.
