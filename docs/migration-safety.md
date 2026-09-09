@@ -362,3 +362,23 @@ Only the four notes, completion marker and Core Data bookkeeping may change.
 It also verifies the staged source hashes and no-op repeat launch. Without a
 staged fixture this test skips; fixture-only checks run with
 `python3 scripts/test.py unit ExerciseSetupNotesMigrationTests ExerciseNotesTests`.
+
+## September 8 v3 squat placement swap
+
+`applyClusterSquatSwapWithFreshBackup` requires a clean, draft-free v3 store and
+verifies a fresh consolidated snapshot before atomically writing only the two
+D/F leg preferences. Unsupported template contents or unrelated substitutions
+on either target slot fail closed. An already-applied pair is a no-op. There is
+no schema change, new version, history rewrite or normal-startup activation.
+
+The Cycle button and explicit `OPENLIFT_SWAP_CLUSTERED_SQUATS_2026_09_08` launch
+argument call the same backup-gated operation. The read-only
+`OPENLIFT_AUDIT_CLUSTERED_SQUAT_SWAP` argument reports all A–F effective leg names,
+progression keys and prescribed rows alongside v3 pointers and shrug placement.
+
+Stage a verified v3 store and matching sidecars in the owned simulator app's
+`Documents/OpenLiftCopiedSquatSwapStore`, then run
+`ClusterSquatSwapTests/testCopiedRealStoreSquatSwapWhenOptedIn`. The test opens
+another disposable copy, preserving the supplied backup. Focused tests verify
+backup failure, pending edits/drafts, idempotence, untouched templates/history/
+profiles/pointers/notes, and same-exercise progression across the swap.

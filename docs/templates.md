@@ -229,3 +229,17 @@ Catalog bootstrap corrects the former singular label to **Seated Dumbbell
 Shrugs** using the same exercise UUID. It leaves existing slots, draft/completed
 sets, progression keys and frozen historical names unchanged. Old singular-name
 exports remain an import alias; conflicting existing identities are not merged.
+
+## Safety-bar/Bulgarian placement swap (v3 preferences)
+
+**Cycle → Swap Safety Bar Squat & Bulgarians** keeps v3 and swaps only Cluster 2
+D/F through durable exact-slot preferences. The resulting leg order A–F is
+Leg Curl, Belt Squat, Stiff-Leg Deadlift, Bulgarian Split Squat, Back Extension,
+Safety Bar Squat. This separates the two major spinal-loading movements, SLDL
+and Safety Bar Squat, without changing the other lanes or advancing a pointer.
+
+Both original squat UUIDs retain their original progression keys at D/F, so
+same-exercise completed row counts, loads and reps follow the movement. Other
+substitutions retain slot isolation. Canonical templates, completed occurrence
+snapshots, notes and resistance profiles are unchanged. The preference payload
+already supported by JSON export/recovery carries the new placement.

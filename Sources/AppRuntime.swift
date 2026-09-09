@@ -26,6 +26,12 @@ enum AppRuntime {
     static let seatedShrugRevisionBackupIsConfirmed = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_CLUSTERED_SHRUGS_BACKUP_CONFIRMED"
     )
+    static let shouldSwapClusterSquats = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_SWAP_CLUSTERED_SQUATS_2026_09_08"
+    )
+    static let shouldAuditClusterSquatSwap = ProcessInfo.processInfo.arguments.contains(
+        "OPENLIFT_AUDIT_CLUSTERED_SQUAT_SWAP"
+    )
     static let shouldAuditSeatedShrugRevision = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_AUDIT_CLUSTERED_SHRUGS"
     )

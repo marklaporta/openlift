@@ -201,3 +201,116 @@ extension BootstrapDataService {
               states.allSatisfy({ $0.positionIndex >= 0 }) else { throw ClusterRevisionError.invalidState }
     }
 }
+
+extension BootstrapDataService {
+    struct ClusterSquatSwapResult {
+        let didApply: Bool
+        let backupURL: URL?
+    }
+
+    /// Two exact-slot overlays, not a new template or program version. The
+    /// existing v3 template remains the recovery authority for source identities.
+    @MainActor
+    static func applyClusterSquatSwapWithFreshBackup(
+        modelContext: ModelContext,
+        backupDirectory: URL? = nil,
+        snapshot: (URL, URL) throws -> Void = StoreBackupService.snapshot
+    ) throws -> ClusterSquatSwapResult {
+        guard !modelContext.hasChanges else { throw ClusterRevisionError.pendingChanges }
+        typealias Program = FixedCycleClusterProgramService
+        let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let cycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>()).filter { cycle in
+            templates.contains { $0.id == cycle.templateId && Program.isProgramTemplate($0) }
+        }
+        guard cycles.count == 1, let cycle = cycles.first,
+              let template = templates.first(where: { $0.id == cycle.templateId }),
+              Program.versionID(for: template) == Program.shrugVersionID else { throw ClusterRevisionError.invalidState }
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        guard let d = template.days.first(where: { $0.position == 6 })?.slots.first(where: { $0.position == 0 }),
+              let f = template.days.first(where: { $0.position == 8 })?.slots.first(where: { $0.position == 0 }),
+              exercises.first(where: { $0.id == d.exerciseId })?.name == "Safety Bar Squat",
+              exercises.first(where: { $0.id == f.exerciseId })?.name == "Bulgarian Split Squat" else {
+            throw ClusterRevisionError.invalidState
+        }
+        let preferences = try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>())
+        let targets = [(6, f.exerciseId, d.exerciseId), (8, d.exerciseId, f.exerciseId)]
+        var ids = Program.persistentExerciseIDsByKey(preferences: preferences, programVersionID: Program.shrugVersionID)
+        var changed = false
+        for (position, target, original) in targets {
+            let key = ClusterExercisePreference.key(programVersionID: Program.shrugVersionID,
+                templateDayPosition: position, slotPosition: 0)
+            guard preferences.filter({ $0.key == key }).count <= 1,
+                  ids[key] == nil || ids[key] == original || ids[key] == target else { throw ClusterRevisionError.invalidState }
+            changed = changed || ids[key] != target
+            ids[key] = target
+        }
+        try Program.validatePersistentExercisePreferences(template: template, exerciseIDsByPreferenceKey: ids)
+        guard changed else { return ClusterSquatSwapResult(didApply: false, backupURL: nil) }
+        guard !(try modelContext.fetch(FetchDescriptor<Session>())).contains(where: { $0.status == .draft }),
+              !(try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())).contains(where: { $0.status == .draft }) else {
+            throw ClusterRevisionError.draftHasWork
+        }
+        guard let storeURL = modelContext.container.configurations.first?.url,
+              FileManager.default.fileExists(atPath: storeURL.path) else { throw SeatedShrugBackupError.persistentStoreRequired }
+        let directory = try backupDirectory ?? FileManager.default.url(for: .documentDirectory,
+            in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("OpenLift/revision-backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let backupURL = directory.appendingPathComponent("before-squat-swap-\(UUID().uuidString).sqlite")
+        guard !FileManager.default.fileExists(atPath: backupURL.path) else { throw SeatedShrugBackupError.verificationFailed }
+        do {
+            try snapshot(storeURL, backupURL)
+            guard StoreBackupService.isValidSnapshot(at: backupURL) else { throw SeatedShrugBackupError.verificationFailed }
+        } catch {
+            try? FileManager.default.removeItem(at: backupURL)
+            throw error
+        }
+        do {
+            let now = Date.now
+            for (position, target, _) in targets {
+                let key = ClusterExercisePreference.key(programVersionID: Program.shrugVersionID,
+                    templateDayPosition: position, slotPosition: 0)
+                if let existing = preferences.first(where: { $0.key == key }) {
+                    if existing.exerciseId != target {
+                        existing.exerciseId = target
+                        existing.updatedAt = now
+                    }
+                } else {
+                    modelContext.insert(ClusterExercisePreference(programVersionID: Program.shrugVersionID,
+                        templateDayPosition: position, slotPosition: 0, exerciseId: target, updatedAt: now))
+                }
+            }
+            try modelContext.save()
+            return ClusterSquatSwapResult(didApply: true, backupURL: backupURL)
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    static func clusterSquatSwapAudit(modelContext: ModelContext) throws -> String {
+        typealias Program = FixedCycleClusterProgramService
+        let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let candidates = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>()).filter { cycle in
+            templates.contains { $0.id == cycle.templateId && Program.isProgramTemplate($0) }
+        }
+        guard candidates.count == 1, let cycle = candidates.first,
+              let template = templates.first(where: { $0.id == cycle.templateId }),
+              Program.versionID(for: template) == Program.shrugVersionID else { throw ClusterRevisionError.invalidState }
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let preferences = try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>())
+        // Detached states enumerate the lane without moving persisted pointers.
+        let detached = Program.makeRotationStates(cycleInstanceId: cycle.id, templateId: template.id,
+            programVersionID: Program.shrugVersionID)
+        let legState = detached.first { $0.clusterID == Program.Cluster.cluster2.rawValue }!
+        let legs = try (0..<6).map { step -> String in
+            legState.positionIndex = step
+            let selection = try Program.selection(cluster: .cluster2, template: template, cycleInstanceId: cycle.id, states: detached)
+            guard let leg = Program.resolvedSlots(selection: selection, sessionId: UUID(), preferences: preferences, overrides: []).first,
+                  let exercise = exercises.first(where: { $0.id == leg.exerciseId }) else { throw ClusterRevisionError.invalidState }
+            return "\(Program.variantLabel(step))=[\(exercise.name);key=\(leg.progressionKey);rows=\(leg.slot.defaultSetCount)]"
+        }.joined(separator: " ")
+        return "\(try seatedShrugRevisionAudit(modelContext: modelContext)) \(legs)"
+    }
+
+}
