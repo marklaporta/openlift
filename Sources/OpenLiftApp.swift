@@ -111,6 +111,18 @@ struct OpenLiftApp: App {
                 print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT_FAILED \(error.localizedDescription)")
             }
         }
+        if startup.issue == nil, AppRuntime.shouldSwapClusterSquats || AppRuntime.shouldAuditClusterSquatSwap {
+            let context = ModelContext(startup.container)
+            do {
+                if AppRuntime.shouldSwapClusterSquats {
+                    let result = try BootstrapDataService.applyClusterSquatSwapWithFreshBackup(modelContext: context)
+                    print("OPENLIFT_CLUSTERED_SQUAT_SWAP_RESULT applied=\(result.didApply)")
+                }
+                print("OPENLIFT_CLUSTERED_SQUAT_SWAP_AUDIT \(try BootstrapDataService.clusterSquatSwapAudit(modelContext: context))")
+            } catch {
+                print("OPENLIFT_CLUSTERED_SQUAT_SWAP_FAILED \(error.localizedDescription)")
+            }
+        }
         if startup.issue == nil, AppRuntime.shouldRepairJuly27AdaptiveInclineCurl {
             let modelContext = ModelContext(startup.container)
             do {

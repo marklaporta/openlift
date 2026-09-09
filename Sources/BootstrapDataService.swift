@@ -2547,6 +2547,7 @@ enum FixedCycleClusterProgramService {
         let effectiveStep: Int
         let day: CycleDay
         var programVersionID: String = FixedCycleClusterProgramService.programVersionID
+        var squatProgressionKeys: [UUID: String] = [:]
 
         var id: String { cluster.rawValue }
     }
@@ -2870,8 +2871,23 @@ enum FixedCycleClusterProgramService {
             absoluteStep: absoluteStep,
             effectiveStep: effectiveStep,
             day: day,
-            programVersionID: versionID(for: template)
+            programVersionID: versionID(for: template),
+            squatProgressionKeys: squatProgressionKeys(template: template)
         )
+    }
+
+    // V3's D/F squat swap uses preferences, but progression follows each original
+    // exercise identity. Other substitutions keep their existing slot isolation.
+    private static func squatProgressionKeys(template: CycleTemplate) -> [UUID: String] {
+        guard versionID(for: template) == shrugVersionID else { return [:] }
+        var keys: [UUID: String] = [:]
+        for (step, originalStep) in [(3, 5), (5, 4)] {
+            if let slot = template.days.first(where: { $0.position == Cluster.cluster2.templateBasePosition + step })?
+                .slots.first(where: { $0.position == 0 }) {
+                keys[slot.exerciseId] = progressionKey(cluster: .cluster2, effectiveStep: originalStep, slotPosition: 0)
+            }
+        }
+        return keys
     }
 
     static func persistentPreference(
@@ -2990,10 +3006,10 @@ enum FixedCycleClusterProgramService {
             return ResolvedSlot(
                 slot: slot,
                 exerciseId: exerciseId,
-                progressionKey: progressionKey(
-                    selection: selection,
-                    slotPosition: slot.position
-                )
+                progressionKey: (selection.cluster == .cluster2 && slot.position == 0
+                    && [3, 5].contains(selection.effectiveStep % 6)
+                    ? selection.squatProgressionKeys[exerciseId] : nil)
+                    ?? progressionKey(selection: selection, slotPosition: slot.position)
             )
         }
     }

@@ -34,6 +34,7 @@ struct CycleView: View {
     @State private var editingAdaptiveProgram: AdaptiveProgram?
     @State private var presentingExerciseSelection = false
     @State private var didAddAlternatingShrugs = false
+    @State private var didSwapSquats = false
 
     private var activeTemplate: CycleTemplate? {
         OpenLiftStateResolver.activeTemplate(
@@ -90,6 +91,26 @@ struct CycleView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .accessibilityIdentifier("cycle.shrugDraftBlocker")
+                            }
+                        }
+                        if FixedCycleClusterProgramService.isProgramTemplate(activeTemplate),
+                           FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.shrugVersionID {
+                            Text("Put Bulgarian Split Squat after Stiff-Leg Deadlift (D), and Safety Bar Squat at F.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Button("Swap Safety Bar Squat & Bulgarians") { swapSquats() }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("cycle.swapSquats")
+                                .disabled(hasPendingWorkout || didSwapSquats)
+                            if hasPendingWorkout {
+                                Text("Finish your current workout first.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if didSwapSquats {
+                                Label("Bulgarians at D; Safety Bar Squat at F.", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .accessibilityIdentifier("cycle.squatSwapSuccess")
                             }
                         }
                         if didAddAlternatingShrugs {
@@ -310,6 +331,16 @@ struct CycleView: View {
             didAddAlternatingShrugs = result.revision.didApply
             print("OPENLIFT_CLUSTERED_SHRUGS_RESULT applied=\(result.revision.didApply) template=\(result.revision.templateId) cycle=\(result.revision.cycleId)")
             print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT \(try BootstrapDataService.seatedShrugRevisionAudit(modelContext: modelContext))")
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func swapSquats() {
+        do {
+            let result = try BootstrapDataService.applyClusterSquatSwapWithFreshBackup(modelContext: modelContext)
+            didSwapSquats = true
+            print("OPENLIFT_CLUSTERED_SQUAT_SWAP applied=\(result.didApply) D=BulgarianSplitSquat F=SafetyBarSquat")
         } catch {
             errorMessage = error.localizedDescription
         }
