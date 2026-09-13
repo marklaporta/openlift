@@ -56,6 +56,53 @@ extension BootstrapDataService {
         return SideDeltApplicationResult(revision: revision, backupURL: backupURL)
     }
 
+    /// User-initiated, synchronous on the main actor: no UI write can interleave
+    /// between the fresh consolidated snapshot and the revision transaction.
+    /// Daily snapshots are intentionally not reused; they can predate today's work.
+    @MainActor
+    static func applySideDeltOrderWithFreshBackup(
+        modelContext: ModelContext,
+        backupDirectory: URL? = nil,
+        snapshot: (URL, URL) throws -> Void = StoreBackupService.snapshot
+    ) throws -> SideDeltApplicationResult {
+        guard !modelContext.hasChanges else { throw ClusterRevisionError.pendingChanges }
+        if try modelContext.fetch(FetchDescriptor<TrainingPreference>()).contains(where: { $0.key == sideDeltOrderMarker }) {
+            return SideDeltApplicationResult(
+                revision: try prepareSideDeltOrderRevision(modelContext: modelContext), backupURL: nil)
+        }
+        guard !(try modelContext.fetch(FetchDescriptor<Session>())).contains(where: { $0.status == .draft }),
+              !(try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())).contains(where: { $0.status == .draft }) else {
+            throw ClusterRevisionError.draftHasWork
+        }
+        guard let storeURL = modelContext.container.configurations.first?.url,
+              FileManager.default.fileExists(atPath: storeURL.path) else {
+            throw SeatedShrugBackupError.persistentStoreRequired
+        }
+        let directory = try backupDirectory ?? FileManager.default.url(for: .documentDirectory,
+            in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("OpenLift/revision-backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let backupURL = directory.appendingPathComponent("before-side-delt-order-\(UUID().uuidString).sqlite")
+        // A unique, previously absent destination proves this attempt cannot
+        // accidentally accept a valid but stale daily recovery point.
+        guard !FileManager.default.fileExists(atPath: backupURL.path) else {
+            throw SeatedShrugBackupError.verificationFailed
+        }
+        do {
+            try snapshot(storeURL, backupURL)
+            guard StoreBackupService.isValidSnapshot(at: backupURL) else {
+                throw SeatedShrugBackupError.verificationFailed
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: backupURL)
+            throw error
+        }
+        // Retain the verified backup even if program validation refuses the
+        // revision. Completed history and any pending draft remain untouched.
+        let revision = try prepareSideDeltOrderRevision(modelContext: modelContext, backupConfirmed: true)
+        return SideDeltApplicationResult(revision: revision, backupURL: backupURL)
+    }
+
     /// Explicit, backup-gated content revision. No schema or completed history
     /// changes; surviving progression identities remain authoritative.
     @discardableResult
@@ -178,6 +225,105 @@ extension BootstrapDataService {
             cycle.templateId = template.id
             let markerValue = "\(template.id.uuidString)|\(cycle.id.uuidString)"
             modelContext.insert(TrainingPreference(key: sideDeltRevisionMarker, modeRawValue: markerValue))
+            markers.first(where: { $0.key == clusteredProgramRolloutMarkerKey })?.modeRawValue = markerValue
+            try modelContext.save()
+            UserDefaults.standard.set(template.id.uuidString, forKey: "openlift.lastActivatedTemplateId")
+            UserDefaults.standard.set(template.name, forKey: "openlift.lastActivatedTemplateName")
+            return ClusteredProgramRolloutResult(templateId: template.id, cycleId: cycle.id, didApply: true)
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    static let sideDeltOrderMarker = "clustered-program-revision-2026-09-12-v5"
+
+    /// Explicit v4 → v5 reorder. Archive the old structure; move only shoulder
+    /// prescriptions and their exact-slot preferences, never completed evidence.
+    @discardableResult
+    static func prepareSideDeltOrderRevision(
+        modelContext: ModelContext, backupConfirmed: Bool = false
+    ) throws -> ClusteredProgramRolloutResult {
+        guard !modelContext.hasChanges else { throw ClusterRevisionError.pendingChanges }
+        typealias Program = FixedCycleClusterProgramService
+        do {
+            let markers = try modelContext.fetch(FetchDescriptor<TrainingPreference>())
+            let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+            let cycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+            let states = try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
+            if let marker = markers.first(where: { $0.key == sideDeltOrderMarker }) {
+                let ids = marker.modeRawValue.split(separator: "|").compactMap { UUID(uuidString: String($0)) }
+                guard ids.count == 2,
+                      let template = templates.first(where: { $0.id == ids[0] }),
+                      Program.isProgramTemplate(template), Program.versionID(for: template) == Program.sideDeltOrderVersionID,
+                      cycles.contains(where: { $0.id == ids[1] && $0.templateId == ids[0] }) else {
+                    throw ClusterRevisionError.invalidState
+                }
+                try validateSideDeltRevisionStates(states.filter {
+                    $0.cycleInstanceId == ids[1] && $0.templateId == ids[0] && $0.programVersionID == Program.sideDeltOrderVersionID
+                })
+                return ClusteredProgramRolloutResult(templateId: ids[0], cycleId: ids[1], didApply: false)
+            }
+            guard backupConfirmed else { throw ClusterRevisionError.backupRequired }
+            guard !(try modelContext.fetch(FetchDescriptor<Session>())).contains(where: { $0.status == .draft }),
+                  !(try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())).contains(where: { $0.status == .draft }) else {
+                throw ClusterRevisionError.draftHasWork
+            }
+            let candidates = cycles.filter { cycle in templates.contains { $0.id == cycle.templateId && Program.isProgramTemplate($0) } }
+            guard candidates.count == 1, let cycle = candidates.first,
+                  let oldTemplate = templates.first(where: { $0.id == cycle.templateId }),
+                  Program.versionID(for: oldTemplate) == Program.sideDeltVersionID,
+                  !templates.contains(where: { $0.name.caseInsensitiveCompare(Program.sideDeltOrderTemplateName) == .orderedSame
+                      || $0.rotationPools.contains { $0.key == Program.sideDeltOrderIdentityKey } }),
+                  !states.contains(where: { $0.programVersionID == Program.sideDeltOrderVersionID }) else {
+                throw ClusterRevisionError.invalidState
+            }
+            let oldStates = states.filter { $0.cycleInstanceId == cycle.id && $0.templateId == oldTemplate.id
+                && $0.programVersionID == Program.sideDeltVersionID }
+            try validateSideDeltRevisionStates(oldStates)
+            let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+            let template = try Program.makeTemplate(exercises: exercises, inclineFirst: true)
+            let preferences = try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>())
+                .filter { $0.programVersionID == Program.sideDeltVersionID }
+            guard Set(preferences.map(\.key)).count == preferences.count else { throw ClusterRevisionError.invalidState }
+            var carried: [ClusterExercisePreference] = []
+            var consumed = Set<String>()
+            for day in template.days {
+                for slot in day.slots {
+                    // A↔B and D↔E in the shoulder lane only. C/F are unchanged.
+                    let sourcePosition = day.position >= 9 && slot.position == 0
+                        ? 9 + [1, 0, 2, 4, 3, 5][day.position - 9] : day.position
+                    guard let sourceDay = oldTemplate.days.first(where: { $0.position == sourcePosition }),
+                          let source = sourceDay.slots.first(where: { $0.position == slot.position }),
+                          source.exerciseId == slot.exerciseId, source.muscle == slot.muscle else {
+                        throw ClusterRevisionError.invalidState
+                    }
+                    slot.defaultSetCount = source.defaultSetCount
+                    let key = ClusterExercisePreference.key(programVersionID: Program.sideDeltVersionID,
+                        templateDayPosition: sourcePosition, slotPosition: slot.position)
+                    if let preference = preferences.first(where: { $0.key == key }) {
+                        consumed.insert(key)
+                        carried.append(ClusterExercisePreference(programVersionID: Program.sideDeltOrderVersionID,
+                            templateDayPosition: day.position, slotPosition: slot.position,
+                            exerciseId: preference.exerciseId, updatedAt: preference.updatedAt))
+                    }
+                }
+            }
+            guard consumed == Set(preferences.map(\.key)) else { throw ClusterRevisionError.invalidState }
+            try Program.validatePersistentExercisePreferences(template: template,
+                exerciseIDsByPreferenceKey: Program.persistentExerciseIDsByKey(preferences: carried,
+                    programVersionID: Program.sideDeltOrderVersionID))
+            modelContext.insert(template)
+            carried.forEach(modelContext.insert)
+            for old in oldStates {
+                modelContext.insert(ClusterRotationState(cycleInstanceId: cycle.id, templateId: template.id,
+                    programVersionID: Program.sideDeltOrderVersionID, clusterID: old.clusterID,
+                    positionIndex: old.positionIndex, updatedAt: old.updatedAt,
+                    lastCompletedOccurrenceID: old.lastCompletedOccurrenceID, isDerived: old.isDerived))
+            }
+            cycle.templateId = template.id
+            let markerValue = "\(template.id.uuidString)|\(cycle.id.uuidString)"
+            modelContext.insert(TrainingPreference(key: sideDeltOrderMarker, modeRawValue: markerValue))
             markers.first(where: { $0.key == clusteredProgramRolloutMarkerKey })?.modeRawValue = markerValue
             try modelContext.save()
             UserDefaults.standard.set(template.id.uuidString, forKey: "openlift.lastActivatedTemplateId")

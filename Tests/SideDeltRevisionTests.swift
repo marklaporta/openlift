@@ -369,6 +369,129 @@ final class SideDeltRevisionTests: XCTestCase {
         XCTAssertEqual(try recovered.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).count, count)
     }
 
+    @MainActor
+    private func verifyPermanentOrder(_ f: Fixture) throws {
+        let before = try databaseRows(at: f.url)
+        let (oldTemplate, cycle) = try active(f.context)
+        XCTAssertEqual(Program.versionID(for: oldTemplate), Program.sideDeltVersionID)
+        let oldCycleDay = cycle.currentDayIndex
+        let oldStates = try f.context.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.programVersionID == Program.sideDeltVersionID }
+        var prior: [String: [Program.ResolvedSlot]] = [:]
+        for cluster in Program.Cluster.allCases {
+            for step in 0..<cluster.rotationLength { prior["\(cluster.rawValue)|\(step)"] = try resolved(f.context, cluster: cluster, step: step) }
+        }
+        let applied = try BootstrapDataService.applySideDeltOrderWithFreshBackup(modelContext: f.context,
+            backupDirectory: f.root.appendingPathComponent("order-backups"))
+        XCTAssertTrue(applied.revision.didApply)
+        XCTAssertEqual(applied.revision.cycleId, cycle.id)
+        XCTAssertEqual(cycle.currentDayIndex, oldCycleDay)
+        XCTAssertEqual(try databaseRows(at: XCTUnwrap(applied.backupURL)), before)
+        let after = try databaseRows(at: f.url)
+        let appendOnly: Set<String> = ["ZCYCLETEMPLATE", "ZCYCLEDAY", "ZCYCLESLOT", "ZCLUSTERROTATIONSTATE", "ZCLUSTEREXERCISEPREFERENCE", "ZROTATIONPOOL"]
+        let mutable: Set<String> = ["ZACTIVECYCLEINSTANCE", "ZTRAININGPREFERENCE", "Z_PRIMARYKEY", "ACHANGE", "ATRANSACTION", "ATRANSACTIONSTRING"]
+        for table in before.keys {
+            if appendOnly.contains(table) { XCTAssertTrue(Set(before[table]!).isSubset(of: Set(after[table] ?? [])), "Rewrote old \(table)") }
+            else if !mutable.contains(table) { XCTAssertEqual(after[table], before[table], "Changed \(table)") }
+        }
+        let (template, _) = try active(f.context)
+        XCTAssertEqual(Program.versionID(for: template), Program.sideDeltOrderVersionID)
+        let newStates = try f.context.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.programVersionID == Program.sideDeltOrderVersionID }
+        for old in oldStates {
+            let new = try XCTUnwrap(newStates.first { $0.clusterID == old.clusterID })
+            XCTAssertEqual(new.positionIndex, old.positionIndex)
+            XCTAssertEqual(new.lastCompletedOccurrenceID, old.lastCompletedOccurrenceID)
+            XCTAssertEqual(new.updatedAt, old.updatedAt)
+            XCTAssertEqual(new.isDerived, old.isDerived)
+        }
+        for cluster in Program.Cluster.allCases {
+            for step in 0..<cluster.rotationLength {
+                let current = try resolved(f.context, cluster: cluster, step: step)
+                for index in current.indices {
+                    let sourceStep = cluster == .cluster3 && index == 0 ? [1, 0, 2, 4, 3, 5][step] : step
+                    let old = prior["\(cluster.rawValue)|\(sourceStep)"]![index]
+                    let new = current[index]
+                    XCTAssertEqual(new.exerciseId, old.exerciseId)
+                    XCTAssertEqual(new.progressionKey, old.progressionKey)
+                    XCTAssertEqual(new.slot.defaultSetCount, old.slot.defaultSetCount)
+                    // Lookup must return the identical same-exercise evidence.
+                    let oldEffort = try effort(f.context, item: old)
+                    let newEffort = try effort(f.context, item: new)
+                    XCTAssertEqual(newEffort?.rows.map(\.weight), oldEffort?.rows.map(\.weight))
+                    XCTAssertEqual(newEffort?.rows.map(\.reps), oldEffort?.rows.map(\.reps))
+                    if new.exerciseId == Program.sideDeltExerciseID {
+                        XCTAssertEqual(new.progressionKey, Program.sideDeltProgressionKey)
+                        XCTAssertEqual(new.slot.defaultSetCount, 2)
+                        XCTAssertNil(newEffort)
+                    }
+                }
+            }
+        }
+        XCTAssertFalse(try BootstrapDataService.applySideDeltOrderWithFreshBackup(modelContext: f.context,
+            snapshot: { _, _ in XCTFail("Repeat must not create a backup") }).revision.didApply)
+        XCTAssertEqual(try databaseRows(at: f.url), after)
+        let reopenedURL = f.root.appendingPathComponent("order-cold.store")
+        try StoreBackupService.snapshot(storeAt: f.url, into: reopenedURL)
+        let reopenedStore = try open(reopenedURL)
+        let reopened = ModelContext(reopenedStore)
+        XCTAssertEqual(try BootstrapDataService.sideDeltRevisionAudit(modelContext: reopened),
+            try BootstrapDataService.sideDeltRevisionAudit(modelContext: f.context))
+        for step in 0..<6 {
+            XCTAssertEqual(try resolved(reopened, step: step).map(\.progressionKey), try resolved(f.context, step: step).map(\.progressionKey))
+        }
+        XCTAssertFalse(try BootstrapDataService.applySideDeltOrderWithFreshBackup(modelContext: reopened,
+            snapshot: { _, _ in XCTFail("Cold repeat must not create a backup") }).revision.didApply)
+    }
+
+    @MainActor
+    func testPermanentOrderPreservesAllOtherSlotsHistoryAndKeys() throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try BootstrapDataService.applyClusterSquatSwapWithFreshBackup(modelContext: f.context,
+            backupDirectory: f.root.appendingPathComponent("swap-backups"))
+        _ = try BootstrapDataService.prepareSideDeltClusterRevision(modelContext: f.context, backupConfirmed: true)
+        try verifyPermanentOrder(f)
+    }
+
+    @MainActor
+    func testPermanentOrderCarriesExactShoulderPreferencesAndFallbackDose() throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try BootstrapDataService.prepareSideDeltClusterRevision(modelContext: f.context, backupConfirmed: true)
+        let (template, _) = try active(f.context)
+        let replacement = try XCTUnwrap(f.context.fetch(FetchDescriptor<Exercise>()).first { $0.name == "Dumbbell Lateral Raise" })
+        for position in [9, 12] {
+            template.days.first { $0.position == position }?.slots.first { $0.position == 0 }?.defaultSetCount = position == 9 ? 1 : 4
+            f.context.insert(ClusterExercisePreference(programVersionID: Program.sideDeltVersionID,
+                templateDayPosition: position, slotPosition: 0, exerciseId: replacement.id))
+        }
+        try f.context.save()
+        try verifyPermanentOrder(f)
+    }
+
+    @MainActor
+    func testCopiedRealStorePermanentOrderWhenOptedIn() throws {
+        let supplied = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OpenLiftCopiedSideDeltOrderStore")
+        let source = supplied.appendingPathComponent("default.store")
+        guard FileManager.default.fileExists(atPath: source.path) else { throw XCTSkip("Stage verified v4 copy in Documents/OpenLiftCopiedSideDeltOrderStore") }
+        let hash = SHA256.hash(data: try Data(contentsOf: source))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SideDeltOrderReal-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.copyItem(at: supplied, to: root)
+        let store = try open(root.appendingPathComponent("default.store"))
+        let context = ModelContext(store)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 67)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutSession>()), 7)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 686)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveSetEntry>()), 78)
+        let states = try context.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.programVersionID == Program.sideDeltVersionID }
+        XCTAssertEqual(states.sorted { $0.clusterID < $1.clusterID }.map(\.positionIndex), [19, 19, 18])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<ClusterExercisePreference>()).filter { $0.programVersionID == Program.sideDeltVersionID }.count, 5)
+        try verifyPermanentOrder(Fixture(root: root, store: store, context: context))
+        XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: source)), hash)
+        print("OPENLIFT_COPIED_SIDE_DELT_ORDER_VERIFIED historyPreserved=true pointersPreserved=true freshBackup=true coldReopen=true sourceHashUnchanged=true")
+    }
+
     /// Logical rows from every table, including relationship and metadata tables.
     /// Read-only SQLite observes committed WAL state without opening the source in SwiftData.
     private func databaseRows(at url: URL) throws -> [String: [String]] {

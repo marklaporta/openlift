@@ -427,3 +427,27 @@ archived state, all surviving slot/progression mappings, idempotence and cold
 reopen, and verifies source hashes. UI tests exercise the actual activation
 button/draft blocker, persistent relaunch, and two blank new-exercise rows with
 the per-side logging note.
+
+## Permanent side-delt reorder (v5)
+
+**Cycle → Put Incline Side-Lying First** calls
+`applySideDeltOrderWithFreshBackup`; the explicit paired launch argument
+`OPENLIFT_REORDER_CLUSTERED_SIDE_DELTS_2026_09_12` uses the identical handler.
+It requires saved state and no Fixed/Adaptive drafts, creates a unique verified
+`VACUUM INTO` snapshot, then atomically archives v4 and activates v5. Installation
+alone never reorders anything. Repeat activation is a validated no-op.
+
+Old templates, preferences, states and completed evidence are retained. Only
+the shoulder lane's A/B and D/E prescriptions and preferences change positions;
+all three raw pointers and surviving exercise/progression identities are copied.
+The read-only `OPENLIFT_AUDIT_CLUSTERED_SIDE_DELT` argument reports v5's mapping.
+JSON schema 4 now supports program versions 1–5; old exports cannot downgrade v5.
+
+For the copied-store regression, stage a verified v4 snapshot as `default.store`
+in the test app's `Documents/OpenLiftCopiedSideDeltOrderStore`, then run
+`SideDeltRevisionTests/testCopiedRealStorePermanentOrderWhenOptedIn`.
+`SideDeltOrderActivationTests` covers fresh backup, failure and draft guards;
+`SideDeltRevisionUITests/testPermanentOrderButtonBlocksDraftThenPersistsThroughColdLaunch`
+covers the actual button and cold restart;
+`testReorderedInclineStartsBlankAndAdvancesToSuperROM` checks blank two-row
+incline prefill and next Super-ROM advancement. No test mutates the supplied backup itself.
