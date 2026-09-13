@@ -382,3 +382,48 @@ Stage a verified v3 store and matching sidecars in the owned simulator app's
 another disposable copy, preserving the supplied backup. Focused tests verify
 backup failure, pending edits/drafts, idempotence, untouched templates/history/
 profiles/pointers/notes, and same-exercise progression across the swap.
+
+## Third side-delt content revision (v4)
+
+After finishing any pending workout, use **Cycle → Add Third Side-Delt Movement**.
+`applySideDeltRevisionWithFreshBackup` synchronously creates a unique, integrity-
+checked consolidated `VACUUM INTO` backup in `Documents/OpenLift/revision-backups`
+before `prepareSideDeltClusterRevision` changes an active v3 program to v4.
+Installation and ordinary startup do not apply this revision. Pending changes,
+Fixed/Adaptive drafts, incomplete state, conflicting destinations or ambiguous
+shoulder substitutions fail closed without removing work. Repeated activation
+validates the marker/state and is a no-op, without another backup.
+
+The explicit `OPENLIFT_ADD_CLUSTERED_SIDE_DELT_2026_09_12` launch argument uses
+the same fresh-backup activation path as the button, including draft protection.
+It does not accept a flag that bypasses the snapshot.
+
+Existing templates, pointers, preferences, exercise notes, profiles, sessions,
+sets, and completed occurrences remain intact. New versioned state copies the
+three raw pointers; the active cycle keeps its UUID and legacy day pointer.
+Non-shoulder slots retain exact-slot substitutions and fallback doses. Shoulder
+preferences move with their original exercise identities; inconsistent effective
+substitutions across the old identity's three occurrences block activation.
+Fallback dose follows its most recently scheduled old slot, while actual
+qualifying effort remains the authority for literal rows and prefill. The new
+movement inherits no substitution, working load, reps or prior-performance cue.
+
+JSON recovery supports versions 1–4, restores v4's three shoulder identities,
+and does not downgrade v4 when older history is retried. No SwiftData schema
+version changes. `OPENLIFT_AUDIT_CLUSTERED_SIDE_DELT` is read-only and prints the
+active version, raw pointers, A–F canonical side-delt names and revision marker.
+
+Stage a verified consolidated copy as `default.store` in the owned test app's
+`Documents/OpenLiftCopiedSideDeltStore`, then run:
+
+```bash
+python3 scripts/test.py unit SideDeltRevisionTests
+python3 scripts/test.py ui SideDeltRevisionUITests
+```
+
+The opt-in real-store test mutates only a second disposable copy, verifies the
+fresh backup against all pre-revision logical rows, checks unchanged history and
+archived state, all surviving slot/progression mappings, idempotence and cold
+reopen, and verifies source hashes. UI tests exercise the actual activation
+button/draft blocker, persistent relaunch, and two blank new-exercise rows with
+the per-side logging note.

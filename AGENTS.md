@@ -68,7 +68,8 @@ A qualifying previous
 performance for the same progression identity supplies its literal row count,
 weights, and reps, so a completed manual reduction carries forward. Cluster 2
 derives three-step arm identities inside its six-step leg rotation; Cluster 3
-derives a two-step shoulder identity inside its six-step calves/forearms lane.
+derives a two-step shoulder identity in v1–v3 and a three-step identity in the
+explicit v4 side-delt revision, inside its unchanged six-step calves/forearms lane.
 Do not add sub-rotation state.
 
 V15 adds optional absolute-pound chain/eccentric fields to occurrence profiles.

@@ -38,6 +38,9 @@ enum AppRuntime {
     static let isSeatedShrugActivationUITesting = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_UI_TESTING_SHRUG_ACTIVATION"
     )
+    static let isSideDeltActivationUITesting = ProcessInfo.processInfo.arguments.contains("OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION")
+    static let shouldAuditSideDeltRevision = ProcessInfo.processInfo.arguments.contains("OPENLIFT_AUDIT_CLUSTERED_SIDE_DELT")
+    static let shouldAddClusteredSideDelt = ProcessInfo.processInfo.arguments.contains("OPENLIFT_ADD_CLUSTERED_SIDE_DELT_2026_09_12")
     static let clusteredDraftBackupIsConfirmed = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_CLUSTERED_DRAFT_BACKUP_CONFIRMED"
     )
@@ -61,7 +64,9 @@ enum AppRuntime {
     )
 
     static func prepareForUITesting() {
-        guard isUITesting else { return }
+        // This disk-backed fixture reuses a store across launches, so preserve
+        // its activation preferences just as a normal app launch does.
+        guard isUITesting, !isSideDeltActivationUITesting else { return }
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: "openlift.lastActivatedTemplateId")
         defaults.removeObject(forKey: "openlift.lastActivatedTemplateName")

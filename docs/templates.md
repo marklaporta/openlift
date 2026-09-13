@@ -97,7 +97,7 @@ The Cycle tab supports:
 
 Changing to a different active template requires confirmation.
 
-`Clustered Hypertrophy v1`, `v2`, and `v3` are internal versioned program templates rather
+`Clustered Hypertrophy v1`–`v4` are internal versioned program templates rather
 than a general editable template. The Cycle tab disables editing and cloning it,
 and rejects a published import that tries to replace its reserved name. Its
 three cluster state rows and stable progression identities are created only by
@@ -243,3 +243,23 @@ same-exercise completed row counts, loads and reps follow the movement. Other
 substitutions retain slot isolation. Canonical templates, completed occurrence
 snapshots, notes and resistance profiles are unchanged. The preference payload
 already supported by JSON export/recovery carries the new placement.
+
+## Third side-delt movement (v4)
+
+The explicit v4 revision changes only the side-delt lane inside Cluster 3:
+A/D = Super ROM Dumbbell Lateral Raise, B/E = Incline Side-Lying Dumbbell
+Lateral Raise, C/F = Cable Lateral Raise. Thus Cable → Super-ROM → Side-Lying
+repeats, while calves, forearms, and A/C/E shrugs keep their existing positions.
+The cluster still has six steps and one pointer; side delts derive their identity
+with modulo 3. No independent shoulder state or additional workout slot is added.
+
+Super-ROM and Cable retain their original exercise/progression identities and
+literal prior-performance row counts. The new movement has a separate stable
+UUID/key, two starting work-set rows, and blank load/reps/history. Each row means
+one set on each side; record the single dumbbell weight and reps per side, not
+the left/right sum. Keep bench angle and arm path consistent for comparisons.
+
+Activation copies all raw pointers. At the verified pre-release Cluster 3
+pointer 18, A remains the upcoming Super-ROM exposure after the previous Cable
+at F; the new movement first appears at B, the second Cluster 3 completion after
+activation. This is an exposure sequence, not a calendar-day guarantee.
