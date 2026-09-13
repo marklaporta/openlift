@@ -93,7 +93,7 @@ final class SideDeltExportHydrationTests: XCTestCase {
         }.sorted()
     }
 
-    func testFourVersionExportHydrationRetainsSideDeltsProfilesAndArchivedHistory() throws {
+    func testFiveVersionExportHydrationRetainsSideDeltsProfilesAndArchivedHistory() throws {
         let f = try fixture()
         let result = try BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: f.context, backupConfirmed: true)
         let template = try XCTUnwrap(try f.context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == result.templateId })
@@ -103,6 +103,10 @@ final class SideDeltExportHydrationTests: XCTestCase {
         let v4Template = try XCTUnwrap(try f.context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == v4.templateId })
         _ = try completeSession(context: f.context, template: v4Template, cycle: f.cycle, exercises: f.exercises, timestamp: 5_000)
         _ = try completeSession(context: f.context, template: v4Template, cycle: f.cycle, exercises: f.exercises, timestamp: 6_000)
+        let v5 = try BootstrapDataService.prepareSideDeltOrderRevision(modelContext: f.context, backupConfirmed: true)
+        let v5Template = try XCTUnwrap(try f.context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == v5.templateId })
+        _ = try completeSession(context: f.context, template: v5Template, cycle: f.cycle, exercises: f.exercises, timestamp: 7_000)
+        _ = try completeSession(context: f.context, template: v5Template, cycle: f.cycle, exercises: f.exercises, timestamp: 8_000)
         let occurrences = try f.context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
         let states = try f.context.fetch(FetchDescriptor<ClusterRotationState>())
         let preferences = try f.context.fetch(FetchDescriptor<ClusterExercisePreference>())
@@ -124,7 +128,7 @@ final class SideDeltExportHydrationTests: XCTestCase {
             return try JSONDecoder().decode(SessionExportService.ExportPayload.self,
                 from: Data(contentsOf: XCTUnwrap(written.localMirrorURL)))
         }
-        XCTAssertEqual(Set(exports.compactMap { $0.fixed_cycle?.program_version }), [1, 2, 3, 4])
+        XCTAssertEqual(Set(exports.compactMap { $0.fixed_cycle?.program_version }), [1, 2, 3, 4, 5])
         let encoded = try JSONEncoder().encode(exports)
         let roundTripped = try JSONDecoder().decode([SessionExportService.ExportPayload].self, from: encoded)
         let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
@@ -134,10 +138,31 @@ final class SideDeltExportHydrationTests: XCTestCase {
         _ = try BootstrapDataService.reconcileWorkoutExports(roundTripped, cycle: cycle, modelContext: recovered)
         let recoveredTemplates = try recovered.fetch(FetchDescriptor<CycleTemplate>())
         let active = try XCTUnwrap(recoveredTemplates.first { $0.id == cycle.templateId })
-        XCTAssertEqual(Program.versionID(for: active), Program.sideDeltVersionID)
-        XCTAssertEqual(Set(recoveredTemplates.map { Program.versionNumber(for: $0) }), [1, 2, 3, 4])
+        XCTAssertEqual(Program.versionID(for: active), Program.sideDeltOrderVersionID)
+        XCTAssertEqual(Set(recoveredTemplates.map { Program.versionNumber(for: $0) }), [1, 2, 3, 4, 5])
+        // Recovery resolves catalog UUIDs by name; verify the whole canonical
+        // shoulder mapping and semantic keys, plus frozen evidence below.
+        let restoredCatalog = try recovered.fetch(FetchDescriptor<Exercise>())
+        for step in 0..<6 {
+            let sourceStates = Program.makeRotationStates(cycleInstanceId: f.cycle.id, templateId: v5Template.id,
+                programVersionID: Program.sideDeltOrderVersionID)
+            let destinationStates = Program.makeRotationStates(cycleInstanceId: cycle.id, templateId: active.id,
+                programVersionID: Program.sideDeltOrderVersionID)
+            sourceStates.first { $0.clusterID == "cluster-3" }!.positionIndex = step
+            destinationStates.first { $0.clusterID == "cluster-3" }!.positionIndex = step
+            let sourceSelection = try Program.selection(cluster: .cluster3, template: v5Template,
+                cycleInstanceId: f.cycle.id, states: sourceStates)
+            let restoredSelection = try Program.selection(cluster: .cluster3, template: active,
+                cycleInstanceId: cycle.id, states: destinationStates)
+            let sourceID = sourceSelection.day.slots.first { $0.position == 0 }!.exerciseId
+            let restoredID = restoredSelection.day.slots.first { $0.position == 0 }!.exerciseId
+            XCTAssertEqual(restoredCatalog.first { $0.id == restoredID }?.name,
+                f.exercises.first { $0.id == sourceID }?.name)
+            XCTAssertEqual(Program.progressionKey(selection: restoredSelection, slotPosition: 0),
+                Program.progressionKey(selection: sourceSelection, slotPosition: 0))
+        }
         let restoredStates = try recovered.fetch(FetchDescriptor<ClusterRotationState>())
-        XCTAssertEqual(try Program.selections(template: active, cycleInstanceId: cycle.id, states: restoredStates).map(\.absoluteStep), [23, 24, 21])
+        XCTAssertEqual(try Program.selections(template: active, cycleInstanceId: cycle.id, states: restoredStates).map(\.absoluteStep), [25, 26, 23])
         XCTAssertEqual(try recovered.fetch(FetchDescriptor<SetEntry>()).count, entries.count)
         let restored = try recovered.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
         XCTAssertEqual(restored.count, occurrences.count)
@@ -150,7 +175,7 @@ final class SideDeltExportHydrationTests: XCTestCase {
             XCTAssertEqual(copy.exerciseSnapshots.map(\.resistanceProfile), original.exerciseSnapshots.map(\.resistanceProfile))
         }
         let newPrefs = try recovered.fetch(FetchDescriptor<ClusterExercisePreference>())
-        XCTAssertEqual(Set(newPrefs.map(\.programVersionID)), [Program.revisionVersionID, Program.shrugVersionID, Program.sideDeltVersionID])
+        XCTAssertEqual(Set(newPrefs.map(\.programVersionID)), [Program.revisionVersionID, Program.shrugVersionID, Program.sideDeltVersionID, Program.sideDeltOrderVersionID])
         XCTAssertEqual(newPrefs.filter { $0.programVersionID == Program.shrugVersionID }.count, 1)
         let recoveredProfile = try XCTUnwrap(try recovered.fetch(FetchDescriptor<ExerciseResistanceProfile>()).first { $0.chainPounds == 7 })
         XCTAssertEqual(recoveredProfile.eccentricPounds, 3)

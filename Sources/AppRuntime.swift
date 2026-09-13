@@ -40,6 +40,7 @@ enum AppRuntime {
     )
     static let isSideDeltActivationUITesting = ProcessInfo.processInfo.arguments.contains("OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION")
     static let shouldAuditSideDeltRevision = ProcessInfo.processInfo.arguments.contains("OPENLIFT_AUDIT_CLUSTERED_SIDE_DELT")
+    static let shouldReorderClusteredSideDelts = ProcessInfo.processInfo.arguments.contains("OPENLIFT_REORDER_CLUSTERED_SIDE_DELTS_2026_09_12")
     static let shouldAddClusteredSideDelt = ProcessInfo.processInfo.arguments.contains("OPENLIFT_ADD_CLUSTERED_SIDE_DELT_2026_09_12")
     static let clusteredDraftBackupIsConfirmed = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_CLUSTERED_DRAFT_BACKUP_CONFIRMED"

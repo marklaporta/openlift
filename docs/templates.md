@@ -97,7 +97,7 @@ The Cycle tab supports:
 
 Changing to a different active template requires confirmation.
 
-`Clustered Hypertrophy v1`–`v4` are internal versioned program templates rather
+`Clustered Hypertrophy v1`–`v5` are internal versioned program templates rather
 than a general editable template. The Cycle tab disables editing and cloning it,
 and rejects a published import that tries to replace its reserved name. Its
 three cluster state rows and stable progression identities are created only by
@@ -263,3 +263,13 @@ Activation copies all raw pointers. At the verified pre-release Cluster 3
 pointer 18, A remains the upcoming Super-ROM exposure after the previous Cable
 at F; the new movement first appears at B, the second Cluster 3 completion after
 activation. This is an exposure sequence, not a calendar-day guarantee.
+
+## Permanent side-delt reorder (v5)
+
+The explicit v5 revision swaps only Cluster 3's shoulder prescriptions A↔B and
+D↔E: A/D = Incline Side-Lying, B/E = Super-ROM, C/F = Cable. Raw pointers do
+not move. At Cluster 3 pointer 18, incline side-lying is next, then Super-ROM,
+then Cable. Calves, forearms, shrugs and all other slots remain in place.
+Exercise UUIDs, stable progression keys, exact-slot preferences and fallback
+set counts follow their source shoulder exercise. The incline movement keeps
+its v4 key and two starting rows (one set per side per row), not a new identity.

@@ -36,6 +36,7 @@ struct CycleView: View {
     @State private var didAddAlternatingShrugs = false
     @State private var didSwapSquats = false
     @State private var didAddSideDelt = false
+    @State private var didReorderSideDelts = false
 
     private var activeTemplate: CycleTemplate? {
         OpenLiftStateResolver.activeTemplate(
@@ -128,6 +129,23 @@ struct CycleView: View {
                                     .font(.caption)
                                     .accessibilityIdentifier("cycle.sideDeltDraftBlocker")
                             }
+                        }
+                        if FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.sideDeltVersionID,
+                           FixedCycleClusterProgramService.isProgramTemplate(activeTemplate) {
+                            Text("Permanently reorder side delts: Incline Side-Lying → Super-ROM → Cable. Other rotations and set counts stay unchanged.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Button("Put Incline Side-Lying First") { reorderSideDelts() }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("cycle.reorderSideDelts")
+                                .disabled(hasPendingWorkout)
+                            if hasPendingWorkout {
+                                Text("Finish your current workout first.")
+                                    .font(.caption).accessibilityIdentifier("cycle.sideDeltOrderDraftBlocker")
+                            }
+                        }
+                        if didReorderSideDelts {
+                            Label("Side delts now rotate Incline Side-Lying → Super-ROM → Cable.", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green).accessibilityIdentifier("cycle.sideDeltOrderSuccess")
                         }
                         if didAddSideDelt {
                             Label("Incline side-lying lateral raise added to the rotation.", systemImage: "checkmark.circle.fill")
@@ -366,6 +384,15 @@ struct CycleView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func reorderSideDelts() {
+        do {
+            let result = try BootstrapDataService.applySideDeltOrderWithFreshBackup(modelContext: modelContext)
+            didReorderSideDelts = result.revision.didApply
+            print("OPENLIFT_CLUSTERED_SIDE_DELT_ORDER_RESULT applied=\(result.revision.didApply)")
+            print("OPENLIFT_CLUSTERED_SIDE_DELT_AUDIT \(try BootstrapDataService.sideDeltRevisionAudit(modelContext: modelContext))")
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func swapSquats() {

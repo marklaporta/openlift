@@ -40,11 +40,16 @@ struct OpenLiftApp: App {
                     _ = try? BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: modelContext, backupConfirmed: true)
                 }
                 if AppRuntime.isSideDeltActivationUITesting,
-                   ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ROWS"] == "1" {
+                   (ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ROWS"] == "1"
+                    || ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ORDER"] == "1") {
                     _ = try? BootstrapDataService.prepareSideDeltClusterRevision(modelContext: modelContext, backupConfirmed: true)
                     let states = try? modelContext.fetch(FetchDescriptor<ClusterRotationState>())
-                    states?.first { $0.programVersionID == FixedCycleClusterProgramService.sideDeltVersionID && $0.clusterID == "cluster-3" }?.positionIndex = 1
+                    states?.first { $0.programVersionID == FixedCycleClusterProgramService.sideDeltVersionID && $0.clusterID == "cluster-3" }?.positionIndex = ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ORDER"] == "1" ? 0 : 1
                     try? modelContext.save()
+                    if ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ORDER"] == "1",
+                       ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ROWS"] == "1" {
+                        _ = try? BootstrapDataService.prepareSideDeltOrderRevision(modelContext: modelContext, backupConfirmed: true)
+                    }
                 }
             }
             return OpenLiftContainerStartup(
@@ -123,12 +128,16 @@ struct OpenLiftApp: App {
                 print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT_FAILED \(error.localizedDescription)")
             }
         }
-        if startup.issue == nil, AppRuntime.shouldAddClusteredSideDelt || AppRuntime.shouldAuditSideDeltRevision {
+        if startup.issue == nil, AppRuntime.shouldAddClusteredSideDelt || AppRuntime.shouldReorderClusteredSideDelts || AppRuntime.shouldAuditSideDeltRevision {
             do {
                 let context = ModelContext(startup.container)
                 if AppRuntime.shouldAddClusteredSideDelt {
                     let result = try BootstrapDataService.applySideDeltRevisionWithFreshBackup(modelContext: context)
                     print("OPENLIFT_CLUSTERED_SIDE_DELT_RESULT applied=\(result.revision.didApply)")
+                }
+                if AppRuntime.shouldReorderClusteredSideDelts {
+                    let result = try BootstrapDataService.applySideDeltOrderWithFreshBackup(modelContext: context)
+                    print("OPENLIFT_CLUSTERED_SIDE_DELT_ORDER_RESULT applied=\(result.revision.didApply)")
                 }
                 print("OPENLIFT_CLUSTERED_SIDE_DELT_AUDIT \(try BootstrapDataService.sideDeltRevisionAudit(modelContext: context))")
             } catch { print("OPENLIFT_CLUSTERED_SIDE_DELT_FAILED \(error.localizedDescription)") }
