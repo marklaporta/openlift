@@ -11,8 +11,11 @@ struct OpenLiftApp: App {
 
         if AppRuntime.isUITesting {
             let container: ModelContainer
-            if AppRuntime.isSeatedShrugActivationUITesting {
-                let root = FileManager.default.temporaryDirectory.appendingPathComponent("OpenLift-ShrugUI-\(UUID().uuidString)")
+            if AppRuntime.isSeatedShrugActivationUITesting || AppRuntime.isSideDeltActivationUITesting {
+                let token = AppRuntime.isSideDeltActivationUITesting
+                    ? (ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ID"].flatMap(UUID.init(uuidString:)) ?? UUID()).uuidString
+                    : UUID().uuidString
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("OpenLift-RevisionUI-\(token)")
                 do {
                     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                     container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
@@ -22,17 +25,26 @@ struct OpenLiftApp: App {
             } else {
                 container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
             }
-            if AppRuntime.shouldPrepareClusteredProgramRollout {
+            let hasSideDeltFixture = AppRuntime.isSideDeltActivationUITesting
+                && ((try? ModelContext(container).fetchCount(FetchDescriptor<ActiveCycleInstance>())) ?? 0) > 0
+            if AppRuntime.shouldPrepareClusteredProgramRollout && !hasSideDeltFixture {
                 let modelContext = ModelContext(container)
                 _ = try? BootstrapDataService.prepareClusteredProgramRollout(
                     modelContext: modelContext,
                     clusteredDraftBackupConfirmed: true
                 )
-                if AppRuntime.shouldPrepareSeatedShrugClusterRevision || AppRuntime.isSeatedShrugActivationUITesting {
+                if AppRuntime.shouldPrepareSeatedShrugClusterRevision || AppRuntime.isSeatedShrugActivationUITesting || AppRuntime.isSideDeltActivationUITesting {
                     _ = try? BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: modelContext, backupConfirmed: true)
                 }
-                if AppRuntime.shouldPrepareSeatedShrugClusterRevision {
+                if AppRuntime.shouldPrepareSeatedShrugClusterRevision || AppRuntime.isSideDeltActivationUITesting {
                     _ = try? BootstrapDataService.prepareSeatedShrugClusterRevision(modelContext: modelContext, backupConfirmed: true)
+                }
+                if AppRuntime.isSideDeltActivationUITesting,
+                   ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ROWS"] == "1" {
+                    _ = try? BootstrapDataService.prepareSideDeltClusterRevision(modelContext: modelContext, backupConfirmed: true)
+                    let states = try? modelContext.fetch(FetchDescriptor<ClusterRotationState>())
+                    states?.first { $0.programVersionID == FixedCycleClusterProgramService.sideDeltVersionID && $0.clusterID == "cluster-3" }?.positionIndex = 1
+                    try? modelContext.save()
                 }
             }
             return OpenLiftContainerStartup(
@@ -110,6 +122,16 @@ struct OpenLiftApp: App {
             } catch {
                 print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT_FAILED \(error.localizedDescription)")
             }
+        }
+        if startup.issue == nil, AppRuntime.shouldAddClusteredSideDelt || AppRuntime.shouldAuditSideDeltRevision {
+            do {
+                let context = ModelContext(startup.container)
+                if AppRuntime.shouldAddClusteredSideDelt {
+                    let result = try BootstrapDataService.applySideDeltRevisionWithFreshBackup(modelContext: context)
+                    print("OPENLIFT_CLUSTERED_SIDE_DELT_RESULT applied=\(result.revision.didApply)")
+                }
+                print("OPENLIFT_CLUSTERED_SIDE_DELT_AUDIT \(try BootstrapDataService.sideDeltRevisionAudit(modelContext: context))")
+            } catch { print("OPENLIFT_CLUSTERED_SIDE_DELT_FAILED \(error.localizedDescription)") }
         }
         if startup.issue == nil, AppRuntime.shouldSwapClusterSquats || AppRuntime.shouldAuditClusterSquatSwap {
             let context = ModelContext(startup.container)

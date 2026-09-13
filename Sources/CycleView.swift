@@ -35,6 +35,7 @@ struct CycleView: View {
     @State private var presentingExerciseSelection = false
     @State private var didAddAlternatingShrugs = false
     @State private var didSwapSquats = false
+    @State private var didAddSideDelt = false
 
     private var activeTemplate: CycleTemplate? {
         OpenLiftStateResolver.activeTemplate(
@@ -112,6 +113,26 @@ struct CycleView: View {
                                     .foregroundStyle(.green)
                                     .accessibilityIdentifier("cycle.squatSwapSuccess")
                             }
+                        }
+                        if FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.shrugVersionID,
+                           FixedCycleClusterProgramService.isProgramTemplate(activeTemplate) {
+                            Text("Rotate Super-ROM → Incline Side-Lying → Cable through the existing side-delt slot. Two starting work sets per side for the new movement; no extra workout slot.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Button("Add Third Side-Delt Movement") { addSideDelt() }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("cycle.addThirdSideDelt")
+                                .disabled(hasPendingWorkout)
+                            if hasPendingWorkout {
+                                Text("Finish your current workout first.")
+                                    .font(.caption)
+                                    .accessibilityIdentifier("cycle.sideDeltDraftBlocker")
+                            }
+                        }
+                        if didAddSideDelt {
+                            Label("Incline side-lying lateral raise added to the rotation.", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .accessibilityIdentifier("cycle.sideDeltSuccess")
                         }
                         if didAddAlternatingShrugs {
                             Label("Seated Dumbbell Shrugs added.", systemImage: "checkmark.circle.fill")
@@ -331,6 +352,17 @@ struct CycleView: View {
             didAddAlternatingShrugs = result.revision.didApply
             print("OPENLIFT_CLUSTERED_SHRUGS_RESULT applied=\(result.revision.didApply) template=\(result.revision.templateId) cycle=\(result.revision.cycleId)")
             print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT \(try BootstrapDataService.seatedShrugRevisionAudit(modelContext: modelContext))")
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func addSideDelt() {
+        do {
+            let result = try BootstrapDataService.applySideDeltRevisionWithFreshBackup(modelContext: modelContext)
+            didAddSideDelt = result.revision.didApply
+            print("OPENLIFT_CLUSTERED_SIDE_DELT_RESULT applied=\(result.revision.didApply)")
+            print("OPENLIFT_CLUSTERED_SIDE_DELT_AUDIT \(try BootstrapDataService.sideDeltRevisionAudit(modelContext: modelContext))")
         } catch {
             errorMessage = error.localizedDescription
         }

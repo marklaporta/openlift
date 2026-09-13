@@ -1477,6 +1477,12 @@ struct WorkoutView: View {
                                 slotPosition: slot.position,
                                 overrides: clusterExerciseOverrides
                             ) != nil
+                        if key == FixedCycleClusterProgramService.sideDeltProgressionKey {
+                            Text("Each row = one set on each side. Log the single dumbbell's weight and reps per side, not the left + right total.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("workout.sideDeltLoggingNote")
+                        }
                         if key == FixedCycleClusterProgramService.shrugProgressionKey,
                            exercise?.name == FixedCycleClusterProgramService.shrugExerciseName {
                             Text("Target: 12–16 reps")

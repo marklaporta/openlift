@@ -131,7 +131,7 @@ migration do not activate this program; the explicit rollout is documented in
 [`migration-safety.md`](migration-safety.md).
 
 The current program has a 3/6/6 structure: torso rotates A-C; legs rotate A-F
-while arms repeat A-C inside the same six-step cluster; shoulders repeat A-B
+while arms repeat A-C inside the same six-step cluster; shoulders repeat A-B in v1–v3 and A-C in v4
 while the calves/forearms lane rotates A-F. The app derives those shorter
 identities with modulo arithmetic but persists only one state per cluster.
 
