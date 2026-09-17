@@ -74,28 +74,35 @@ struct LogWorkoutView: View {
                                     .font(.caption.monospacedDigit())
                                     .frame(width: 28, alignment: .leading)
 
-                                Text("W")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                TextField(
-                                    "Weight",
-                                    value: Binding<Double?>(
-                                        get: { WorkoutEntryEditing.displayWeight(set.weight) },
-                                        set: { newWeight in
-                                            applyWeightEdit(
-                                                exerciseId: exerciseDraft.id,
-                                                setId: set.id,
-                                                newWeight: newWeight
-                                            )
-                                        }
-                                    ),
-                                    format: WeightFormatting.style
-                                )
-                                    .textFieldStyle(.roundedBorder)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(minWidth: 86)
-                                    .focused($focusedField, equals: .weight(set.id))
+                                if GripperLoadPresentation.applies(exerciseId: exerciseDraft.exerciseId, name: exercises.first(where: { $0.id == exerciseDraft.exerciseId })?.name) {
+                                    Text("Model").font(.caption2).foregroundStyle(.secondary)
+                                    GripperModelPicker(value: Binding(get: { set.weight }, set: { value in applyWeightEdit(exerciseId: exerciseDraft.id, setId: set.id, newWeight: value) }))
+                                        .accessibilityIdentifier("log.model.\(setNumber(for: set.id, in: exerciseDraft.id))")
+                                } else {
+                                    Text("W")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    TextField(
+                                        "Weight",
+                                        value: Binding<Double?>(
+                                            get: { WorkoutEntryEditing.displayWeight(set.weight) },
+                                            set: { newWeight in
+                                                applyWeightEdit(
+                                                    exerciseId: exerciseDraft.id,
+                                                    setId: set.id,
+                                                    newWeight: newWeight
+                                                )
+                                            }
+                                        ),
+                                        format: WeightFormatting.style
+                                    )
+                                        .textFieldStyle(.roundedBorder)
+                                        .keyboardType(.decimalPad)
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(minWidth: 86)
+                                        .focused($focusedField, equals: .weight(set.id))
+
+                                }
 
                                 Text("R")
                                     .font(.caption2)

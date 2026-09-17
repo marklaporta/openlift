@@ -318,6 +318,8 @@ enum SessionExportService {
         let sets: [ExportSet]
         let volume_feedback: String?
         let resistance_profile: ResistanceProfilePayload?
+        /// Optional for old readers/exports; CoC values are model ordinals, not load.
+        let weight_encoding: String?
 
         init(
             exercise_id: String? = nil,
@@ -333,6 +335,9 @@ enum SessionExportService {
             self.sets = sets
             self.volume_feedback = volume_feedback
             self.resistance_profile = resistance_profile
+            self.weight_encoding = GripperLoadPresentation.applies(
+                exerciseId: exercise_id.flatMap(UUID.init(uuidString:)), name: exercise_name
+            ) ? GripperLoadPresentation.exportEncoding : nil
         }
     }
 
