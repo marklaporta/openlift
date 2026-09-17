@@ -1245,7 +1245,7 @@ struct WorkoutView: View {
                                 exercise: resolvedExercise,
                                 entries: entries(for: resolved.exerciseId, sessionId: draftSession.id),
                                 isExecutionEnabled: isFixedExecutionEnabled,
-                                prefillSource: source.map(prefillSourceText),
+                                prefillSource: source.map { $0.compactSummary(exerciseId: resolved.exerciseId, name: resolvedExercise?.name) },
                                 resistanceProfile: resistanceProfile.map(
                                     ResistanceProfileService.snapshot
                                 ),
@@ -1326,7 +1326,7 @@ struct WorkoutView: View {
                                             sessionId: draftSession.id
                                         ).filter { $0.isLocked && $0.reps > 0 }) { entry in
                                             Text(
-                                                "S\(entry.setIndex) · \(entry.weight, specifier: "%.1f") × \(entry.reps)"
+                                                "S\(entry.setIndex) · \(GripperLoadPresentation.set(entry.weight, reps: entry.reps, exerciseId: exercise.id, name: exercise.name))"
                                             )
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
@@ -1514,7 +1514,7 @@ struct WorkoutView: View {
                             exercise: exercise,
                             entries: entries(for: resolved.exerciseId, sessionId: session.id),
                             isExecutionEnabled: isFixedExecutionEnabled,
-                            prefillSource: source.map(prefillSourceText),
+                            prefillSource: source.map { $0.compactSummary(exerciseId: resolved.exerciseId, name: exercise?.name) },
                             resistanceProfile: resistanceProfile.map(ResistanceProfileService.snapshot),
                             resistanceProfiles: ResistanceProfileService.snapshots(resistanceProfiles),
                             sessionId: session.id,
@@ -1617,7 +1617,7 @@ struct WorkoutView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(recap.exerciseName)
                         .font(.subheadline.weight(.semibold))
-                    Text(completedSetSummary(recap.sets))
+                    Text(completedSetSummary(recap.sets, exerciseId: recap.exerciseId, name: recap.exerciseName))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1681,14 +1681,8 @@ struct WorkoutView: View {
         )) ?? []
     }
 
-    private func completedSetSummary(_ sets: [FixedCycleCompletedSetRecap]) -> String {
-        sets.map { set in
-            let weight = set.weight.formatted(
-                .number.precision(.fractionLength(0...2))
-            )
-            return "\(weight) × \(set.reps)"
-        }
-        .joined(separator: " · ")
+    private func completedSetSummary(_ sets: [FixedCycleCompletedSetRecap], exerciseId: UUID, name: String) -> String {
+        sets.map { GripperLoadPresentation.set($0.weight, reps: $0.reps, exerciseId: exerciseId, name: name) }.joined(separator: " · ")
     }
 
     private func prepareWorkoutState(now: Date = .now) async {
@@ -2951,10 +2945,6 @@ struct WorkoutView: View {
         if modelContext.hasChanges { try modelContext.save() }
     }
 
-    private func prefillSourceText(_ result: ExerciseEffortLookupResult) -> String {
-        result.compactSummary
-    }
-
     private func skipExerciseToday(
         _ slot: CycleSlot,
         sessionId: UUID,
@@ -3664,45 +3654,60 @@ private struct ExerciseSection: View {
                         .font(.caption.monospacedDigit())
                         .frame(width: 28, alignment: .leading)
 
-                    Text(usesAssistanceLoad ? "A" : "W")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    TextField(
-                        usesAssistanceLoad ? "Assist" : "Weight",
-                        value: Binding<Double?>(
-                            get: {
-                                WorkoutEntryEditing.displayWeight(
-                                    bufferedEntries[entry.setIndex]?.weight ?? entry.weight
-                                )
-                            },
-                            set: { newWeight in
+                    if GripperLoadPresentation.applies(exerciseId: exercise?.id, name: exercise?.name) {
+                        Text("Model").font(.caption2).foregroundStyle(.secondary)
+                        GripperModelPicker(value: Binding(get: { bufferedEntries[entry.setIndex]?.weight ?? entry.weight },
+                            set: { value in
                                 guard !entry.isLocked else { return }
                                 var states = currentBufferedStates()
-                                WorkoutEntryEditing.applyWeightEdit(
-                                    to: &states,
-                                    setIndex: entry.setIndex,
-                                    newWeight: newWeight
-                                )
-
-                                bufferedEntries = Dictionary(
-                                    states.map { ($0.setIndex, $0) },
-                                    uniquingKeysWith: { _, latest in latest }
-                                )
+                                WorkoutEntryEditing.applyWeightEdit(to: &states, setIndex: entry.setIndex, newWeight: value)
+                                bufferedEntries = Dictionary(states.map { ($0.setIndex, $0) }, uniquingKeysWith: { _, latest in latest })
                                 scheduleBufferedCommit()
-                            }
-                        ),
-                        format: WeightFormatting.style
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .keyboardType(.decimalPad)
-                    .frame(width: 82)
-                    .accessibilityIdentifier(
-                        "fixed.weight.\(exercise?.name ?? "unknown").\(entry.setIndex)"
-                    )
-                    .disabled(entry.isLocked)
-                    .disabled(!isExecutionEnabled || entry.isLocked)
-                    .opacity(entry.isLocked ? 1 : 0.55)
-                    .focused($focusedField, equals: .weight(entry.id))
+                            }))
+                            .disabled(!isExecutionEnabled || entry.isLocked)
+                            .accessibilityIdentifier("fixed.model.\(exercise?.name ?? "unknown").\(entry.setIndex)")
+                    } else {
+                        Text(usesAssistanceLoad ? "A" : "W")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        TextField(
+                            usesAssistanceLoad ? "Assist" : "Weight",
+                            value: Binding<Double?>(
+                                get: {
+                                    WorkoutEntryEditing.displayWeight(
+                                        bufferedEntries[entry.setIndex]?.weight ?? entry.weight
+                                    )
+                                },
+                                set: { newWeight in
+                                    guard !entry.isLocked else { return }
+                                    var states = currentBufferedStates()
+                                    WorkoutEntryEditing.applyWeightEdit(
+                                        to: &states,
+                                        setIndex: entry.setIndex,
+                                        newWeight: newWeight
+                                    )
+
+                                    bufferedEntries = Dictionary(
+                                        states.map { ($0.setIndex, $0) },
+                                        uniquingKeysWith: { _, latest in latest }
+                                    )
+                                    scheduleBufferedCommit()
+                                }
+                            ),
+                            format: WeightFormatting.style
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.decimalPad)
+                        .frame(width: 82)
+                        .accessibilityIdentifier(
+                            "fixed.weight.\(exercise?.name ?? "unknown").\(entry.setIndex)"
+                        )
+                        .disabled(entry.isLocked)
+                        .disabled(!isExecutionEnabled || entry.isLocked)
+                        .opacity(entry.isLocked ? 1 : 0.55)
+                        .focused($focusedField, equals: .weight(entry.id))
+
+                    }
 
                     Text("R")
                         .font(.caption2)
@@ -3979,7 +3984,7 @@ struct ExerciseHistorySheet: View {
                                 HStack {
                                     Text("Set \(set.setIndex)")
                                     Spacer()
-                                    Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) x \(set.reps)")
+                                    Text(GripperLoadPresentation.set(set.weight, reps: set.reps, name: exerciseName, separator: "x"))
                                         .foregroundStyle(.secondary)
                                 }
                             }

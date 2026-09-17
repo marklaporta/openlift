@@ -342,7 +342,7 @@ private struct HistoryExerciseOccurrenceView: View {
                 HStack {
                     Text("Set \(index + 1)")
                     Spacer()
-                    Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) × \(set.reps)")
+                    Text(GripperLoadPresentation.set(set.weight, reps: set.reps, name: occurrence.exerciseName))
                         .monospacedDigit()
                 }
                 .font(.subheadline)
@@ -480,7 +480,7 @@ private struct AdaptiveSessionDetailView: View {
                                     )
                                 }
                                 ForEach(rows) { row in
-                                    Text("Set \(row.setIndex): \(WeightFormatting.normalized(row.weight), format: WeightFormatting.style) x \(row.reps)")
+                                    Text("Set \(row.setIndex): \(GripperLoadPresentation.set(row.weight, reps: row.reps, exerciseId: actualExerciseId, name: actualExercise?.name ?? snapshot.exerciseName, separator: "x"))")
                                         .foregroundStyle(.secondary)
                                 }
                                 let comparison = comparisonFor(snapshot: snapshot, complex: complex)
@@ -488,11 +488,11 @@ private struct AdaptiveSessionDetailView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 if !comparison.previous.isEmpty {
-                                    Text("Previous: \(formatted(comparison.previous))")
+                                    Text("Previous: \(formatted(comparison.previous, exercise: snapshot))")
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                 }
-                                Text("Current: \(formatted(comparison.current))")
+                                Text("Current: \(formatted(comparison.current, exercise: snapshot))")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -617,8 +617,8 @@ private struct AdaptiveSessionDetailView: View {
         )
     }
 
-    private func formatted(_ rows: [ComparableSetRow]) -> String {
-        rows.map { "\(WeightFormatting.normalized($0.weight)) x \($0.reps)" }.joined(separator: ", ")
+    private func formatted(_ rows: [ComparableSetRow], exercise: PlannedExerciseSnapshot) -> String {
+        rows.map { GripperLoadPresentation.set($0.weight, reps: $0.reps, exerciseId: exercise.exerciseId, name: exercise.exerciseName) }.joined(separator: ", ")
     }
 }
 
@@ -725,7 +725,7 @@ private struct SessionDetailView: View {
                         HStack {
                             Text("Set \(set.setIndex)")
                             Spacer()
-                            Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) x \(set.reps)")
+                            Text(GripperLoadPresentation.set(set.weight, reps: set.reps, exerciseId: group.exercise.id, name: group.exercise.name, separator: "x"))
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -948,7 +948,7 @@ private struct ExportedSessionDetailView: View {
                         HStack {
                             Text("Set \(set.set_index)")
                             Spacer()
-                            Text("\(WeightFormatting.normalized(set.weight), format: WeightFormatting.style) x \(set.reps)")
+                            Text(GripperLoadPresentation.set(set.weight, reps: set.reps, exerciseId: exercise.exercise_id.flatMap(UUID.init(uuidString:)), name: exercise.exercise_name, separator: "x"))
                                 .foregroundStyle(.secondary)
                         }
                     }
