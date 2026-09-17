@@ -1088,7 +1088,8 @@ enum AdaptiveWorkoutService {
             rotationSetEntries: rotationSetEntries,
             resistanceRequirement: exercise.equipment.supportsResistanceProfile
                 ? .cable(replacementProfile) : .notApplicable,
-            resistanceProfiles: remainingProfiles
+            resistanceProfiles: remainingProfiles,
+            exercises: try modelContext.fetch(FetchDescriptor<Exercise>())
         )
         if let oldProfile { modelContext.delete(oldProfile) }
         if let replacementProfile {

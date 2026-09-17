@@ -223,7 +223,8 @@ enum BootstrapDataService {
         }
         for entry in defaultExerciseCatalog where
             !currentNames.contains(entry.0.lowercased())
-                && !currentExercises.contains(where: { satisfiesCatalogAlias($0, for: entry.0) }) {
+                && !currentExercises.contains(where: { satisfiesCatalogAlias($0, for: entry.0) })
+                && CSDBRowIdentity.resolve(id: nil, name: entry.0, exercises: currentExercises) == nil {
             let exercise = Exercise(name: entry.0, primaryMuscle: entry.1, type: entry.2, equipment: entry.3)
             if entry.0 == FixedCycleClusterProgramService.sideDeltExerciseName {
                 guard !currentExercises.contains(where: { $0.id == FixedCycleClusterProgramService.sideDeltExerciseID }) else {
@@ -1210,6 +1211,10 @@ enum BootstrapDataService {
         if modelContext.hasChanges {
             try modelContext.save()
         }
+        if CSDBRowIdentity.canonical(in: catalog) != nil {
+            try normalizeCSDBRowSelections(modelContext: modelContext)
+            if modelContext.hasChanges { try modelContext.save() }
+        }
         return result
     }
 
@@ -1222,6 +1227,7 @@ enum BootstrapDataService {
         if let id, let exact = byId[id] {
             return exact
         }
+        if let canonical = CSDBRowIdentity.resolve(id: id, name: name, exercises: Array(byId.values)) { return canonical }
         if let exact = byName[name.lowercased()] {
             return exact
         }
@@ -2327,6 +2333,7 @@ enum BootstrapDataService {
         let exercisesByName = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name.lowercased(), $0) })
 
         func exercise(named name: String) throws -> Exercise {
+            if let canonical = CSDBRowIdentity.resolve(id: nil, name: name, exercises: exercises) { return canonical }
             guard let exercise = exercisesByName[name.lowercased()] else {
                 throw NSError(
                     domain: "OpenLiftBootstrapDataService",
@@ -2739,6 +2746,7 @@ enum FixedCycleClusterProgramService {
                 return exercise
             }
             for candidate in candidates {
+                if let canonical = CSDBRowIdentity.resolve(id: nil, name: candidate, exercises: exercises) { return canonical }
                 if let exercise = byName[candidate.lowercased()] { return exercise }
             }
             throw ProgramError.requiredExerciseMissing(candidates[0])

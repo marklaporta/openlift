@@ -503,7 +503,8 @@ enum FixedCycleWorkoutService {
         progressionKey: String? = nil,
         progressionOccurrences: [ClusterOccurrenceRecord] = [],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
-        resistanceProfiles: [ExerciseResistanceProfile] = []
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
+        exercises: [Exercise] = []
     ) -> ExerciseEffortLookupResult? {
         ExerciseEffortLookupService.fixedCycleEffort(
             exerciseId: exerciseId,
@@ -517,7 +518,8 @@ enum FixedCycleWorkoutService {
             progressionKey: progressionKey,
             progressionOccurrences: progressionOccurrences,
             resistanceRequirement: resistanceRequirement,
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         )
     }
 
@@ -2245,7 +2247,8 @@ struct WorkoutView: View {
             rotationSessions: sessions,
             rotationSetEntries: setEntries,
             resistanceRequirement: resistanceRequirement(exerciseId: exerciseId, sessionId: nil),
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         ), global.isComparable, !global.rows.isEmpty {
             let row = global.rows.first(where: { $0.setIndex == setIndex }) ?? global.rows.last!
             return (row.weight, row.reps)
@@ -2879,7 +2882,8 @@ struct WorkoutView: View {
                 exerciseId: exerciseId,
                 sessionId: session.id
             ),
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         )
     }
 
@@ -3051,7 +3055,8 @@ struct WorkoutView: View {
                     adaptiveSessions: adaptiveSessions,
                     adaptiveSetEntries: adaptiveSetEntries,
                     rotationSessions: sessions,
-                    rotationSetEntries: setEntries
+                    rotationSetEntries: setEntries,
+                    exercises: exercises
                 )
                 for index in 1...max(1, effort?.rows.count ?? slot.defaultSetCount) {
                     let value = prefillValues(

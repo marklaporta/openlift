@@ -86,7 +86,11 @@ enum PublishedCycleService {
 
         let exercisesById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
         let exercisesByName = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name.lowercased(), $0) })
-        let exercisesByCanonicalName = Dictionary(uniqueKeysWithValues: exercises.map { (canonicalizeName($0.name), $0) })
+        // Punctuation-equivalent catalog labels may still be distinct
+        // identities. Exact ID/name lookup remains valid; fuzzy lookup must
+        // neither crash nor pick an arbitrary member of an ambiguous group.
+        let canonicalGroups = Dictionary(grouping: exercises, by: { canonicalizeName($0.name) })
+        let exercisesByCanonicalName = canonicalGroups
 
         let days = try doc.days.enumerated().map { dayIndex, dayDoc in
             let slots = try dayDoc.slots.enumerated().map { index, slotDoc in
@@ -132,12 +136,13 @@ enum PublishedCycleService {
         slotDoc: PublishedCycleDocument.PublishedCycleSlot,
         byId: [UUID: Exercise],
         byName: [String: Exercise],
-        byCanonicalName: [String: Exercise]
+        byCanonicalName: [String: [Exercise]]
     ) throws -> Exercise {
         if let idText = slotDoc.exerciseId {
             guard let uuid = UUID(uuidString: idText) else {
                 throw PublishedCycleError.invalidExerciseId(idText)
             }
+            if let canonical = CSDBRowIdentity.resolve(id: uuid, name: nil, exercises: Array(byId.values)) { return canonical }
             guard let exercise = byId[uuid] else {
                 throw PublishedCycleError.unknownExerciseReference(idText)
             }
@@ -145,25 +150,28 @@ enum PublishedCycleService {
         }
 
         if let name = slotDoc.exerciseName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            if let canonical = CSDBRowIdentity.resolve(id: nil, name: name, exercises: Array(byId.values)) { return canonical }
             if let exercise = byName[name.lowercased()] {
                 return exercise
             }
 
             let canonical = canonicalizeName(name)
             if let exactCanonical = byCanonicalName[canonical] {
-                return exactCanonical
+                guard exactCanonical.count == 1 else { throw PublishedCycleError.unknownExerciseReference(name) }
+                return exactCanonical[0]
             }
 
             for alias in aliasCandidates(for: canonical) {
                 if let aliasMatch = byCanonicalName[alias] {
-                    return aliasMatch
+                    guard aliasMatch.count == 1 else { throw PublishedCycleError.unknownExerciseReference(name) }
+                    return aliasMatch[0]
                 }
             }
 
             let fuzzy = byCanonicalName.filter { key, _ in
                 key.contains(canonical) || canonical.contains(key)
-            }
-            if fuzzy.count == 1, let only = fuzzy.first?.value {
+            }.values.flatMap { $0 }
+            if fuzzy.count == 1, let only = fuzzy.first {
                 return only
             }
 

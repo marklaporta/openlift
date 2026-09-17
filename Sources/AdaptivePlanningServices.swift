@@ -2458,14 +2458,15 @@ enum ExerciseEffortLookupService {
         progressionKey: String? = nil,
         progressionOccurrences: [ClusterOccurrenceRecord] = [],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
-        resistanceProfiles: [ExerciseResistanceProfile] = []
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
+        exercises: [Exercise] = []
     ) -> ExerciseEffortLookupResult? {
         if let progressionKey {
             let identityBySession = Dictionary(
                 progressionOccurrences.compactMap { occurrence -> (UUID, ClusterExerciseProgressionSnapshot)? in
                     guard let snapshot = occurrence.exerciseSnapshots.first(where: {
                         $0.progressionKey == progressionKey
-                            && $0.exerciseId == exerciseId
+                            && CSDBRowIdentity.historicalIDs(for: exerciseId, exercises: exercises).contains($0.exerciseId)
                             && $0.completionStatus == .performed
                     }) else { return nil }
                     return (occurrence.sessionId, snapshot)
@@ -2481,7 +2482,7 @@ enum ExerciseEffortLookupService {
                 }
                 return rotationResult(
                     session: session,
-                    exerciseId: exerciseId,
+                    exerciseId: snapshot.exerciseId,
                     matchKind: .sameProgressionIdentity,
                     entries: rotationSetEntries,
                     resistanceRequirement: resistanceRequirement,
@@ -2506,25 +2507,21 @@ enum ExerciseEffortLookupService {
                 rotationSetEntries: rotationSetEntries,
                 excludingSessionIds: Set(progressionOccurrences.map(\.sessionId)),
                 resistanceRequirement: resistanceRequirement,
-                resistanceProfiles: resistanceProfiles
+                resistanceProfiles: resistanceProfiles,
+                exercises: exercises
             )
         }
-        let sameDay = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
+        let sameDay = rotationSessions.flatMap { session -> [ExerciseEffortLookupResult] in
             guard session.id != excludingSessionId,
                   session.status == .completed,
                   session.cycleInstanceId == cycleInstanceId,
                   session.cycleDayIndex == cycleDayIndex,
-                  session.dayLabelSnapshot != "Off-Schedule" else {
-                return nil
+                  session.dayLabelSnapshot != "Off-Schedule" else { return [] }
+            return CSDBRowIdentity.historicalIDs(for: exerciseId, exercises: exercises).sorted { $0.uuidString < $1.uuidString }.compactMap { historicalID in
+                rotationResult(session: session, exerciseId: historicalID, matchKind: .sameCycleDay,
+                    entries: rotationSetEntries, resistanceRequirement: resistanceRequirement,
+                    resistanceProfiles: resistanceProfiles)
             }
-            return rotationResult(
-                session: session,
-                exerciseId: exerciseId,
-                matchKind: .sameCycleDay,
-                entries: rotationSetEntries,
-                resistanceRequirement: resistanceRequirement,
-                resistanceProfiles: resistanceProfiles
-            )
         }
         if let result = preferred(sameDay) {
             return result
@@ -2538,7 +2535,8 @@ enum ExerciseEffortLookupService {
             rotationSessions: rotationSessions,
             rotationSetEntries: rotationSetEntries,
             resistanceRequirement: resistanceRequirement,
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         )
     }
 
@@ -2552,7 +2550,8 @@ enum ExerciseEffortLookupService {
         rotationSetEntries: [SetEntry],
         excludingSessionIds: Set<UUID> = [],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
-        resistanceProfiles: [ExerciseResistanceProfile] = []
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
+        exercises: [Exercise] = []
     ) -> ExerciseEffortLookupResult? {
         let adaptive = adaptiveSessions.flatMap { session -> [ExerciseEffortLookupResult] in
             guard session.status == .completed,
@@ -2563,7 +2562,7 @@ enum ExerciseEffortLookupService {
             }
             let occurrenceRows = Dictionary(grouping: adaptiveSetEntries.filter {
                     $0.adaptiveSessionId == session.id
-                        && $0.exerciseId == exerciseId
+                        && CSDBRowIdentity.historicalIDs(for: exerciseId, exercises: exercises).contains($0.exerciseId)
                         && $0.isLocked
                         && $0.reps > 0
                 }, by: \AdaptiveSetEntry.occurrenceId)
@@ -2579,7 +2578,7 @@ enum ExerciseEffortLookupService {
                 let profile = (try? ResistanceProfileService.profile(
                     workoutKind: .adaptive,
                     sessionId: session.id,
-                    exerciseId: exerciseId,
+                    exerciseId: entries[0].exerciseId,
                     occurrenceId: occurrenceId,
                     in: resistanceProfiles
                 )).flatMap(ResistanceProfileService.value)
@@ -2592,22 +2591,21 @@ enum ExerciseEffortLookupService {
                     dayLabel: nil,
                     rows: rows,
                     resistanceProfile: profile,
-                    profileComparison: comparison(requirement: resistanceRequirement, historical: profile)
+                    profileComparison: comparison(requirement: resistanceRequirement, historical: profile, exerciseId: exerciseId)
                 )
             }
         }
 
-        let rotation = rotationSessions.compactMap { session -> ExerciseEffortLookupResult? in
+        let rotation = rotationSessions.flatMap { session -> [ExerciseEffortLookupResult] in
             guard session.id != excludingSessionId,
-                  !excludingSessionIds.contains(session.id) else { return nil }
-            return rotationResult(
-                session: session,
-                exerciseId: exerciseId,
-                matchKind: .globalLatest,
-                entries: rotationSetEntries,
-                resistanceRequirement: resistanceRequirement,
-                resistanceProfiles: resistanceProfiles
-            )
+                  !excludingSessionIds.contains(session.id) else { return [] }
+            // Never concatenate identities within a session: each retains its
+            // own profile and literal dose, even when both aliases were logged.
+            return CSDBRowIdentity.historicalIDs(for: exerciseId, exercises: exercises).sorted { $0.uuidString < $1.uuidString }.compactMap { historicalID in
+                rotationResult(session: session, exerciseId: historicalID,
+                    matchKind: .globalLatest, entries: rotationSetEntries,
+                    resistanceRequirement: resistanceRequirement, resistanceProfiles: resistanceProfiles)
+            }
         }
         return preferred(adaptive + rotation)
     }
@@ -2660,16 +2658,21 @@ enum ExerciseEffortLookupService {
             dayLabel: session.dayLabelSnapshot,
             rows: rows,
             resistanceProfile: profile,
-            profileComparison: comparison(requirement: resistanceRequirement, historical: profile)
+            profileComparison: comparison(requirement: resistanceRequirement, historical: profile, exerciseId: exerciseId)
         )
     }
 
     private static func comparison(
         requirement: ResistanceProfileLookupRequirement,
-        historical: ResistanceProfileValue?
+        historical: ResistanceProfileValue?,
+        exerciseId: UUID
     ) -> ResistanceProfileComparison {
         switch requirement {
-        case .notApplicable: return .exact
+        case .notApplicable:
+            // Consolidation never turns a stored resistance profile into DB
+            // pounds merely because the current catalog is now dumbbell.
+            if (exerciseId == CSDBRowIdentity.canonicalID || CSDBRowIdentity.legacyIDs.contains(exerciseId)), historical != nil { return .different }
+            return .exact
         case .cable(let current):
             return ResistanceProfileComparison.compare(current: current, historical: historical)
         }
@@ -2706,7 +2709,8 @@ enum AdaptivePrefillService {
         rotationSetEntries: [SetEntry],
         currentResistanceProfiles: [UUID: ResistanceProfileValue] = [:],
         cableExerciseIds: Set<UUID> = [],
-        resistanceProfiles: [ExerciseResistanceProfile] = []
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
+        exercises: [Exercise] = []
     ) {
         for complex in plan.complexes {
             for exercise in complex.exercises {
@@ -2720,7 +2724,8 @@ enum AdaptivePrefillService {
                     resistanceRequirement: cableExerciseIds.contains(exercise.exerciseId)
                         ? .cable(currentResistanceProfiles[exercise.occurrenceId])
                         : .notApplicable,
-                    resistanceProfiles: resistanceProfiles
+                    resistanceProfiles: resistanceProfiles,
+                    exercises: exercises
                 )
                 if !previous.isEmpty {
                     exercise.prescribedSetCount = previous.count
@@ -2737,7 +2742,8 @@ enum AdaptivePrefillService {
         rotationSessions: [Session],
         rotationSetEntries: [SetEntry],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
-        resistanceProfiles: [ExerciseResistanceProfile] = []
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
+        exercises: [Exercise] = []
     ) -> [ComparableSetRow] {
         return latestRows(
             exerciseId: exercise.exerciseId,
@@ -2747,7 +2753,8 @@ enum AdaptivePrefillService {
             rotationSessions: rotationSessions,
             rotationSetEntries: rotationSetEntries,
             resistanceRequirement: resistanceRequirement,
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         )
     }
 
@@ -2759,7 +2766,8 @@ enum AdaptivePrefillService {
         rotationSessions: [Session],
         rotationSetEntries: [SetEntry],
         resistanceRequirement: ResistanceProfileLookupRequirement = .notApplicable,
-        resistanceProfiles: [ExerciseResistanceProfile] = []
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
+        exercises: [Exercise] = []
     ) -> [ComparableSetRow] {
         ExerciseEffortLookupService.globalEffort(
             exerciseId: exerciseId,
@@ -2769,7 +2777,8 @@ enum AdaptivePrefillService {
             rotationSessions: rotationSessions,
             rotationSetEntries: rotationSetEntries,
             resistanceRequirement: resistanceRequirement,
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         ).flatMap { $0.isComparable ? $0.rows : nil } ?? []
     }
 
@@ -2781,7 +2790,8 @@ enum AdaptivePrefillService {
         rotationSetEntries: [SetEntry],
         currentResistanceProfiles: [UUID: ResistanceProfileValue] = [:],
         cableExerciseIds: Set<UUID> = [],
-        resistanceProfiles: [ExerciseResistanceProfile] = []
+        resistanceProfiles: [ExerciseResistanceProfile] = [],
+        exercises: [Exercise] = []
     ) -> [UUID: [Int: AdaptiveSetPrefill]] {
         var result: [UUID: [Int: AdaptiveSetPrefill]] = [:]
         for complex in plan.complexes {
@@ -2796,7 +2806,8 @@ enum AdaptivePrefillService {
                     resistanceRequirement: cableExerciseIds.contains(exercise.exerciseId)
                         ? .cable(currentResistanceProfiles[exercise.occurrenceId])
                         : .notApplicable,
-                    resistanceProfiles: resistanceProfiles
+                    resistanceProfiles: resistanceProfiles,
+                    exercises: exercises
                 )
                 guard !previous.isEmpty else { continue }
                 // Preserve the literal qualifying effort, including its exact
