@@ -41,10 +41,22 @@ struct OpenLiftApp: App {
                 }
                 if AppRuntime.isSideDeltActivationUITesting,
                    (ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ROWS"] == "1"
-                    || ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ORDER"] == "1") {
+                    || ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ORDER"] == "1"
+                    || ProcessInfo.processInfo.environment["OPENLIFT_CHEST_BACK_UI"] == "1") {
                     _ = try? BootstrapDataService.prepareSideDeltClusterRevision(modelContext: modelContext, backupConfirmed: true)
+                    if ProcessInfo.processInfo.environment["OPENLIFT_CHEST_BACK_UI"] == "1" {
+                        for (index, item) in FixedCycleClusterProgramService.recoveryMovements.enumerated() {
+                            let exercise = Exercise(name: item.1, primaryMuscle: index % 2 == 0 ? .chest : .back,
+                                type: index % 2 == 0 ? .isolation : .compound,
+                                equipment: index < 2 ? .cable : .dumbbell)
+                            exercise.id = item.0
+                            modelContext.insert(exercise)
+                        }
+                        try? modelContext.save()
+                    }
                     let states = try? modelContext.fetch(FetchDescriptor<ClusterRotationState>())
-                    states?.first { $0.programVersionID == FixedCycleClusterProgramService.sideDeltVersionID && $0.clusterID == "cluster-3" }?.positionIndex = ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ORDER"] == "1" ? 0 : 1
+                    states?.first { $0.programVersionID == FixedCycleClusterProgramService.sideDeltVersionID && $0.clusterID == "cluster-3" }?.positionIndex = (ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ORDER"] == "1"
+                        || ProcessInfo.processInfo.environment["OPENLIFT_CHEST_BACK_UI"] == "1") ? 0 : 1
                     try? modelContext.save()
                     if ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ORDER"] == "1",
                        ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ROWS"] == "1" {
@@ -127,6 +139,12 @@ struct OpenLiftApp: App {
             } catch {
                 print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT_FAILED \(error.localizedDescription)")
             }
+        }
+        if startup.issue == nil, AppRuntime.shouldReviseChestBack {
+            do {
+                let result = try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: ModelContext(startup.container))
+                print("OPENLIFT_CHEST_BACK_REVISION applied=\(result.revision.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
+            } catch { print("OPENLIFT_CHEST_BACK_REVISION_FAILED \(error.localizedDescription)") }
         }
         if startup.issue == nil, AppRuntime.shouldAddClusteredSideDelt || AppRuntime.shouldReorderClusteredSideDelts || AppRuntime.shouldAuditSideDeltRevision {
             do {

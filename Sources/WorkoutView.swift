@@ -432,9 +432,22 @@ enum FixedCycleWorkoutService {
 
     static func draftSetCount(
         defaultSetCount: Int,
-        effort: ExerciseEffortLookupResult?
+        effort: ExerciseEffortLookupResult?,
+        selection: FixedCycleClusterProgramService.Selection? = nil,
+        exerciseId: UUID? = nil, progressionKey: String? = nil,
+        occurrences: [ClusterOccurrenceRecord] = []
     ) -> Int {
-        effort?.isProgressionPrefillEligible == true
+        if let selection, selection.programVersionID == FixedCycleClusterProgramService.chestBackVersionID,
+           selection.cluster == .cluster1, let exerciseId,
+           !occurrences.contains(where: { occurrence in
+               occurrence.programVersionID == selection.programVersionID
+                   && occurrence.sessionId == effort?.sessionId
+                   && occurrence.cycleInstanceId == selection.cycleInstanceId
+                   && occurrence.clusterID == selection.cluster.rawValue
+                   && occurrence.exerciseSnapshots.contains { $0.exerciseId == exerciseId
+                       && $0.progressionKey == progressionKey && $0.completionStatus == .performed }
+           }) { return 2 }
+        return effort?.isProgressionPrefillEligible == true
             ? max(1, effort?.rows.count ?? defaultSetCount)
             : max(1, defaultSetCount)
     }
@@ -1407,7 +1420,7 @@ struct WorkoutView: View {
                 occurrences: clusterOccurrences
             )
             let displayedStep = completed.map {
-                $0.positionIndex % selection.cluster.rotationLength
+                $0.positionIndex % FixedCycleClusterProgramService.rotationLength(selection.cluster, version: selection.programVersionID)
             } ?? selection.effectiveStep
             let ids = Set(completed?.exerciseSnapshots.map(\.exerciseId)
                 ?? FixedCycleClusterProgramService.resolvedSlots(
@@ -1477,6 +1490,12 @@ struct WorkoutView: View {
                                 slotPosition: slot.position,
                                 overrides: clusterExerciseOverrides
                             ) != nil
+                        if selection.programVersionID == FixedCycleClusterProgramService.chestBackVersionID,
+                           resolved.exerciseId == FixedCycleClusterProgramService.singleArmPulldownID {
+                            Text("Seated side-on. Each row = one set on each side; log load and reps per side, not the combined total.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("workout.singleArmPulldownLoggingNote")
+                        }
                         if key == FixedCycleClusterProgramService.sideDeltProgressionKey {
                             Text("Each row = one set on each side. Log the single dumbbell's weight and reps per side, not the left + right total.")
                                 .font(.caption)
@@ -2262,7 +2281,8 @@ struct WorkoutView: View {
             )
             let setCount = FixedCycleWorkoutService.draftSetCount(
                 defaultSetCount: slot.defaultSetCount,
-                effort: effort
+                effort: effort, selection: selection, exerciseId: resolved.exerciseId,
+                progressionKey: progressionKey, occurrences: clusterOccurrences
             )
 
             for setIndex in 1...max(1, setCount) {
@@ -2715,9 +2735,8 @@ struct WorkoutView: View {
             session: session,
             progressionKey: key
         )
-        let setCount = effort?.isProgressionPrefillEligible == true
-            ? max(1, effort?.rows.count ?? fallbackSetCount)
-            : max(1, fallbackSetCount)
+        let setCount = FixedCycleWorkoutService.draftSetCount(defaultSetCount: fallbackSetCount,
+            effort: effort, selection: selection, exerciseId: exercise.id, progressionKey: key, occurrences: clusterOccurrences)
         for setIndex in 1...setCount {
             let values = prefillValues(
                 exerciseId: exercise.id,

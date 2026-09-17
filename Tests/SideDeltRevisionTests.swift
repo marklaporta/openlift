@@ -370,6 +370,76 @@ final class SideDeltRevisionTests: XCTestCase {
     }
 
     @MainActor
+    func testChestBackExportHydrationPreservesFourStepProgramAndHistory() throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let (_, sourceCycle) = try active(f.context)
+        _ = try BootstrapDataService.prepareSideDeltClusterRevision(modelContext: f.context, backupConfirmed: true)
+        for (index, item) in Program.recoveryMovements.enumerated() {
+            f.context.insert(Exercise(id: item.0, name: item.1, primaryMuscle: index % 2 == 0 ? .chest : .back,
+                type: index % 2 == 0 ? .isolation : .compound, equipment: index < 2 ? .cable : .dumbbell))
+        }
+        try f.context.save()
+        let sourceExercises = try f.context.fetch(FetchDescriptor<Exercise>())
+        let result = try BootstrapDataService.prepareChestBackRevision(modelContext: f.context, backupConfirmed: true)
+        let template = try XCTUnwrap(try f.context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == result.templateId })
+        _ = try completeSession(context: f.context, template: template, cycle: sourceCycle, exercises: sourceExercises, timestamp: 3_000)
+        _ = try completeSession(context: f.context, template: template, cycle: sourceCycle, exercises: sourceExercises, timestamp: 4_000)
+        let occurrences = try f.context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        let states = try f.context.fetch(FetchDescriptor<ClusterRotationState>())
+        let preferences = try f.context.fetch(FetchDescriptor<ClusterExercisePreference>())
+        let entries = try f.context.fetch(FetchDescriptor<SetEntry>())
+        let templates = try f.context.fetch(FetchDescriptor<CycleTemplate>())
+        let exportRoot = FileManager.default.temporaryDirectory.appendingPathComponent("ShrugExport-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: exportRoot) }
+        let environment = SessionExportService.ExportEnvironment(containerIdentifier: nil, iCloudContainerURL: nil,
+            localDocumentsURL: exportRoot, coordinatedWrite: { data, url in try data.write(to: url, options: .atomic) },
+            ubiquityMetadata: { _ in SessionExportService.UbiquityMetadata(isUbiquitousItem: false,
+                isUploaded: false, isUploading: false, uploadingErrorDescription: nil) })
+        let exports = try f.context.fetch(FetchDescriptor<Session>()).map { session in
+            let owner = templates.first { $0.id == occurrences.first { $0.sessionId == session.id }!.templateId }!
+            let metadata = SessionExportService.fixedCycleMetadata(session: session, template: owner, day: owner.days[0],
+                exercises: sourceExercises, setEntries: entries, readiness: [], overrides: [],
+                clusterOccurrences: occurrences, clusterRotationStates: states, clusterExercisePreferences: preferences)
+            let written = try SessionExportService.export(session: session, cycleName: owner.name, exercises: sourceExercises,
+                setEntries: entries.filter { $0.sessionId == session.id }, fixedCycleMetadata: metadata, environment: environment)
+            return try JSONDecoder().decode(SessionExportService.ExportPayload.self,
+                from: Data(contentsOf: XCTUnwrap(written.localMirrorURL)))
+        }
+        XCTAssertEqual(Set(exports.compactMap { $0.fixed_cycle?.program_version }), [3, 6])
+        let encoded = try JSONEncoder().encode(exports)
+        let roundTripped = try JSONDecoder().decode([SessionExportService.ExportPayload].self, from: encoded)
+        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+        let recovered = ModelContext(destination)
+        _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: recovered)
+        let cycle = try XCTUnwrap(try recovered.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
+        _ = try BootstrapDataService.reconcileWorkoutExports(roundTripped, cycle: cycle, modelContext: recovered)
+        let recoveredTemplates = try recovered.fetch(FetchDescriptor<CycleTemplate>())
+        let active = try XCTUnwrap(recoveredTemplates.first { $0.id == cycle.templateId })
+        XCTAssertEqual(Program.versionID(for: active), Program.chestBackVersionID)
+        XCTAssertEqual(Set(recoveredTemplates.map { Program.versionNumber(for: $0) }), [1, 3, 6])
+        let restoredStates = try recovered.fetch(FetchDescriptor<ClusterRotationState>())
+        XCTAssertEqual(try Program.selections(template: active, cycleInstanceId: cycle.id, states: restoredStates).map(\.absoluteStep), [8, 8, 8])
+        XCTAssertEqual(try recovered.fetch(FetchDescriptor<SetEntry>()).count, entries.count)
+        let restored = try recovered.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        XCTAssertEqual(restored.count, occurrences.count)
+        for original in occurrences {
+            let copy = try XCTUnwrap(restored.first { $0.sessionId == original.sessionId && $0.clusterID == original.clusterID })
+            XCTAssertEqual(copy.programVersionID, original.programVersionID)
+            XCTAssertEqual(copy.exerciseSnapshots.map(\.progressionKey), original.exerciseSnapshots.map(\.progressionKey))
+            XCTAssertEqual(copy.exerciseSnapshots.map(\.exerciseName), original.exerciseSnapshots.map(\.exerciseName))
+            XCTAssertEqual(copy.exerciseSnapshots.map(\.prescribedSetCount), original.exerciseSnapshots.map(\.prescribedSetCount))
+            XCTAssertEqual(copy.exerciseSnapshots.map(\.resistanceProfile), original.exerciseSnapshots.map(\.resistanceProfile))
+        }
+        let recoveredProfile = try XCTUnwrap(try recovered.fetch(FetchDescriptor<ExerciseResistanceProfile>()).first { $0.chainPounds == 7 })
+        XCTAssertEqual(recoveredProfile.eccentricPounds, 3)
+        let count = restored.count
+        _ = try BootstrapDataService.reconcileWorkoutExports(roundTripped.filter { $0.fixed_cycle?.program_version == 3 }, cycle: cycle, modelContext: recovered)
+        XCTAssertEqual(cycle.templateId, active.id, "Older exports must not downgrade the active program")
+        XCTAssertEqual(try recovered.fetch(FetchDescriptor<ClusterOccurrenceRecord>()).count, count)
+    }
+
+    @MainActor
     private func verifyPermanentOrder(_ f: Fixture) throws {
         let before = try databaseRows(at: f.url)
         let (oldTemplate, cycle) = try active(f.context)
@@ -494,6 +564,157 @@ final class SideDeltRevisionTests: XCTestCase {
 
     /// Logical rows from every table, including relationship and metadata tables.
     /// Read-only SQLite observes committed WAL state without opening the source in SwiftData.
+
+    @MainActor
+    func testChestBackRevisionBackupDraftAndInitialDoseGuards() throws {
+        let f = try fixture()
+        _ = try BootstrapDataService.prepareSideDeltClusterRevision(modelContext: f.context, backupConfirmed: true)
+        for (index, item) in Program.recoveryMovements.enumerated() {
+            f.context.insert(Exercise(id: item.0, name: item.1, primaryMuscle: index % 2 == 0 ? .chest : .back,
+                type: index % 2 == 0 ? .isolation : .compound, equipment: index < 2 ? .cable : .dumbbell))
+        }
+        try f.context.save()
+        let before = try databaseRows(at: f.url)
+        XCTAssertThrowsError(try BootstrapDataService.prepareChestBackRevision(modelContext: f.context))
+        XCTAssertEqual(try databaseRows(at: f.url), before)
+        XCTAssertThrowsError(try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: f.context,
+            backupDirectory: f.root.appendingPathComponent("failed"), snapshot: { _, _ in throw CocoaError(.fileWriteUnknown) }))
+        XCTAssertEqual(try databaseRows(at: f.url), before)
+        let (_, cycle) = try active(f.context)
+        let draft = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0, status: .draft)
+        f.context.insert(draft)
+        try f.context.save()
+        XCTAssertThrowsError(try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: f.context))
+        XCTAssertEqual(draft.status, .draft)
+        f.context.delete(draft)
+        try f.context.save()
+        let adaptiveDraft = AdaptiveWorkoutSession(generatedPlanId: UUID())
+        f.context.insert(adaptiveDraft)
+        try f.context.save()
+        XCTAssertThrowsError(try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: f.context))
+        XCTAssertEqual(adaptiveDraft.status, .draft)
+        f.context.delete(adaptiveDraft)
+        try f.context.save()
+        let pending = TrainingPreference(key: "pending-test", modeRawValue: "unchanged")
+        f.context.insert(pending)
+        XCTAssertThrowsError(try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: f.context))
+        f.context.rollback()
+        try verifyChestBackRevision(f)
+        let (template, activeCycle) = try active(f.context)
+        let states = try f.context.fetch(FetchDescriptor<ClusterRotationState>())
+        let selection = try Program.selection(cluster: .cluster1, template: template, cycleInstanceId: activeCycle.id, states: states)
+        let item = Program.resolvedSlots(selection: selection, sessionId: UUID(), preferences: [], overrides: [])[0]
+        let session = Session(cycleInstanceId: activeCycle.id, cycleDayIndex: 0, finishedAt: .now, status: .completed)
+        f.context.insert(session)
+        let manual = (1...3).map { SetEntry(sessionId: session.id, exerciseId: item.exerciseId,
+            setIndex: $0, weight: 25, reps: 12, isLocked: true) }
+        manual.forEach(f.context.insert)
+        let occurrence = try Program.makeOccurrence(session: session, selection: selection,
+            exercises: f.context.fetch(FetchDescriptor<Exercise>()), entries: manual, resistanceProfiles: [])
+        f.context.insert(occurrence)
+        try f.context.save()
+        let prior = try XCTUnwrap(effort(f.context, item: item))
+        XCTAssertEqual(prior.rows.count, 3)
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: prior,
+            selection: selection, exerciseId: item.exerciseId, progressionKey: item.progressionKey, occurrences: [occurrence]), 3,
+            "An explicit later v6 three-set choice must carry forward normally")
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: prior,
+            selection: selection, exerciseId: item.exerciseId, progressionKey: item.progressionKey, occurrences: []), 2)
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: prior), 3,
+            "No global cap outside this revision")
+    }
+
+    @MainActor
+    func testChestBackCopiedRealStore() throws {
+        let source = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OpenLiftCopiedChestBackStore/default.store")
+        guard FileManager.default.fileExists(atPath: source.path) else { throw XCTSkip("Stage verified phone copy in Documents/OpenLiftCopiedChestBackStore") }
+        let before = SHA256.hash(data: try Data(contentsOf: source))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ChestBackReal-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: source, to: root.appendingPathComponent("default.store"))
+        let store = try open(root.appendingPathComponent("default.store"))
+        let context = ModelContext(store)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 72)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 767)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<AdaptiveWorkoutSession>()), 7)
+        try verifyChestBackRevision(Fixture(root: root, store: store, context: context))
+        XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: source)), before)
+        print("OPENLIFT_CHEST_BACK_COPY_VERIFIED history=true overlays=true rawPointers=true dose=true freshBackup=true noOp=true coldReopen=true")
+    }
+
+    @MainActor
+    private func verifyChestBackRevision(_ f: Fixture) throws {
+        let before = try databaseRows(at: f.url)
+        let (old, cycle) = try active(f.context)
+        let oldStates = try f.context.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.templateId == old.id }
+        let preferences = try f.context.fetch(FetchDescriptor<ClusterExercisePreference>())
+        var other: [String: [Program.ResolvedSlot]] = [:]
+        for cluster in [Program.Cluster.cluster2, .cluster3] {
+            for step in 0..<6 { other["\(cluster.rawValue)|\(step)"] = try resolved(f.context, cluster: cluster, step: step) }
+        }
+        let previousRow = try resolved(f.context, cluster: .cluster1, step: 1)[1]
+        let result = try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: f.context,
+            backupDirectory: f.root.appendingPathComponent("backups"))
+        XCTAssertTrue(result.revision.didApply)
+        let backup = try XCTUnwrap(result.backupURL)
+        XCTAssertEqual(try databaseRows(at: backup), before)
+        let after = try databaseRows(at: f.url)
+        let appendOnly: Set<String> = ["ZCYCLETEMPLATE", "ZCYCLEDAY", "ZCYCLESLOT", "ZCLUSTERROTATIONSTATE", "ZCLUSTEREXERCISEPREFERENCE", "ZROTATIONPOOL"]
+        let mutable: Set<String> = ["ZACTIVECYCLEINSTANCE", "ZTRAININGPREFERENCE", "Z_PRIMARYKEY", "ACHANGE", "ATRANSACTION", "ATRANSACTIONSTRING"]
+        for table in before.keys {
+            if appendOnly.contains(table) { XCTAssertTrue(Set(before[table]!).isSubset(of: Set(after[table] ?? [])), table) }
+            else if !mutable.contains(table) { XCTAssertEqual(after[table], before[table], table) }
+        }
+        let (template, _) = try active(f.context)
+        XCTAssertEqual(Program.versionID(for: template), Program.chestBackVersionID)
+        for cluster in [Program.Cluster.cluster2, .cluster3] {
+            for step in 0..<6 {
+                let slots = try resolved(f.context, cluster: cluster, step: step)
+                let expected = other["\(cluster.rawValue)|\(step)"]!
+                XCTAssertEqual(slots.map(\.exerciseId), expected.map(\.exerciseId))
+                XCTAssertEqual(slots.map(\.progressionKey), expected.map(\.progressionKey))
+                XCTAssertEqual(slots.map { $0.slot.defaultSetCount }, expected.map { $0.slot.defaultSetCount })
+            }
+        }
+        let row = try resolved(f.context, cluster: .cluster1, step: 1)[1]
+        XCTAssertEqual(row.exerciseId, previousRow.exerciseId)
+        XCTAssertEqual(row.progressionKey, previousRow.progressionKey)
+        let newStates = try f.context.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.templateId == template.id }
+        for oldState in oldStates {
+            let new = try XCTUnwrap(newStates.first { $0.clusterID == oldState.clusterID })
+            XCTAssertEqual(new.positionIndex, oldState.positionIndex)
+            XCTAssertEqual(new.lastCompletedOccurrenceID, oldState.lastCompletedOccurrenceID)
+        }
+        for step in 0..<4 {
+            let states = Program.makeRotationStates(cycleInstanceId: cycle.id, templateId: template.id, programVersionID: Program.chestBackVersionID)
+            states.first { $0.clusterID == "cluster-1" }!.positionIndex = 24 + step
+            let selection = try Program.selection(cluster: .cluster1, template: template, cycleInstanceId: cycle.id, states: states)
+            XCTAssertEqual(selection.effectiveStep, step)
+            let items = Program.resolvedSlots(selection: selection, sessionId: UUID(), preferences: try f.context.fetch(FetchDescriptor<ClusterExercisePreference>()), overrides: [])
+            for item in items {
+                XCTAssertEqual(item.slot.defaultSetCount, 2)
+                let prior = try effort(f.context, item: item)
+                XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: prior,
+                    selection: selection, exerciseId: item.exerciseId, progressionKey: item.progressionKey,
+                    occurrences: try f.context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())), 2)
+                print("CHEST_BACK_PREFILL step=\(step) id=\(item.exerciseId) key=\(item.progressionKey) rows=\(prior?.rows.count ?? 0)")
+            }
+        }
+        XCTAssertEqual(try resolved(f.context, cluster: .cluster1, step: 1)[0].exerciseId, Program.recoveryMovements[0].0)
+        XCTAssertEqual(try resolved(f.context, cluster: .cluster1, step: 2)[1].exerciseId, Program.singleArmPulldownID)
+        XCTAssertEqual(try resolved(f.context, cluster: .cluster1, step: 3).map(\.exerciseId), [Program.recoveryMovements[2].0, Program.recoveryMovements[3].0])
+        XCTAssertFalse(try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: f.context,
+            snapshot: { _, _ in XCTFail("Repeat activation must not snapshot") }).revision.didApply)
+        XCTAssertEqual(try databaseRows(at: f.url), after)
+        let reopenedStore = try open(f.url)
+        let reopened = ModelContext(reopenedStore)
+        let (reopenedTemplate, _) = try active(reopened)
+        XCTAssertEqual(reopenedTemplate.id, template.id)
+        XCTAssertFalse(try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: reopened).revision.didApply)
+        XCTAssertEqual(try reopened.fetchCount(FetchDescriptor<ClusterExercisePreference>()), preferences.count + preferences.filter { $0.programVersionID == Program.sideDeltVersionID && $0.templateDayPosition != 2 }.count)
+    }
+
     private func databaseRows(at url: URL) throws -> [String: [String]] {
         var handle: OpaquePointer?
         guard sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,

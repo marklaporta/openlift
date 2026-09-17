@@ -451,3 +451,16 @@ in the test app's `Documents/OpenLiftCopiedSideDeltOrderStore`, then run
 covers the actual button and cold restart;
 `testReorderedInclineStartsBlankAndAdvancesToSuperROM` checks blank two-row
 incline prefill and next Super-ROM advancement. No test mutates the supplied backup itself.
+
+### Chest/back recovery activation (v6)
+
+`applyChestBackRevisionWithFreshBackup` is the sole production activation path,
+shared by the in-app button and `OPENLIFT_REVISE_CHEST_BACK_2026_09_17` launch flag.
+It rejects pending context edits and Fixed/Adaptive drafts, synchronously creates
+and validates a unique full-store `VACUUM INTO` snapshot under
+`Documents/OpenLift/revision-backups`, and applies v4→v6 without an async gap.
+Failure leaves the program untouched; a validated repeat is a no-op. Missing
+existing movements fail closed rather than creating duplicate live catalog rows.
+The source version, templates, pointers, overrides, completed occurrences,
+profiles, and exercise notes are retained. Export recovery recognizes v6 and its
+four-step Cluster1 mapping, with D at template position15.

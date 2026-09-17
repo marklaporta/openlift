@@ -273,3 +273,33 @@ then Cable. Calves, forearms, shrugs and all other slots remain in place.
 Exercise UUIDs, stable progression keys, exact-slot preferences and fallback
 set counts follow their source shoulder exercise. The incline movement keeps
 its v4 key and two starting rows (one set per side per row), not a new identity.
+
+### September 17 chest/back recovery revision (v6)
+
+Explicitly activated from v4 with **Cycle → Apply Chest & Back Recovery Plan**.
+Installation alone does not activate it. Cluster 1 becomes four exposures:
+
+| Step | Chest | Back |
+| --- | --- | --- |
+| A | Flat Dumbbell Press | Lat Pulldown |
+| B | Seated Cable Flye | Existing selected chest-supported cable row |
+| C | Incline Dumbbell Press | Single-Arm Lat Pulldown |
+| D | Incline Dumbbell Flye | Chest-Supported Dumbbell Row |
+
+Existing exercise UUIDs, notes, profile history, and surviving progression keys
+are reused. The two flyes share the historic chest-C key but remain isolated by
+exercise UUID. Restored back movements use new clustered keys with safe unkeyed
+same-exercise history fallback. Single-arm pulldowns are seated side-on; one row
+means one set per side, not a combined left/right total.
+
+All chest/back slots start with two rows. Prefill keeps historical loads/reps but
+cannot reinstate a pre-v6 third row. Once the selected qualifying effort belongs
+to v6, its literal row count resumes normal repeat-last behavior; this is not a
+global cap. Other clusters, exact-slot substitutions, doses, and counters remain
+unchanged, including the live v4 side-delt choices (v5 is not implicitly applied).
+
+D uses template position15 so other clusters retain their exact slot addresses.
+Cluster1 logically advances A/B/C/D; raw completion counters remain unchanged.
+Verified phone counter24
+remains24 (A next after the September17 flye exposure). Historical v4 counters and
+occurrences are archived unchanged.

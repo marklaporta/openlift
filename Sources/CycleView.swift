@@ -37,6 +37,7 @@ struct CycleView: View {
     @State private var didSwapSquats = false
     @State private var didAddSideDelt = false
     @State private var didReorderSideDelts = false
+    @State private var didReviseChestBack = false
 
     private var activeTemplate: CycleTemplate? {
         OpenLiftStateResolver.activeTemplate(
@@ -142,6 +143,23 @@ struct CycleView: View {
                                 Text("Finish your current workout first.")
                                     .font(.caption).accessibilityIdentifier("cycle.sideDeltOrderDraftBlocker")
                             }
+                        }
+                        if FixedCycleClusterProgramService.isProgramTemplate(activeTemplate),
+                           FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.sideDeltVersionID {
+                            Text("Four chest/back exposures with two work sets each. Alternate presses and flyes; vertical and horizontal pulls. Other clusters stay unchanged.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Button("Apply Chest & Back Recovery Plan") { reviseChestBack() }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("cycle.reviseChestBack")
+                                .disabled(hasPendingWorkout)
+                            if hasPendingWorkout {
+                                Text("Finish your current workout first.")
+                                    .font(.caption).accessibilityIdentifier("cycle.chestBackDraftBlocker")
+                            }
+                        }
+                        if didReviseChestBack {
+                            Label("Chest and back now rotate through four exposures, starting with two sets each.", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green).accessibilityIdentifier("cycle.chestBackSuccess")
                         }
                         if didReorderSideDelts {
                             Label("Side delts now rotate Incline Side-Lying → Super-ROM → Cable.", systemImage: "checkmark.circle.fill")
@@ -384,6 +402,13 @@ struct CycleView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func reviseChestBack() {
+        do {
+            let result = try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: modelContext)
+            didReviseChestBack = result.revision.didApply
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func reorderSideDelts() {
