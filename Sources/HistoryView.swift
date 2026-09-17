@@ -258,11 +258,14 @@ enum HistoryExerciseSearchService {
     ) -> [HistoryExerciseOccurrence] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return [] }
+        let rowMatch = CSDBRowIdentity.canonical(in: exercises) != nil
+            && CSDBRowIdentity.names.contains { $0.localizedCaseInsensitiveContains(query) }
         let matchingExercises = exercises.filter {
             $0.name.localizedCaseInsensitiveContains(query)
+                || (rowMatch && CSDBRowIdentity.historicalIDs(for: CSDBRowIdentity.canonicalID, exercises: exercises).contains($0.id))
         }
         let matchingIds = Set(matchingExercises.map(\.id))
-        let namesById = Dictionary(uniqueKeysWithValues: matchingExercises.map { ($0.id, $0.name) })
+        let namesById = Dictionary(uniqueKeysWithValues: matchingExercises.map { ($0.id, CSDBRowIdentity.resolve(id: $0.id, name: nil, exercises: exercises)?.name ?? $0.name) })
         var results: [HistoryExerciseOccurrence] = []
 
         for session in sessions where session.status == .completed || session.finishedAt != nil || session.exportStatus == .success {

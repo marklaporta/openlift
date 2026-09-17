@@ -865,7 +865,8 @@ struct AdaptiveWorkoutView: View {
             rotationSetEntries: rotationSetEntries,
             currentResistanceProfiles: defaultResistanceProfiles(for: plan),
             cableExerciseIds: cableExerciseIds,
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         )
         return plan
     }
@@ -944,7 +945,8 @@ struct AdaptiveWorkoutView: View {
                     rotationSetEntries: rotationSetEntries,
                     currentResistanceProfiles: defaults,
                     cableExerciseIds: cableExerciseIds,
-                    resistanceProfiles: resistanceProfiles
+                    resistanceProfiles: resistanceProfiles,
+                    exercises: exercises
                 )
             )
             guard let session = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
@@ -979,7 +981,8 @@ struct AdaptiveWorkoutView: View {
             rotationSessions: rotationSessions, rotationSetEntries: rotationSetEntries,
             resistanceRequirement: cableExerciseIds.contains(exercise.exerciseId)
                 ? .cable(currentResistanceValue(plan: plan, exercise: exercise)) : .notApplicable,
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         )
     }
 
@@ -998,7 +1001,8 @@ struct AdaptiveWorkoutView: View {
             rotationSessions: rotationSessions,
             rotationSetEntries: rotationSetEntries,
             resistanceRequirement: requirement,
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         )
     }
 
@@ -1406,7 +1410,8 @@ struct AdaptiveWorkoutView: View {
                     rotationSessions: rotationSessions,
                     rotationSetEntries: rotationSetEntries,
                     resistanceRequirement: newMovementResistanceRequirement(exerciseId: exercise.id),
-                    resistanceProfiles: resistanceProfiles
+                    resistanceProfiles: resistanceProfiles,
+                    exercises: exercises
                 )
                 var prefill: [Int: AdaptiveSetPrefill] = [:]
                 if !previous.isEmpty {
@@ -1434,7 +1439,8 @@ struct AdaptiveWorkoutView: View {
                     rotationSessions: rotationSessions,
                     rotationSetEntries: rotationSetEntries,
                     resistanceRequirement: newMovementResistanceRequirement(exerciseId: exercise.id),
-                    resistanceProfiles: resistanceProfiles
+                    resistanceProfiles: resistanceProfiles,
+                    exercises: exercises
                 )
                 var prefillByExerciseId: [UUID: [Int: AdaptiveSetPrefill]] = [:]
                 if !previous.isEmpty {
@@ -1512,7 +1518,8 @@ struct AdaptiveWorkoutView: View {
                     rotationSessions: rotationSessions,
                     rotationSetEntries: rotationSetEntries,
                     resistanceRequirement: newMovementResistanceRequirement(exerciseId: component.exerciseId),
-                    resistanceProfiles: resistanceProfiles
+                    resistanceProfiles: resistanceProfiles,
+                    exercises: exercises
                 )
                 guard !rows.isEmpty else { continue }
                 for setIndex in 1...max(1, component.prescribedSetCount) {
@@ -1621,7 +1628,8 @@ struct AdaptiveWorkoutView: View {
             rotationSessions: rotationSessions,
             rotationSetEntries: rotationSetEntries,
             resistanceRequirement: newMovementResistanceRequirement(exerciseId: exercise.id),
-            resistanceProfiles: resistanceProfiles
+            resistanceProfiles: resistanceProfiles,
+            exercises: exercises
         )
         if !previous.isEmpty {
             return previous.count

@@ -38,6 +38,7 @@ enum AppRuntime {
     static let isSeatedShrugActivationUITesting = ProcessInfo.processInfo.arguments.contains(
         "OPENLIFT_UI_TESTING_SHRUG_ACTIVATION"
     )
+    static let shouldConsolidateCSDBRow = ProcessInfo.processInfo.arguments.contains("OPENLIFT_CONSOLIDATE_CS_DB_ROW_2026_09_17")
     static let shouldReviseChestBack = ProcessInfo.processInfo.arguments.contains("OPENLIFT_REVISE_CHEST_BACK_2026_09_17")
     static let isSideDeltActivationUITesting = ProcessInfo.processInfo.arguments.contains("OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION")
     static let shouldAuditSideDeltRevision = ProcessInfo.processInfo.arguments.contains("OPENLIFT_AUDIT_CLUSTERED_SIDE_DELT")

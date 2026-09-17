@@ -38,6 +38,7 @@ struct CycleView: View {
     @State private var didAddSideDelt = false
     @State private var didReorderSideDelts = false
     @State private var didReviseChestBack = false
+    @State private var didConsolidateCSDBRow = false
 
     private var activeTemplate: CycleTemplate? {
         OpenLiftStateResolver.activeTemplate(
@@ -156,6 +157,21 @@ struct CycleView: View {
                                 Text("Finish your current workout first.")
                                     .font(.caption).accessibilityIdentifier("cycle.chestBackDraftBlocker")
                             }
+                        }
+                        if !trainingPreferences.contains(where: { $0.key == CSDBRowIdentity.marker }),
+                           Set(exercises.map(\.id)).isSuperset(of: CSDBRowIdentity.legacyIDs.union([CSDBRowIdentity.canonicalID])) {
+                            Button("Consolidate CS DB Row") {
+                                do { didConsolidateCSDBRow = try BootstrapDataService.consolidateCSDBRow(modelContext: modelContext).didApply }
+                                catch { errorMessage = error.localizedDescription }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("cycle.consolidateCSDBRow")
+                            .disabled(hasPendingWorkout)
+                            if hasPendingWorkout { Text("Finish your current workout first.") }
+                        }
+                        if didConsolidateCSDBRow {
+                            Label("CS DB Row consolidated; all history retained.", systemImage: "checkmark.circle.fill")
+                                .accessibilityIdentifier("cycle.csDBRowSuccess")
                         }
                         if didReviseChestBack {
                             Label("Chest and back now rotate through four exposures, starting with two sets each.", systemImage: "checkmark.circle.fill")

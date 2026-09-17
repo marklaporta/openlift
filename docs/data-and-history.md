@@ -370,3 +370,30 @@ bytes, avoiding repeated VACUUM/replacement/upload cycles. Evicted cloud snapsho
 are requested for download and never blindly overwritten. Only integrity-checked snapshots count toward retention; cloud snapshots must also
 have confirmed upload metadata. Pending/corrupt files cannot displace the last
 seven verified recovery points.
+
+### CS DB Row consolidation
+
+The explicit `Cycle → Consolidate CS DB Row` action (or launch argument
+`OPENLIFT_CONSOLIDATE_CS_DB_ROW_2026_09_17`) consolidates the user-confirmed
+Helms Row, Chest Supported Row, and Chest-Supported Dumbbell Row identities.
+It requires no workout drafts or pending edits and takes a fresh, verified,
+full-store SQLite snapshot before saving. Installation alone does not activate
+it. Repeated activation is a no-op.
+
+The existing dumbbell-row UUID remains the one active selectable **CS DB Row**.
+The two older catalog rows stay inactive: completed set IDs, names in frozen
+occurrences, resistance profiles, and export evidence remain unchanged. Their
+setup notes and the bench/Rogue lat-seat equivalence are retained in the
+canonical notes. Future template/pool/program preferences resolve to the
+canonical exercise. Rotation counters, versioned progression keys, and doses
+are not rewritten.
+
+History search accepts all three old names or `CS DB Row` and returns their
+combined history with the canonical label. Repeat-last lookup considers the
+old identities only after activation, retaining key/profile precedence and
+each effort's literal rows; it never concatenates sets from two identities.
+Stored resistance profiles are not reinterpreted as dumbbell pounds.
+Published-template imports resolve old IDs and names to the canonical entry.
+Workout recovery retains known historical IDs for snapshot consistency;
+name-only imports resolve to the canonical row. Catalog seeding and new-entry
+validation do not recreate selectable aliases.

@@ -52,6 +52,16 @@ struct OpenLiftApp: App {
                             exercise.id = item.0
                             modelContext.insert(exercise)
                         }
+                        if ProcessInfo.processInfo.environment["OPENLIFT_CS_DB_ROW_UI"] == "1" {
+                            let catalog = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
+                            for (name, targetID) in [("Helms Row", "45F7D9A2-52D5-4172-ACE7-78AEB5BF2C6F"), ("Chest Supported Row", "7C799565-C77C-4332-B5C8-F70EC9BC6B49")] {
+                                guard let exercise = catalog.first(where: { $0.name == name }) else { continue }
+                                let oldID = exercise.id
+                                exercise.id = UUID(uuidString: targetID)!
+                                for slot in (try? modelContext.fetch(FetchDescriptor<CycleSlot>())) ?? [] where slot.exerciseId == oldID { slot.exerciseId = exercise.id }
+                                for entry in (try? modelContext.fetch(FetchDescriptor<RotationPoolEntry>())) ?? [] where entry.exerciseId == oldID { entry.exerciseId = exercise.id }
+                            }
+                        }
                         try? modelContext.save()
                     }
                     let states = try? modelContext.fetch(FetchDescriptor<ClusterRotationState>())
@@ -139,6 +149,12 @@ struct OpenLiftApp: App {
             } catch {
                 print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT_FAILED \(error.localizedDescription)")
             }
+        }
+        if startup.issue == nil, AppRuntime.shouldConsolidateCSDBRow {
+            do {
+                let result = try BootstrapDataService.consolidateCSDBRow(modelContext: ModelContext(startup.container))
+                print("OPENLIFT_CS_DB_ROW_CONSOLIDATION applied=\(result.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
+            } catch { print("OPENLIFT_CS_DB_ROW_CONSOLIDATION_FAILED \(error.localizedDescription)") }
         }
         if startup.issue == nil, AppRuntime.shouldReviseChestBack {
             do {

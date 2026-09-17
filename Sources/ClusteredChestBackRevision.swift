@@ -172,3 +172,77 @@ extension BootstrapDataService {
               states.allSatisfy({ $0.positionIndex >= 0 }) else { throw ClusterRevisionError.invalidState }
     }
 }
+
+extension BootstrapDataService {
+    struct RowConsolidationResult {
+        let didApply: Bool
+        let backupURL: URL?
+    }
+
+    @MainActor
+    static func consolidateCSDBRow(modelContext: ModelContext, backupDirectory: URL? = nil,
+        snapshot: (URL, URL) throws -> Void = StoreBackupService.snapshot
+    ) throws -> RowConsolidationResult {
+        guard !modelContext.hasChanges else { throw ClusterRevisionError.pendingChanges }
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        if try modelContext.fetch(FetchDescriptor<TrainingPreference>()).contains(where: { $0.key == CSDBRowIdentity.marker }) {
+            let legacy = exercises.filter { CSDBRowIdentity.legacyIDs.contains($0.id) }
+            guard CSDBRowIdentity.canonical(in: exercises) != nil,
+                  Set(legacy.map(\.id)) == CSDBRowIdentity.legacyIDs,
+                  legacy.allSatisfy({ !$0.isActive }) else {
+                throw ClusterRevisionError.invalidState
+            }
+            return RowConsolidationResult(didApply: false, backupURL: nil)
+        }
+        guard !(try modelContext.fetch(FetchDescriptor<Session>())).contains(where: { $0.status == .draft }),
+              !(try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())).contains(where: { $0.status == .draft }) else {
+            throw ClusterRevisionError.draftHasWork
+        }
+        let ids = CSDBRowIdentity.legacyIDs.union([CSDBRowIdentity.canonicalID])
+        guard let canonical = exercises.first(where: { $0.id == CSDBRowIdentity.canonicalID }),
+              Set(exercises.filter { ids.contains($0.id) }.map(\.id)) == ids,
+              !exercises.contains(where: { !ids.contains($0.id) && CSDBRowIdentity.matches($0.name) }) else {
+            throw ClusterRevisionError.invalidState
+        }
+        guard let storeURL = modelContext.container.configurations.first?.url,
+              FileManager.default.fileExists(atPath: storeURL.path) else { throw SeatedShrugBackupError.persistentStoreRequired }
+        let directory = try backupDirectory ?? FileManager.default.url(for: .documentDirectory,
+            in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("OpenLift/revision-backups")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let backup = directory.appendingPathComponent("before-cs-db-row-consolidation-\(UUID().uuidString).sqlite")
+        try snapshot(storeURL, backup)
+        guard StoreBackupService.isValidSnapshot(at: backup) else { throw SeatedShrugBackupError.verificationFailed }
+        do {
+            let provenance = exercises.filter { ids.contains($0.id) }.sorted { $0.name < $1.name }.map {
+                "\($0.name) [\($0.id.uuidString)]:\n\($0.notes.isEmpty ? "No prior setup notes." : $0.notes)"
+            }.joined(separator: "\n\n")
+            canonical.name = CSDBRowIdentity.name
+            canonical.primaryMuscle = .back
+            canonical.type = .compound
+            canonical.equipment = .dumbbell
+            canonical.isActive = true
+            canonical.notes = "Chest-supported DB row using the back of a bench (Helms setup) or Rogue multi-use lat seat. These are the same movement; keep support setup consistent when comparing efforts.\n\nPreserved pre-consolidation setup notes:\n\(provenance)"
+            for old in exercises where CSDBRowIdentity.legacyIDs.contains(old.id) { old.isActive = false }
+            try normalizeCSDBRowSelections(modelContext: modelContext)
+            modelContext.insert(TrainingPreference(key: CSDBRowIdentity.marker, modeRawValue: CSDBRowIdentity.canonicalID.uuidString))
+            try modelContext.save()
+            return RowConsolidationResult(didApply: true, backupURL: backup)
+        } catch { modelContext.rollback(); throw error }
+    }
+
+    /// Only future selection references change. Completed evidence is untouched.
+    static func normalizeCSDBRowSelections(modelContext: ModelContext) throws {
+        func mapped(_ id: UUID) -> UUID { CSDBRowIdentity.legacyIDs.contains(id) ? CSDBRowIdentity.canonicalID : id }
+        for row in try modelContext.fetch(FetchDescriptor<CycleSlot>()) where CSDBRowIdentity.legacyIDs.contains(row.exerciseId) { row.exerciseId = mapped(row.exerciseId) }
+        for row in try modelContext.fetch(FetchDescriptor<RotationPoolEntry>()) where CSDBRowIdentity.legacyIDs.contains(row.exerciseId) { row.exerciseId = mapped(row.exerciseId) }
+        for row in try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>()) where CSDBRowIdentity.legacyIDs.contains(row.exerciseId) { row.exerciseId = mapped(row.exerciseId) }
+        for row in try modelContext.fetch(FetchDescriptor<AdaptiveComplexComponent>()) where CSDBRowIdentity.legacyIDs.contains(row.exerciseId) { row.exerciseId = mapped(row.exerciseId) }
+        for row in try modelContext.fetch(FetchDescriptor<AdaptiveExerciseSelectionPreference>()) {
+            if let id = row.pinnedExerciseId, CSDBRowIdentity.legacyIDs.contains(id) { row.pinnedExerciseId = mapped(id) }
+            if row.eligibleExerciseIds.contains(where: CSDBRowIdentity.legacyIDs.contains) {
+                var seen = Set<UUID>()
+                row.eligibleExerciseIds = row.eligibleExerciseIds.map(mapped).filter { seen.insert($0).inserted }
+            }
+        }
+    }
+}

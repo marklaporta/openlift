@@ -753,3 +753,128 @@ final class SideDeltRevisionTests: XCTestCase {
         return result
     }
 }
+
+extension SideDeltRevisionTests {
+    @MainActor
+    func testCSDBRowCopiedStoreConsolidationGuardsAliasesHistoryAndColdReopen() throws {
+        let source = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OpenLiftCopiedCSDBRowStore/default.store")
+        guard FileManager.default.fileExists(atPath: source.path) else { throw XCTSkip("Stage verified phone copy in Documents/OpenLiftCopiedCSDBRowStore") }
+        let sourceHash = SHA256.hash(data: try Data(contentsOf: source))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CSDBRow-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("default.store")
+        try FileManager.default.copyItem(at: source, to: url)
+        let store = try open(url)
+        let context = ModelContext(store)
+        let catalog = try context.fetch(FetchDescriptor<Exercise>())
+        let canonical = try XCTUnwrap(catalog.first { $0.id == CSDBRowIdentity.canonicalID })
+        let before = try databaseRows(at: url)
+        XCTAssertEqual(catalog.count, 77)
+        canonical.notes += "pending"
+        XCTAssertThrowsError(try BootstrapDataService.consolidateCSDBRow(modelContext: context))
+        context.rollback()
+        let draft = Session(cycleInstanceId: UUID(), cycleDayIndex: 0)
+        context.insert(draft); try context.save()
+        XCTAssertThrowsError(try BootstrapDataService.consolidateCSDBRow(modelContext: context))
+        context.delete(draft); try context.save()
+        XCTAssertThrowsError(try BootstrapDataService.consolidateCSDBRow(modelContext: context, backupDirectory: root,
+            snapshot: { _, _ in throw NSError(domain: "test-backup", code: 1) }))
+        XCTAssertEqual(canonical.name, "Chest-Supported Dumbbell Row")
+        let result = try BootstrapDataService.consolidateCSDBRow(modelContext: context, backupDirectory: root)
+        XCTAssertTrue(result.didApply)
+        XCTAssertTrue(StoreBackupService.isValidSnapshot(at: try XCTUnwrap(result.backupURL)))
+        let after = try databaseRows(at: url)
+        let mutable: Set<String> = ["ZEXERCISE", "ZCYCLESLOT", "ZROTATIONPOOLENTRY", "ZCLUSTEREXERCISEPREFERENCE", "ZADAPTIVECOMPLEXCOMPONENT", "ZADAPTIVEEXERCISESELECTIONPREFERENCE", "ZTRAININGPREFERENCE", "Z_PRIMARYKEY", "ACHANGE", "ATRANSACTION", "ATRANSACTIONSTRING"]
+        for table in before.keys where !mutable.contains(table) { XCTAssertEqual(before[table], after[table], table) }
+        XCTAssertEqual(canonical.name, "CS DB Row")
+        XCTAssertEqual(canonical.equipment, .dumbbell)
+        XCTAssertTrue(canonical.notes.contains("Rogue multi-use lat seat"))
+        XCTAssertTrue(canonical.notes.contains("Helms Row"))
+        XCTAssertEqual(catalog.filter { $0.isActive && CSDBRowIdentity.matches($0.name) }.map(\.id), [canonical.id])
+        XCTAssertEqual(catalog.filter { CSDBRowIdentity.legacyIDs.contains($0.id) }.filter(\.isActive).count, 0)
+        let sessions = try context.fetch(FetchDescriptor<Session>())
+        let entries = try context.fetch(FetchDescriptor<SetEntry>())
+        let adaptive = try context.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+        let adaptiveEntries = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        func history(_ query: String) -> [HistoryExerciseOccurrence] {
+            HistoryExerciseSearchService.results(query: query, sessions: sessions, setEntries: entries,
+                adaptiveSessions: adaptive, adaptiveSetEntries: adaptiveEntries, exercises: catalog)
+        }
+        XCTAssertEqual(history("CS DB Row").count, 9)
+        XCTAssertEqual(history("CS DB Row").flatMap(\.sets).count, 18)
+        XCTAssertEqual(history("Helms Row"), history("CS DB Row"))
+        XCTAssertTrue(history("CS DB Row").allSatisfy { $0.exerciseName == "CS DB Row" })
+        let expectedLatest = try XCTUnwrap(history("CS DB Row").first)
+        let effort = try XCTUnwrap(ExerciseEffortLookupService.globalEffort(exerciseId: canonical.id,
+            adaptiveSessions: adaptive, adaptiveSetEntries: adaptiveEntries, rotationSessions: sessions,
+            rotationSetEntries: entries, resistanceProfiles: try context.fetch(FetchDescriptor<ExerciseResistanceProfile>()), exercises: catalog))
+        XCTAssertEqual(effort.completedAt, expectedLatest.date)
+        XCTAssertEqual(effort.rows.map(\.weight), expectedLatest.sets.map(\.weight))
+        let template = try active(context).0
+        XCTAssertEqual(Program.versionID(for: template), Program.chestBackVersionID)
+        XCTAssertEqual(try resolved(context, cluster: .cluster1, step: 3)[1].exerciseId, canonical.id)
+        XCTAssertEqual(try resolved(context, cluster: .cluster1, step: 3)[1].slot.defaultSetCount, 2)
+        XCTAssertEqual(try resolved(context, cluster: .cluster1, step: 3)[1].progressionKey, Program.chestBackProgressionKey(step: 3, slotPosition: 1))
+        for name in CSDBRowIdentity.names {
+            XCTAssertThrowsError(try ExerciseCatalogService.makeExercise(name: name, primaryMuscle: .back, type: .compound, equipment: .dumbbell, existingExercises: catalog))
+            let doc = root.appendingPathComponent("alias.json")
+            try "{\"name\":\"alias\",\"days\":[{\"label\":\"A\",\"slots\":[{\"muscle\":\"back\",\"exerciseName\":\"\(name)\",\"defaultSetCount\":2}]}]}".write(to: doc, atomically: true, encoding: .utf8)
+            XCTAssertEqual(try PublishedCycleService.parseTemplate(at: doc, exercises: catalog).days[0].slots[0].exerciseId, canonical.id)
+        }
+        let byID = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
+        let byName = Dictionary(uniqueKeysWithValues: catalog.map { ($0.name.lowercased(), $0) })
+        for id in CSDBRowIdentity.legacyIDs {
+            // Historical ID imports preserve frozen snapshots; future template imports canonicalize.
+            XCTAssertEqual(BootstrapDataService.resolveImportedExercise(id: id, name: "Helms Row", byId: byID, byName: byName)?.id, id)
+            XCTAssertEqual(CSDBRowIdentity.resolve(id: id, name: nil, exercises: catalog)?.id, canonical.id)
+        }
+        XCTAssertEqual(BootstrapDataService.resolveImportedExercise(id: nil, name: "Helms Row", byId: byID, byName: byName)?.id, canonical.id)
+        XCTAssertEqual(try BootstrapDataService.ensureExerciseCatalog(modelContext: context).count, 77)
+        XCTAssertFalse(try BootstrapDataService.consolidateCSDBRow(modelContext: context, snapshot: { _, _ in XCTFail("Repeat must not back up") }).didApply)
+        let reopened = ModelContext(try open(url))
+        XCTAssertFalse(try BootstrapDataService.consolidateCSDBRow(modelContext: reopened).didApply)
+        XCTAssertEqual(CSDBRowIdentity.canonical(in: try BootstrapDataService.ensureExerciseCatalog(modelContext: reopened))?.id, canonical.id)
+        XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: source)), sourceHash)
+        print("OPENLIFT_CS_DB_ROW_COPY_VERIFIED history9sets18=true snapshotsUnchanged=true profilesUnchanged=true draftBackupGuards=true noDuplicateSeed=true coldReopen=true")
+    }
+}
+
+extension SideDeltRevisionTests {
+    func testCSDBRowEquivalentHistoryDoesNotPoolDosesOrEraseProfiles() throws {
+        let canonical = Exercise(id: CSDBRowIdentity.canonicalID, name: CSDBRowIdentity.name,
+            primaryMuscle: .back, type: .compound, equipment: .dumbbell)
+        let ids = CSDBRowIdentity.legacyIDs.sorted { $0.uuidString < $1.uuidString }
+        let catalog = [canonical] + ids.map { Exercise(id: $0, name: "legacy", primaryMuscle: .back,
+            type: .compound, equipment: .dumbbell, isActive: false) }
+        let first = Session(cycleInstanceId: UUID(), cycleDayIndex: 0, finishedAt: Date(timeIntervalSince1970: 1), status: .completed)
+        let latest = Session(cycleInstanceId: first.cycleInstanceId, cycleDayIndex: 0, finishedAt: Date(timeIntervalSince1970: 2), status: .completed)
+        let entries = [
+            SetEntry(sessionId: first.id, exerciseId: canonical.id, setIndex: 1, weight: 40, reps: 12, isLocked: true),
+            SetEntry(sessionId: latest.id, exerciseId: ids[0], setIndex: 1, weight: 50, reps: 10, isLocked: true),
+            SetEntry(sessionId: latest.id, exerciseId: ids[0], setIndex: 2, weight: 50, reps: 9, isLocked: true),
+            SetEntry(sessionId: latest.id, exerciseId: ids[1], setIndex: 1, weight: 100, reps: 8, isLocked: true)
+        ]
+        let profile = ExerciseResistanceProfile(workoutKind: .fixed, sessionId: latest.id, exerciseId: ids[1],
+            resistanceSource: .voltra, chainType: .inverseChains, chainPounds: 7, eccentricPounds: 3, frozenAt: latest.finishedAt)
+        let result = try XCTUnwrap(ExerciseEffortLookupService.globalEffort(exerciseId: canonical.id,
+            adaptiveSessions: [], adaptiveSetEntries: [], rotationSessions: [first, latest],
+            rotationSetEntries: entries, resistanceProfiles: [profile], exercises: catalog))
+        XCTAssertEqual(result.rows.count, 2)
+        XCTAssertEqual(result.rows.map(\.weight), [50, 50])
+        XCTAssertTrue(result.isComparable)
+        let cableResult = try XCTUnwrap(ExerciseEffortLookupService.globalEffort(exerciseId: canonical.id,
+            adaptiveSessions: [], adaptiveSetEntries: [], rotationSessions: [first, latest],
+            rotationSetEntries: entries, resistanceRequirement: .cable(ResistanceProfileService.value(profile)),
+            resistanceProfiles: [profile], exercises: catalog))
+        XCTAssertEqual(cableResult.rows.count, 1)
+        XCTAssertEqual(cableResult.rows[0].weight, 100)
+        XCTAssertNotNil(cableResult.resistanceProfile)
+        XCTAssertTrue(cableResult.isComparable)
+        // Before explicit activation, the original catalog name leaves lookup unchanged.
+        canonical.name = "Chest-Supported Dumbbell Row"
+        XCTAssertEqual(ExerciseEffortLookupService.globalEffort(exerciseId: canonical.id,
+            adaptiveSessions: [], adaptiveSetEntries: [], rotationSessions: [first, latest],
+            rotationSetEntries: entries, resistanceProfiles: [profile], exercises: catalog)?.rows.map(\.weight), [40])
+    }
+}
