@@ -278,7 +278,7 @@ struct AdaptiveWorkoutView: View {
                             Text(
                                 previous.isEmpty
                                     ? "No prior completed sets for prefill"
-                                    : "Previous: \(formatRows(previous))"
+                                    : "Previous: \(formatRows(previous, exercise: exercise))"
                             )
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -416,7 +416,7 @@ struct AdaptiveWorkoutView: View {
                                 title: effectiveExercise?.name ?? snapshot.exerciseName,
                                 exercise: effectiveExercise,
                                 entries: entries,
-                                previousEffort: previousEffort(plan: plan, exercise: snapshot)?.compactSummary,
+                                previousEffort: previousEffort(plan: plan, exercise: snapshot)?.compactSummary(exerciseId: snapshot.exerciseId, name: snapshot.exerciseName),
                                 resistanceProfile: resistanceProfile.map(
                                     ResistanceProfileService.snapshot
                                 ),
@@ -533,7 +533,7 @@ struct AdaptiveWorkoutView: View {
                     if !rows.isEmpty {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(exercise.exerciseName).font(.subheadline.weight(.semibold))
-                            Text(rows.map { "\(WeightFormatting.normalized($0.weight)) × \($0.reps)" }.joined(separator: " · "))
+                            Text(rows.map { GripperLoadPresentation.set($0.weight, reps: $0.reps, exerciseId: exercise.exerciseId, name: exercise.exerciseName) }.joined(separator: " · "))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1045,8 +1045,8 @@ struct AdaptiveWorkoutView: View {
             : .notApplicable
     }
 
-    private func formatRows(_ rows: [ComparableSetRow]) -> String {
-        rows.map { "\(WeightFormatting.normalized($0.weight)) x \($0.reps)" }.joined(separator: ", ")
+    private func formatRows(_ rows: [ComparableSetRow], exercise: PlannedExerciseSnapshot) -> String {
+        rows.map { GripperLoadPresentation.set($0.weight, reps: $0.reps, exerciseId: exercise.exerciseId, name: exercise.exerciseName) }.joined(separator: ", ")
     }
 
     private func regenerate(plan: GeneratedWorkoutPlan) {
@@ -2045,27 +2045,35 @@ private struct AdaptiveExerciseSection: View {
                     Text("S\(entry.setIndex)")
                         .font(.caption.monospacedDigit())
                         .frame(width: 28, alignment: .leading)
-                    Text(usesAssistanceLoad ? "A" : "W")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    TextField(
-                        usesAssistanceLoad ? "Assist" : "Weight",
-                        value: Binding<Double?>(
-                            get: { WorkoutEntryEditing.displayWeight(entry.weight) },
-                            set: { newWeight in
-                                guard !entry.isLocked else { return }
-                                applyWeightEdit(entry: entry, newWeight: newWeight)
-                            }
-                        ),
-                        format: WeightFormatting.style
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .keyboardType(.decimalPad)
-                    .frame(width: 82)
-                    .disabled(entry.isLocked)
-                    .opacity(entry.isLocked ? 1 : 0.55)
-                    .focused($focusedField, equals: .weight(entry.id))
-                    .accessibilityIdentifier("adaptive.weight.\(title).\(entry.setIndex)")
+                    if GripperLoadPresentation.applies(exerciseId: exercise?.id, name: exercise?.name ?? title) {
+                        Text("Model").font(.caption2).foregroundStyle(.secondary)
+                        GripperModelPicker(value: Binding(get: { entry.weight }, set: { value in guard !entry.isLocked else { return }; applyWeightEdit(entry: entry, newWeight: value) }))
+                            .disabled(entry.isLocked)
+                            .accessibilityIdentifier("adaptive.model.\(title).\(entry.setIndex)")
+                    } else {
+                        Text(usesAssistanceLoad ? "A" : "W")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        TextField(
+                            usesAssistanceLoad ? "Assist" : "Weight",
+                            value: Binding<Double?>(
+                                get: { WorkoutEntryEditing.displayWeight(entry.weight) },
+                                set: { newWeight in
+                                    guard !entry.isLocked else { return }
+                                    applyWeightEdit(entry: entry, newWeight: newWeight)
+                                }
+                            ),
+                            format: WeightFormatting.style
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.decimalPad)
+                        .frame(width: 82)
+                        .disabled(entry.isLocked)
+                        .opacity(entry.isLocked ? 1 : 0.55)
+                        .focused($focusedField, equals: .weight(entry.id))
+                        .accessibilityIdentifier("adaptive.weight.\(title).\(entry.setIndex)")
+
+                    }
 
                     Text("R")
                         .font(.caption2)

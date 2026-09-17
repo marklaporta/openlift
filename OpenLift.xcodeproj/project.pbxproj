@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0C100000000000000000001 /* GripperLoadPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C100000000000000000002 /* GripperLoadPresentation.swift */; };
 		0AC888CF031C9D0C882A272C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F6973607E1B44FC016352114 /* Assets.xcassets */; };
 		A11111111111111111111111 /* LogWorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22222222222222222222222 /* LogWorkoutView.swift */; };
 		02DA37FA2EF34418B76A2695 /* AppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BFA6838778B4C1F8BD337E6 /* AppRuntime.swift */; };
@@ -60,6 +61,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C0C100000000000000000002 /* GripperLoadPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GripperLoadPresentation.swift; sourceTree = "<group>"; };
 		F6973607E1B44FC016352114 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A22222222222222222222222 /* LogWorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogWorkoutView.swift; sourceTree = "<group>"; };
 		152C10B5009490BBC2CAF54F /* PublishedCycleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishedCycleService.swift; sourceTree = "<group>"; };
@@ -186,6 +188,7 @@
 				4CB4FE3F83FF1998DC82B5D2 /* SessionExportService.swift */,
 				F20000000000000000000005 /* TrainingModeService.swift */,
 				F20000000000000000000042 /* StoreBackupService.swift */,
+				C0C100000000000000000002 /* GripperLoadPresentation.swift */,
 				9275815CF668B77423798D35 /* WorkoutView.swift */,
 			);
 			path = Sources;
@@ -350,6 +353,7 @@
 				F10000000000000000000044 /* ResistanceProfileService.swift in Sources */,
 				F10000000000000000000005 /* TrainingModeService.swift in Sources */,
 				F10000000000000000000042 /* StoreBackupService.swift in Sources */,
+				C0C100000000000000000001 /* GripperLoadPresentation.swift in Sources */,
 				978168F33A22E2B56E3A59B8 /* WorkoutView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
