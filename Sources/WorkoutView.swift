@@ -3307,6 +3307,22 @@ struct WorkoutView: View {
     }
 
     private func recentEfforts(exerciseId: UUID, exerciseName: String) -> [ExerciseEffort] {
+        if var merged = CSDBRowIdentity.historyEfforts(for: exerciseId, exercises: exercises,
+            sessions: sessions, entries: setEntries, adaptiveSessions: adaptiveSessions,
+            adaptiveEntries: adaptiveSetEntries, profiles: resistanceProfiles) {
+            let localSessions = Set(merged.compactMap { $0.id.split(separator: "|").first.map { String($0).lowercased() } })
+            var exportIDs = Set<String>()
+            for name in CSDBRowIdentity.names {
+                for item in exportedEfforts(exerciseName: name) where !localSessions.contains(item.id.lowercased()) {
+                    let identity = "\(item.id.lowercased())|\(name)"
+                    if exportIDs.insert(identity).inserted {
+                        merged.append(ExerciseEffort(id: identity, date: item.date, cycleName: item.cycleName,
+                            dayLabel: item.dayLabel, resistanceProfile: item.resistanceProfile, sets: item.sets))
+                    }
+                }
+            }
+            return merged.sorted { $0.date > $1.date }
+        }
         var efforts: [ExerciseEffort] = []
 
         let completed = sessions
@@ -3999,7 +4015,7 @@ struct ExerciseHistorySheet: View {
                                 Text("\(effort.cycleName) · \(effort.dayLabel)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                if showsResistanceProfile {
+                                if showsResistanceProfile || effort.resistanceProfile != nil {
                                     Text(effort.resistanceProfile?.displayName ?? "Resistance profile unknown")
                                         .font(.caption2)
                                         .foregroundStyle(effort.resistanceProfile == nil ? .orange : .secondary)

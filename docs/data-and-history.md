@@ -389,7 +389,10 @@ canonical exercise. Rotation counters, versioned progression keys, and doses
 are not rewritten.
 
 History search accepts all three old names or `CS DB Row` and returns their
-combined history with the canonical label. Repeat-last lookup considers the
+combined history with the canonical label. The selected exercise’s history sheet
+also includes the old Fixed/Adaptive efforts; inactive aliases are excluded from
+all future-entry pickers. Adaptive exercise recency resolves to the same identity.
+Repeat-last lookup considers the
 old identities only after activation, retaining key/profile precedence and
 each effort's literal rows; it never concatenates sets from two identities.
 Stored resistance profiles are not reinterpreted as dumbbell pounds.

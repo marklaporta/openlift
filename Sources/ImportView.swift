@@ -12,7 +12,7 @@ struct ImportView: View {
     @State private var showingManualWorkout = false
 
     private var sortedExercises: [Exercise] {
-        exercises.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        exercises.filter(\.isActive).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     var body: some View {

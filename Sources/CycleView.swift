@@ -1339,7 +1339,7 @@ private struct DayEditorSection: View {
                         set: { onExerciseChanged(slotIndex, $0) }
                     )) {
                         Text("Select").tag(Optional<UUID>.none)
-                        ForEach(exercises.filter { $0.primaryMuscle == slot.muscle }, id: \.id) { exercise in
+                        ForEach(exercises.filter { $0.isActive && $0.primaryMuscle == slot.muscle }, id: \.id) { exercise in
                             Text(exercise.name).tag(Optional(exercise.id))
                         }
                     }

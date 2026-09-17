@@ -80,3 +80,37 @@ enum CSDBRowIdentity {
         return legacyIDs.union([canonicalID])
     }
 }
+
+extension CSDBRowIdentity {
+    /// Per-exercise history sheets keep each original identity/occurrence's
+    /// rows and resistance profile separate while sharing the canonical title.
+    static func historyEfforts(for exerciseID: UUID, exercises: [Exercise], sessions: [Session],
+        entries: [SetEntry], adaptiveSessions: [AdaptiveWorkoutSession], adaptiveEntries: [AdaptiveSetEntry],
+        profiles: [ExerciseResistanceProfile]
+    ) -> [ExerciseEffort]? {
+        guard resolve(id: exerciseID, name: nil, exercises: exercises) != nil else { return nil }
+        let ids = historicalIDs(for: exerciseID, exercises: exercises)
+        var result: [ExerciseEffort] = []
+        for session in sessions where session.status == .completed || session.finishedAt != nil || session.exportStatus == .success {
+            let groups = Dictionary(grouping: entries.filter { $0.sessionId == session.id && ids.contains($0.exerciseId) && $0.isLocked && $0.reps > 0 }, by: \.exerciseId)
+            for (id, rows) in groups {
+                result.append(ExerciseEffort(id: "\(session.id.uuidString)|\(id.uuidString)",
+                    date: session.finishedAt ?? session.createdAt, cycleName: session.cycleNameSnapshot ?? "Rotation",
+                    dayLabel: session.dayLabelSnapshot ?? "Workout",
+                    resistanceProfile: profiles.first { $0.sessionId == session.id && $0.exerciseId == id }.flatMap(ResistanceProfileService.value),
+                    sets: rows.sorted { $0.setIndex < $1.setIndex }.map { ExerciseEffortSet(setIndex: $0.setIndex, weight: $0.weight, reps: $0.reps) }))
+            }
+        }
+        for session in adaptiveSessions where session.status == .completed {
+            let groups = Dictionary(grouping: adaptiveEntries.filter { $0.adaptiveSessionId == session.id && ids.contains($0.exerciseId) && $0.isLocked && $0.reps > 0 }, by: \.occurrenceId)
+            for (occurrenceID, rows) in groups {
+                guard let id = rows.first?.exerciseId else { continue }
+                result.append(ExerciseEffort(id: "\(session.id.uuidString)|\(occurrenceID.uuidString)",
+                    date: session.finishedAt ?? session.createdAt, cycleName: "Adaptive Floating", dayLabel: "Workout",
+                    resistanceProfile: profiles.first { $0.sessionId == session.id && $0.exerciseId == id && $0.occurrenceId == occurrenceID }.flatMap(ResistanceProfileService.value),
+                    sets: rows.sorted { $0.setIndex < $1.setIndex }.map { ExerciseEffortSet(setIndex: $0.setIndex, weight: $0.weight, reps: $0.reps) }))
+            }
+        }
+        return result.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+    }
+}
