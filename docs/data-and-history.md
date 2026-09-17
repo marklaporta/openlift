@@ -370,3 +370,18 @@ bytes, avoiding repeated VACUUM/replacement/upload cycles. Evicted cloud snapsho
 are requested for download and never blindly overwritten. Only integrity-checked snapshots count toward retention; cloud snapshots must also
 have confirmed upload metadata. Pending/corrupt files cannot displace the last
 seven verified recovery points.
+
+## CoC gripper model labels
+
+Captain of Crush / CoC Gripper uses **G**, **T**, and **1** model choices in
+Fixed Cycle, Adaptive, and ad hoc entry. Existing numeric set values remain
+unchanged: `1 → G`, `2 → T`, `3 → 1`. These are ordinal model identifiers,
+not pounds; they must not be included in pound-based tonnage calculations.
+Prior efforts, recaps, and history display the model labels. Unknown legacy
+values stay visible as unknown models with their original values. Other exercises
+retain numeric load entry.
+
+New JSON exercise payloads add optional `weight_encoding` metadata
+(`coc_model_ordinal_v1:1=G,2=T,3=1;not_weight`). Old exports without the field
+still decode, and recovery retains the original numeric sets and exercise identity.
+No store migration or historical set rewrite is required.

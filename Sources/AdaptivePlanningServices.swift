@@ -2414,8 +2414,10 @@ struct ExerciseEffortLookupResult: Equatable {
     let profileComparison: ResistanceProfileComparison
 
     /// Literal rows carry the inline context; dates remain in History.
-    var compactSummary: String {
-        var lines = [rows.map { "\(WeightFormatting.normalized($0.weight).formatted(WeightFormatting.style)) × \($0.reps)" }.joined(separator: " · ")]
+    var compactSummary: String { compactSummary(exerciseId: nil, name: nil) }
+
+    func compactSummary(exerciseId: UUID?, name: String?) -> String {
+        var lines = [rows.map { GripperLoadPresentation.set($0.weight, reps: $0.reps, exerciseId: exerciseId, name: name) }.joined(separator: " · ")]
         if let resistanceProfile { lines.append(resistanceProfile.displayName) }
         if !isComparable {
             lines.append(profileComparison == .unknown
