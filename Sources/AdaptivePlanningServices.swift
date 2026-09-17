@@ -2237,26 +2237,28 @@ enum AdaptiveExerciseSelectionService {
         var exposures: [Exposure] = []
         var seen = Set<String>()
         for entry in rotationSetEntries where entry.isLocked && entry.reps > 0 {
-            guard let completedAt = completedRotation[entry.sessionId], activeExercises[entry.exerciseId] != nil else {
+            let exerciseID = CSDBRowIdentity.resolve(id: entry.exerciseId, name: nil, exercises: exercises)?.id ?? entry.exerciseId
+            guard let completedAt = completedRotation[entry.sessionId], activeExercises[exerciseID] != nil else {
                 continue
             }
-            let key = "rotation:\(entry.sessionId.uuidString):\(entry.exerciseId.uuidString)"
+            let key = "rotation:\(entry.sessionId.uuidString):\(exerciseID.uuidString)"
             if seen.insert(key).inserted {
                 exposures.append(
-                    Exposure(completedAt: completedAt, sessionId: entry.sessionId, exerciseId: entry.exerciseId)
+                    Exposure(completedAt: completedAt, sessionId: entry.sessionId, exerciseId: exerciseID)
                 )
             }
         }
         for entry in adaptiveSetEntries where entry.isLocked && entry.reps > 0 {
+            let exerciseID = CSDBRowIdentity.resolve(id: entry.exerciseId, name: nil, exercises: exercises)?.id ?? entry.exerciseId
             guard let completedAt = completedAdaptive[entry.adaptiveSessionId],
-                  activeExercises[entry.exerciseId] != nil else { continue }
-            let key = "adaptive:\(entry.adaptiveSessionId.uuidString):\(entry.exerciseId.uuidString)"
+                  activeExercises[exerciseID] != nil else { continue }
+            let key = "adaptive:\(entry.adaptiveSessionId.uuidString):\(exerciseID.uuidString)"
             if seen.insert(key).inserted {
                 exposures.append(
                     Exposure(
                         completedAt: completedAt,
                         sessionId: entry.adaptiveSessionId,
-                        exerciseId: entry.exerciseId
+                        exerciseId: exerciseID
                     )
                 )
             }

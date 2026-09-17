@@ -8,6 +8,8 @@ struct LogWorkoutView: View {
     @Query private var templates: [CycleTemplate]
     @Query(sort: \Session.createdAt, order: .reverse) private var sessions: [Session]
     @Query private var setEntries: [SetEntry]
+    @Query private var adaptiveSessions: [AdaptiveWorkoutSession]
+    @Query private var adaptiveSetEntries: [AdaptiveSetEntry]
     @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     @State private var name = "Off-Schedule"
@@ -20,7 +22,7 @@ struct LogWorkoutView: View {
     @FocusState private var focusedField: LogEntryField?
 
     private var sortedExercises: [Exercise] {
-        exercises.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        exercises.filter(\.isActive).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     var body: some View {
@@ -499,6 +501,22 @@ struct LogWorkoutView: View {
     }
 
     private func recentEfforts(exerciseId: UUID, exerciseName: String) -> [ExerciseEffort] {
+        if var merged = CSDBRowIdentity.historyEfforts(for: exerciseId, exercises: exercises,
+            sessions: sessions, entries: setEntries, adaptiveSessions: adaptiveSessions,
+            adaptiveEntries: adaptiveSetEntries, profiles: resistanceProfiles) {
+            let localSessions = Set(merged.compactMap { $0.id.split(separator: "|").first.map { String($0).lowercased() } })
+            var exportIDs = Set<String>()
+            for name in CSDBRowIdentity.names {
+                for item in exportedEfforts(exerciseName: name) where !localSessions.contains(item.id.lowercased()) {
+                    let identity = "\(item.id.lowercased())|\(name)"
+                    if exportIDs.insert(identity).inserted {
+                        merged.append(ExerciseEffort(id: identity, date: item.date, cycleName: item.cycleName,
+                            dayLabel: item.dayLabel, resistanceProfile: item.resistanceProfile, sets: item.sets))
+                    }
+                }
+            }
+            return merged.sorted { $0.date > $1.date }
+        }
         var efforts: [ExerciseEffort] = []
 
         let completed = sessions
@@ -543,7 +561,9 @@ struct LogWorkoutView: View {
     ) -> [ExerciseEffort] {
         guard exercises.first(where: { $0.id == exerciseId })?
             .equipment.supportsResistanceProfile == true else {
-            return recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName)
+            let efforts = recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName)
+            return CSDBRowIdentity.resolve(id: exerciseId, name: nil, exercises: exercises) == nil
+                ? efforts : efforts.filter { $0.resistanceProfile == nil }
         }
         guard let current = defaultResistanceProfile(for: exerciseId) else { return [] }
         return recentEfforts(exerciseId: exerciseId, exerciseName: exerciseName).filter { effort in

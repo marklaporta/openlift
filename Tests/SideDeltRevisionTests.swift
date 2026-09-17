@@ -801,6 +801,11 @@ extension SideDeltRevisionTests {
             HistoryExerciseSearchService.results(query: query, sessions: sessions, setEntries: entries,
                 adaptiveSessions: adaptive, adaptiveSetEntries: adaptiveEntries, exercises: catalog)
         }
+        let sheetEfforts = try XCTUnwrap(CSDBRowIdentity.historyEfforts(for: canonical.id, exercises: catalog,
+            sessions: sessions, entries: entries, adaptiveSessions: adaptive, adaptiveEntries: adaptiveEntries,
+            profiles: try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())))
+        XCTAssertEqual(sheetEfforts.count, 9)
+        XCTAssertEqual(sheetEfforts.flatMap(\.sets).count, 18)
         XCTAssertEqual(history("CS DB Row").count, 9)
         XCTAssertEqual(history("CS DB Row").flatMap(\.sets).count, 18)
         XCTAssertEqual(history("Helms Row"), history("CS DB Row"))
@@ -871,6 +876,15 @@ extension SideDeltRevisionTests {
         XCTAssertEqual(cableResult.rows[0].weight, 100)
         XCTAssertNotNil(cableResult.resistanceProfile)
         XCTAssertTrue(cableResult.isComparable)
+        let recs = AdaptiveExerciseSelectionService.recommendations(exercises: catalog, preferences: [],
+            rotationSessions: [latest], rotationSetEntries: entries.filter { $0.sessionId == latest.id },
+            adaptiveSessions: [], adaptiveSetEntries: [])
+        XCTAssertEqual(recs[AdaptiveExerciseSelectionKey(muscle: .back, type: .compound)]?.exercise.id, canonical.id)
+        let sheets = try XCTUnwrap(CSDBRowIdentity.historyEfforts(for: canonical.id, exercises: catalog,
+            sessions: [first, latest], entries: entries, adaptiveSessions: [], adaptiveEntries: [], profiles: [profile]))
+        XCTAssertEqual(sheets.count, 3)
+        XCTAssertEqual(sheets.flatMap(\.sets).count, 4)
+        XCTAssertEqual(sheets.filter { $0.resistanceProfile != nil }.count, 1)
         // Before explicit activation, the original catalog name leaves lookup unchanged.
         canonical.name = "Chest-Supported Dumbbell Row"
         XCTAssertEqual(ExerciseEffortLookupService.globalEffort(exerciseId: canonical.id,

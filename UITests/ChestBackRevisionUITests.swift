@@ -95,6 +95,18 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
         XCTAssertTrue(nextThird.label.contains("Next: A"))
         XCTAssertTrue(nextThird.label.contains("Super ROM Dumbbell Lateral Raise"))
         XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrugs"))
+        app.tabBars.buttons["Log"].tap()
+        let picker = app.buttons["log.exercisePicker"].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5)); picker.tap()
+        let row = app.buttons["CS DB Row"].firstMatch
+        scrollToElement(row, in: app)
+        XCTAssertTrue(row.exists)
+        XCTAssertFalse(app.buttons["Helms Row"].exists)
+        XCTAssertFalse(app.buttons["Chest Supported Row"].exists)
+        XCTAssertFalse(app.buttons["Chest-Supported Dumbbell Row"].exists)
+        row.tap()
+        XCTAssertTrue(picker.label.contains("CS DB Row") || (picker.value as? String)?.contains("CS DB Row") == true)
+
     }
 
 }
