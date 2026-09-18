@@ -16,7 +16,7 @@ final class SeatedShrugActivationTests: XCTestCase {
     private func fixture() throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ShrugActivation-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configurations: [ModelConfiguration("ShrugActivation", schema: schema,
                 url: root.appendingPathComponent("default.store"), cloudKitDatabase: .none)])
@@ -60,7 +60,7 @@ final class SeatedShrugActivationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: stale), staleBytes)
         let inspection = f.root.appendingPathComponent("inspection.store")
         try FileManager.default.copyItem(at: backup, to: inspection)
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let inspectionContainer = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configurations: [ModelConfiguration("Inspection", schema: schema, url: inspection, cloudKitDatabase: .none)])
         let saved = ModelContext(inspectionContainer)

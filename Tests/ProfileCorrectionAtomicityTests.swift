@@ -20,7 +20,7 @@ final class ProfileCorrectionAtomicityTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = root.appendingPathComponent("synthetic.store")
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         func container() throws -> ModelContainer {
             try ModelContainer(for: schema, configurations: [
                 ModelConfiguration(schema: schema, url: store, cloudKitDatabase: .none)

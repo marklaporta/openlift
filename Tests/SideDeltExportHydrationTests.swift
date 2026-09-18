@@ -14,7 +14,7 @@ final class SideDeltExportHydrationTests: XCTestCase {
     }
 
     private func fixture() throws -> Fixture {
-        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let context = ModelContext(container)
         _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
         let exercises = try context.fetch(FetchDescriptor<Exercise>())
@@ -131,7 +131,7 @@ final class SideDeltExportHydrationTests: XCTestCase {
         XCTAssertEqual(Set(exports.compactMap { $0.fixed_cycle?.program_version }), [1, 2, 3, 4, 5])
         let encoded = try JSONEncoder().encode(exports)
         let roundTripped = try JSONDecoder().decode([SessionExportService.ExportPayload].self, from: encoded)
-        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let recovered = ModelContext(destination)
         _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: recovered)
         let cycle = try XCTUnwrap(try recovered.fetch(FetchDescriptor<ActiveCycleInstance>()).first)

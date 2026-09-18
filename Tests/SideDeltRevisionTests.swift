@@ -14,7 +14,7 @@ final class SideDeltRevisionTests: XCTestCase {
         var url: URL { root.appendingPathComponent("default.store") }
     }
     private func open(_ url: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         return try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configurations: [ModelConfiguration("SideDelt", schema: schema, url: url, cloudKitDatabase: .none)])
     }
@@ -339,7 +339,7 @@ final class SideDeltRevisionTests: XCTestCase {
         XCTAssertEqual(Set(exports.compactMap { $0.fixed_cycle?.program_version }), [3, 4])
         let encoded = try JSONEncoder().encode(exports)
         let roundTripped = try JSONDecoder().decode([SessionExportService.ExportPayload].self, from: encoded)
-        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let recovered = ModelContext(destination)
         _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: recovered)
         let cycle = try XCTUnwrap(try recovered.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
@@ -409,7 +409,7 @@ final class SideDeltRevisionTests: XCTestCase {
         XCTAssertEqual(Set(exports.compactMap { $0.fixed_cycle?.program_version }), [3, 6])
         let encoded = try JSONEncoder().encode(exports)
         let roundTripped = try JSONDecoder().decode([SessionExportService.ExportPayload].self, from: encoded)
-        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let recovered = ModelContext(destination)
         _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: recovered)
         let cycle = try XCTUnwrap(try recovered.fetch(FetchDescriptor<ActiveCycleInstance>()).first)

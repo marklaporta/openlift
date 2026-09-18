@@ -996,7 +996,25 @@ final class AdaptiveSetEntry {
     var occurrenceId: UUID
     var exerciseId: UUID
     var setIndex: Int
-    var weight: Double
+    @Attribute(originalName: "weight") var numericWeight: Double
+    /// Authoritative equipment identity; nil means ordinary weight or unresolved legacy CoC load.
+    var gripperModel: String?
+
+    /// Transient compatibility adapter for existing picker/prefill arithmetic. Never exported.
+    var weight: Double {
+        get { gripperModel.flatMap(GripperLoadPresentation.legacyValue) ?? numericWeight }
+        set {
+            if GripperLoadPresentation.applies(exerciseId: exerciseId)
+                || GripperLoadPresentation.isGripper(exerciseId, in: modelContext),
+               let token = GripperLoadPresentation.modelLabel(newValue) {
+                gripperModel = token
+                numericWeight = 0
+            } else {
+                gripperModel = nil
+                numericWeight = newValue
+            }
+        }
+    }
     var reps: Int
     var isLocked: Bool
     var lockedAt: Date?
@@ -1010,14 +1028,19 @@ final class AdaptiveSetEntry {
         weight: Double = 0,
         reps: Int = 0,
         isLocked: Bool = false,
-        lockedAt: Date? = nil
+        lockedAt: Date? = nil,
+        loadExerciseName: String? = nil,
+        gripperModel: String? = nil
     ) {
         self.id = id
         self.adaptiveSessionId = adaptiveSessionId
         self.occurrenceId = occurrenceId
         self.exerciseId = exerciseId
         self.setIndex = setIndex
-        self.weight = weight
+        let token = gripperModel ?? (GripperLoadPresentation.applies(exerciseId: exerciseId, name: loadExerciseName)
+            ? GripperLoadPresentation.modelLabel(weight) : nil)
+        self.numericWeight = token == nil ? weight : 0
+        self.gripperModel = token
         self.reps = reps
         self.isLocked = isLocked
         self.lockedAt = lockedAt
@@ -1306,7 +1329,25 @@ final class SetEntry {
     var sessionId: UUID
     var exerciseId: UUID
     var setIndex: Int
-    var weight: Double
+    @Attribute(originalName: "weight") var numericWeight: Double
+    /// Authoritative equipment identity; nil means ordinary weight or unresolved legacy CoC load.
+    var gripperModel: String?
+
+    /// Transient compatibility adapter for existing picker/prefill arithmetic. Never exported.
+    var weight: Double {
+        get { gripperModel.flatMap(GripperLoadPresentation.legacyValue) ?? numericWeight }
+        set {
+            if GripperLoadPresentation.applies(exerciseId: exerciseId)
+                || GripperLoadPresentation.isGripper(exerciseId, in: modelContext),
+               let token = GripperLoadPresentation.modelLabel(newValue) {
+                gripperModel = token
+                numericWeight = 0
+            } else {
+                gripperModel = nil
+                numericWeight = newValue
+            }
+        }
+    }
     var reps: Int
     var isLocked: Bool = false
     var lockedAt: Date?
@@ -1319,13 +1360,18 @@ final class SetEntry {
         weight: Double,
         reps: Int,
         isLocked: Bool = false,
-        lockedAt: Date? = nil
+        lockedAt: Date? = nil,
+        loadExerciseName: String? = nil,
+        gripperModel: String? = nil
     ) {
         self.id = id
         self.sessionId = sessionId
         self.exerciseId = exerciseId
         self.setIndex = setIndex
-        self.weight = weight
+        let token = gripperModel ?? (GripperLoadPresentation.applies(exerciseId: exerciseId, name: loadExerciseName)
+            ? GripperLoadPresentation.modelLabel(weight) : nil)
+        self.numericWeight = token == nil ? weight : 0
+        self.gripperModel = token
         self.reps = reps
         self.isLocked = isLocked
         self.lockedAt = lockedAt

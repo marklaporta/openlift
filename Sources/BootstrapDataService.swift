@@ -808,7 +808,7 @@ enum BootstrapDataService {
                             isLocked: true,
                             lockedAt: exportedSet.locked_at.flatMap(
                                 SessionExportService.parseExportDate
-                            )
+                            ), loadExerciseName: exercise.name, gripperModel: exportedSet.gripper_model
                         )
                         try entry.validate()
                         modelContext.insert(entry)

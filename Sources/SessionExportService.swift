@@ -299,15 +299,33 @@ enum SessionExportService {
 
     struct ExportSet: Codable, Sendable {
         let set_index: Int
-        let weight: Double
+        let numericWeight: Double
+        let gripper_model: String?
+        let load_encoding: String?
         let reps: Int
         let locked_at: String?
-
-        init(set_index: Int, weight: Double, reps: Int, locked_at: String? = nil) {
+        /// Transient adapter; JSON contains numericWeight (zero for semantic models), never this ordinal.
+        var weight: Double { gripper_model.flatMap(GripperLoadPresentation.legacyValue) ?? numericWeight }
+        enum CodingKeys: String, CodingKey {
+            case set_index, numericWeight = "weight", gripper_model, load_encoding, reps, locked_at
+        }
+        init(set_index: Int, weight: Double, reps: Int, locked_at: String? = nil, gripperModel: String? = nil) {
             self.set_index = set_index
-            self.weight = weight
+            self.numericWeight = gripperModel == nil ? weight : 0
+            self.gripper_model = gripperModel
+            self.load_encoding = gripperModel == nil ? nil : GripperLoadPresentation.semanticEncoding
             self.reps = reps
             self.locked_at = locked_at
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            set_index = try c.decode(Int.self, forKey: .set_index)
+            numericWeight = try c.decode(Double.self, forKey: .numericWeight)
+            gripper_model = try c.decodeIfPresent(String.self, forKey: .gripper_model)
+            load_encoding = try c.decodeIfPresent(String.self, forKey: .load_encoding)
+            reps = try c.decode(Int.self, forKey: .reps)
+            locked_at = try c.decodeIfPresent(String.self, forKey: .locked_at)
+            try GripperLoadPresentation.validatePayload(model: gripper_model, encoding: load_encoding, numericWeight: numericWeight)
         }
     }
 
@@ -318,7 +336,7 @@ enum SessionExportService {
         let sets: [ExportSet]
         let volume_feedback: String?
         let resistance_profile: ResistanceProfilePayload?
-        /// Optional for old readers/exports; CoC values are model ordinals, not load.
+        /// Optional for old exports; identifies semantic models or unresolved legacy ordinals.
         let weight_encoding: String?
 
         init(
@@ -332,12 +350,16 @@ enum SessionExportService {
             self.exercise_id = exercise_id
             self.exercise_name = exercise_name
             self.muscle = muscle
-            self.sets = sets
+            let isGripper = GripperLoadPresentation.applies(exerciseId: exercise_id.flatMap(UUID.init(uuidString:)), name: exercise_name)
+            self.sets = isGripper ? sets.map {
+                ExportSet(set_index: $0.set_index, weight: $0.weight, reps: $0.reps, locked_at: $0.locked_at,
+                    gripperModel: $0.gripper_model ?? GripperLoadPresentation.modelLabel($0.weight))
+            } : sets
             self.volume_feedback = volume_feedback
             self.resistance_profile = resistance_profile
             self.weight_encoding = GripperLoadPresentation.applies(
                 exerciseId: exercise_id.flatMap(UUID.init(uuidString:)), name: exercise_name
-            ) ? GripperLoadPresentation.exportEncoding : nil
+            ) ? (self.sets.contains { $0.gripper_model != nil } ? GripperLoadPresentation.semanticEncoding : GripperLoadPresentation.exportEncoding) : nil
         }
     }
 
@@ -542,6 +564,14 @@ enum SessionExportService {
             return payload
         }
 
+        // A malformed tagged set must not downgrade through the permissive legacy import.
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let exercises = object["exercises"] as? [[String: Any]],
+           exercises.contains(where: { exercise in
+               (exercise["sets"] as? [[String: Any]])?.contains {
+                   $0.keys.contains("gripper_model") || $0.keys.contains("load_encoding")
+               } == true
+           }) { return nil }
         guard let importPayload = try? decoder.decode(OffScheduleImportPayload.self, from: data) else {
             return nil
         }
@@ -1054,7 +1084,7 @@ enum SessionExportService {
                         set_index: $0.setIndex,
                         weight: $0.weight,
                         reps: $0.reps,
-                        locked_at: $0.lockedAt.map(iso8601Formatter.string)
+                        locked_at: $0.lockedAt.map(iso8601Formatter.string), gripperModel: $0.gripperModel
                     )
                 }
             return ExportExercise(
@@ -1872,10 +1902,45 @@ enum AdaptiveExportService {
         let muscle: String
         let exercise_type: String
         let equipment: String
-        let weight: Double
+        let numericWeight: Double
+        let gripper_model: String?
+        let load_encoding: String?
         let reps: Int
         let is_locked: Bool
         let locked_at: String?
+        var weight: Double { gripper_model.flatMap(GripperLoadPresentation.legacyValue) ?? numericWeight }
+        enum CodingKeys: String, CodingKey {
+            case set_entry_id, set_index, exercise_id, exercise_name, muscle, exercise_type, equipment
+            case numericWeight = "weight", gripper_model, load_encoding, reps, is_locked, locked_at
+        }
+        init(set_entry_id: String, set_index: Int, exercise_id: String, exercise_name: String,
+             muscle: String, exercise_type: String, equipment: String, weight: Double, reps: Int,
+             is_locked: Bool, locked_at: String?, gripperModel: String? = nil) {
+            self.set_entry_id = set_entry_id; self.set_index = set_index; self.exercise_id = exercise_id
+            self.exercise_name = exercise_name; self.muscle = muscle; self.exercise_type = exercise_type
+            self.equipment = equipment; self.reps = reps; self.is_locked = is_locked; self.locked_at = locked_at
+            let token = gripperModel ?? (GripperLoadPresentation.applies(exerciseId: UUID(uuidString: exercise_id), name: exercise_name)
+                ? GripperLoadPresentation.modelLabel(weight) : nil)
+            self.gripper_model = token; self.numericWeight = token == nil ? weight : 0
+            self.load_encoding = token == nil ? nil : GripperLoadPresentation.semanticEncoding
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            set_entry_id = try c.decode(String.self, forKey: .set_entry_id)
+            set_index = try c.decode(Int.self, forKey: .set_index)
+            exercise_id = try c.decode(String.self, forKey: .exercise_id)
+            exercise_name = try c.decode(String.self, forKey: .exercise_name)
+            muscle = try c.decode(String.self, forKey: .muscle)
+            exercise_type = try c.decode(String.self, forKey: .exercise_type)
+            equipment = try c.decode(String.self, forKey: .equipment)
+            numericWeight = try c.decode(Double.self, forKey: .numericWeight)
+            gripper_model = try c.decodeIfPresent(String.self, forKey: .gripper_model)
+            load_encoding = try c.decodeIfPresent(String.self, forKey: .load_encoding)
+            reps = try c.decode(Int.self, forKey: .reps)
+            is_locked = try c.decode(Bool.self, forKey: .is_locked)
+            locked_at = try c.decodeIfPresent(String.self, forKey: .locked_at)
+            try GripperLoadPresentation.validatePayload(model: gripper_model, encoding: load_encoding, numericWeight: numericWeight)
+        }
     }
 
     struct ExerciseV2: Codable, Equatable {
@@ -1990,7 +2055,7 @@ enum AdaptiveExportService {
                                 weight: row.weight,
                                 reps: row.reps,
                                 is_locked: row.isLocked,
-                                locked_at: row.lockedAt.map(iso.string)
+                                locked_at: row.lockedAt.map(iso.string), gripperModel: row.gripperModel
                             )
                         }
                     return ExerciseV2(
@@ -2424,7 +2489,8 @@ enum AdaptiveExportService {
                             weight: row.weight,
                             reps: row.reps,
                             isLocked: row.is_locked,
-                            lockedAt: row.locked_at.flatMap(SessionExportService.parseExportDate)
+                            lockedAt: row.locked_at.flatMap(SessionExportService.parseExportDate),
+                            loadExerciseName: actual.name, gripperModel: row.gripper_model
                         )
                     )
                 }

@@ -5,7 +5,7 @@ import SwiftData
 import XCTest
 @testable import OpenLift
 
-private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV15
+private typealias RealDeviceStoreMigrationTargetSchema = OpenLiftSchemaV16
 
 @Model
 private final class UnsupportedMigrationMarker {
@@ -56,7 +56,7 @@ final class MigrationSafetyTests: XCTestCase {
 
         // Readiness models changed in V11, so their frozen-type guard applies
         // through V10. Profile shapes have a separate V12–V14 guard below.
-        for schema in OpenLiftSchemaMigrationPlan.schemas.dropLast(5) {
+        for schema in OpenLiftSchemaMigrationPlan.schemas.filter({ $0.versionIdentifier < OpenLiftSchemaV11.versionIdentifier }) {
             for model in schema.models {
                 XCTAssertFalse(
                     changedLiveModelIdentifiers.contains(ObjectIdentifier(model)),
@@ -170,7 +170,7 @@ final class MigrationSafetyTests: XCTestCase {
                 )
             )
             context.insert(
-                SetEntry(
+                LegacyNumericLoadModels.SetEntry(
                     sessionId: sessionId,
                     exerciseId: exerciseId,
                     setIndex: 1,
@@ -197,7 +197,7 @@ final class MigrationSafetyTests: XCTestCase {
         let context = ModelContext(startup.container)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Exercise>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 1)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<LegacyNumericLoadModels.SetEntry>()), 1)
         XCTAssertEqual(
             try context.fetchCount(FetchDescriptor<OpenLiftSchemaV12.ExerciseResistanceProfile>()),
             0,
@@ -245,7 +245,7 @@ final class MigrationSafetyTests: XCTestCase {
                 )
             )
             context.insert(
-                SetEntry(
+                LegacyNumericLoadModels.SetEntry(
                     sessionId: sessionID,
                     exerciseId: exerciseID,
                     setIndex: 1,
@@ -283,7 +283,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertNil(startup.issue)
         let context = ModelContext(startup.container)
         XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).map(\.id), [sessionID])
-        XCTAssertEqual(try context.fetch(FetchDescriptor<SetEntry>()).first?.weight, 25)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<LegacyNumericLoadModels.SetEntry>()).first?.weight, 25)
         XCTAssertEqual(
             try context.fetch(FetchDescriptor<OpenLiftSchemaV12.ExerciseResistanceProfile>()).first?.chainPercent,
             70
@@ -445,10 +445,10 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertNil(startup.issue)
         let context = ModelContext(startup.container)
         let fixed = try XCTUnwrap(
-            try context.fetch(FetchDescriptor<SetEntry>()).first { $0.id == fixedId }
+            try context.fetch(FetchDescriptor<LegacyNumericLoadModels.SetEntry>()).first { $0.id == fixedId }
         )
         let adaptive = try XCTUnwrap(
-            try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).first { $0.id == adaptiveId }
+            try context.fetch(FetchDescriptor<LegacyNumericLoadModels.AdaptiveSetEntry>()).first { $0.id == adaptiveId }
         )
         XCTAssertTrue(fixed.isLocked)
         XCTAssertNil(fixed.lockedAt)
@@ -605,7 +605,7 @@ final class MigrationSafetyTests: XCTestCase {
                 )
             )
             context.insert(
-                SetEntry(
+                LegacyNumericLoadModels.SetEntry(
                     sessionId: sessionId,
                     exerciseId: exerciseId,
                     setIndex: 1,
@@ -900,7 +900,7 @@ final class MigrationSafetyTests: XCTestCase {
                 )
             )
             context.insert(
-                SetEntry(
+                LegacyNumericLoadModels.SetEntry(
                     id: setEntryId,
                     sessionId: sessionId,
                     exerciseId: exerciseId,
@@ -956,7 +956,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(anchor.initialBalance, -2)
         XCTAssertEqual(anchor.seededDirectSetEntryIds, [setEntryId])
         XCTAssertEqual(
-            try context.fetch(FetchDescriptor<SetEntry>()).map(\.id),
+            try context.fetch(FetchDescriptor<LegacyNumericLoadModels.SetEntry>()).map(\.id),
             [setEntryId]
         )
         XCTAssertEqual(
@@ -1126,7 +1126,7 @@ final class MigrationSafetyTests: XCTestCase {
                 status: .completed,
                 exportStatus: .success
             )
-            let adaptiveSet = AdaptiveSetEntry(
+            let adaptiveSet = LegacyNumericLoadModels.AdaptiveSetEntry(
                 id: adaptiveSetEntryId,
                 adaptiveSessionId: adaptiveSessionId,
                 occurrenceId: plannedExercise.occurrenceId,
@@ -1174,7 +1174,7 @@ final class MigrationSafetyTests: XCTestCase {
         )
         XCTAssertEqual(try context.fetch(FetchDescriptor<GeneratedWorkoutPlan>()).first?.id, adaptivePlanId)
         XCTAssertEqual(try context.fetch(FetchDescriptor<AdaptiveWorkoutSession>()).first?.id, adaptiveSessionId)
-        let migratedSet = try XCTUnwrap(context.fetch(FetchDescriptor<AdaptiveSetEntry>()).first)
+        let migratedSet = try XCTUnwrap(context.fetch(FetchDescriptor<LegacyNumericLoadModels.AdaptiveSetEntry>()).first)
         XCTAssertEqual(migratedSet.id, adaptiveSetEntryId)
         XCTAssertEqual(migratedSet.exerciseId, exerciseId)
         XCTAssertEqual(migratedSet.weight, 120)
@@ -1564,7 +1564,7 @@ final class MigrationSafetyTests: XCTestCase {
             status: .completed,
             exportStatus: .success
         )
-        let draftSet = SetEntry(
+        let draftSet = LegacyNumericLoadModels.SetEntry(
             id: UUID(uuidString: "50000000-0000-0000-0000-000000000001")!,
             sessionId: draft.id,
             exerciseId: press.id,
@@ -1573,7 +1573,7 @@ final class MigrationSafetyTests: XCTestCase {
             reps: 0,
             isLocked: false
         )
-        let completedSet = SetEntry(
+        let completedSet = LegacyNumericLoadModels.SetEntry(
             id: UUID(uuidString: "50000000-0000-0000-0000-000000000002")!,
             sessionId: completed.id,
             exerciseId: fly.id,
@@ -1612,7 +1612,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<RotationIndex>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ActiveCycleInstance>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Session>()), 2)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 2)
+        XCTAssertEqual(try fixedSetEvidence(in: container).count, 2)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<SessionSlotOverride>()), 1)
 
         let sessions = try context.fetch(FetchDescriptor<Session>())
@@ -1628,7 +1628,7 @@ final class MigrationSafetyTests: XCTestCase {
         XCTAssertEqual(activeCycle.currentDayIndex, 0)
         XCTAssertEqual(activeCycle.rotationIndices.first?.value, 1)
 
-        let sets = try context.fetch(FetchDescriptor<SetEntry>())
+        let sets = try fixedSetEvidence(in: container)
         XCTAssertEqual(sets.filter(\.isLocked).count, 1)
         XCTAssertEqual(sets.first(where: \.isLocked)?.reps, 12)
     }
@@ -1645,7 +1645,7 @@ final class MigrationSafetyTests: XCTestCase {
             "RotationIndex": try context.fetchCount(FetchDescriptor<RotationIndex>()),
             "ActiveCycleInstance": try context.fetchCount(FetchDescriptor<ActiveCycleInstance>()),
             "Session": try context.fetchCount(FetchDescriptor<Session>()),
-            "SetEntry": try context.fetchCount(FetchDescriptor<SetEntry>()),
+            "SetEntry": try fixedSetEvidence(in: container).count,
             "SessionSlotOverride": try context.fetchCount(FetchDescriptor<SessionSlotOverride>())
         ]
     }
@@ -1712,7 +1712,7 @@ final class MigrationSafetyTests: XCTestCase {
                 FetchDescriptor<AdaptiveWorkoutSession>()
             )
             counts["AdaptiveSetEntry"] = try context.fetchCount(
-                FetchDescriptor<AdaptiveSetEntry>()
+                FetchDescriptor<LegacyNumericLoadModels.AdaptiveSetEntry>()
             )
             counts["AdaptiveSetOccurrenceLink"] = try context.fetchCount(
                 FetchDescriptor<AdaptiveSetOccurrenceLink>()
@@ -1797,26 +1797,30 @@ final class MigrationSafetyTests: XCTestCase {
         return (states + occurrences).sorted()
     }
 
-    private func currentEntityCounts(in container: ModelContainer) throws -> [String: Int] {
+    private struct LoadEvidence { let isLocked: Bool; let reps: Int; let lockedAt: Date? }
+    private func fixedSetEvidence(in container: ModelContainer) throws -> [LoadEvidence] {
         let context = ModelContext(container)
-        var counts = try sharedV9AndV10EntityCounts(in: context)
-        counts["SetEntry"] = try context.fetchCount(FetchDescriptor<SetEntry>())
-        counts["AdaptiveSetEntry"] = try context.fetchCount(
-            FetchDescriptor<AdaptiveSetEntry>()
-        )
+        if container.schema.version >= OpenLiftSchemaV16.versionIdentifier {
+            return try context.fetch(FetchDescriptor<SetEntry>()).map { LoadEvidence(isLocked: $0.isLocked, reps: $0.reps, lockedAt: $0.lockedAt) }
+        }
+        return try context.fetch(FetchDescriptor<LegacyNumericLoadModels.SetEntry>()).map { LoadEvidence(isLocked: $0.isLocked, reps: $0.reps, lockedAt: $0.lockedAt) }
+    }
+    private func adaptiveSetEvidence(in container: ModelContainer) throws -> [LoadEvidence] {
+        let context = ModelContext(container)
+        if container.schema.version >= OpenLiftSchemaV16.versionIdentifier {
+            return try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).map { LoadEvidence(isLocked: $0.isLocked, reps: $0.reps, lockedAt: $0.lockedAt) }
+        }
+        return try context.fetch(FetchDescriptor<LegacyNumericLoadModels.AdaptiveSetEntry>()).map { LoadEvidence(isLocked: $0.isLocked, reps: $0.reps, lockedAt: $0.lockedAt) }
+    }
+    private func currentEntityCounts(in container: ModelContainer) throws -> [String: Int] {
+        var counts = try sharedV9AndV10EntityCounts(in: ModelContext(container))
+        counts["SetEntry"] = try fixedSetEvidence(in: container).count
+        counts["AdaptiveSetEntry"] = try adaptiveSetEvidence(in: container).count
         return counts
     }
-
     private func lockedAtCounts(in container: ModelContainer) throws -> [String: Int] {
-        let context = ModelContext(container)
-        return [
-            "SetEntry": try context.fetch(FetchDescriptor<SetEntry>())
-                .compactMap(\.lockedAt)
-                .count,
-            "AdaptiveSetEntry": try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
-                .compactMap(\.lockedAt)
-                .count
-        ]
+        ["SetEntry": try fixedSetEvidence(in: container).compactMap(\.lockedAt).count,
+         "AdaptiveSetEntry": try adaptiveSetEvidence(in: container).compactMap(\.lockedAt).count]
     }
 
     private func sharedV9AndV10EntityCounts(
@@ -2005,7 +2009,7 @@ extension MigrationSafetyTests {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         try copyDirectoryContents(from: supplied, to: fixture.working)
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configurations: [ModelConfiguration("ShrugRevisionCopy", schema: schema,
                 url: fixture.working.appendingPathComponent("default.store"), cloudKitDatabase: .none)])
@@ -2104,7 +2108,7 @@ extension MigrationSafetyTests {
         let fixture = try makeFixtureDirectories()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         try copyDirectoryContents(from: supplied, to: fixture.working)
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self, configurations: [ModelConfiguration("RevisionCopy", schema: schema, url: fixture.working.appendingPathComponent("default.store"), cloudKitDatabase: .none)])
         let context = ModelContext(container)
         func rows() throws -> [String] {

@@ -23,7 +23,7 @@ final class ExportIntegrityTests: XCTestCase {
     private func assertClusterProfileCorrection(original: ResistanceProfileValue?,
                                                 liveAlreadyCorrected: Bool = false) throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+            schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let context = ModelContext(container)
         let exercise = Exercise(name: "Corrected Row", primaryMuscle: .back,
                                 type: .compound, equipment: .cable)
@@ -139,7 +139,7 @@ final class ExportIntegrityTests: XCTestCase {
     @MainActor
     func testRejectedAdaptiveHydrationLeavesNoPartialReadinessOrCatalogAndCanRetry() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+            schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let context = ModelContext(container)
         let valid = adaptivePayload()
         var object = try XCTUnwrap(JSONSerialization.jsonObject(
@@ -170,7 +170,7 @@ final class ExportIntegrityTests: XCTestCase {
     @MainActor
     func testAdaptiveHydrationRejectsInvalidSetIdentityWithoutLosingRowsOnRetry() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+            schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let context = ModelContext(container)
         let valid = adaptivePayload()
         let validSetId = valid.plan.complexes[0].exercises[0].sets[0].set_entry_id
@@ -187,7 +187,7 @@ final class ExportIntegrityTests: XCTestCase {
     @MainActor
     func testAdaptiveHydrationDoesNotCommitOrDiscardUnrelatedPendingEdits() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
-            schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+            schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let context = ModelContext(container)
         let pending = Exercise(name: "Unrelated draft", primaryMuscle: .chest,
                                type: .compound, equipment: .dumbbell)

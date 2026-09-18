@@ -49,6 +49,17 @@ cluster snapshots and legacy session/set models remain unchanged. The real-store
 scratch gate additionally compares every profile and all cluster pointers and
 immutable occurrence evidence across migration.
 
+V16 freezes shipped V1–V15 set model shapes in `LegacyNumericLoadModels`
+and adds nullable `gripperModel` to the current Fixed/Adaptive sets. The former
+numeric `weight` attribute maps to `numericWeight` without converting values.
+Schema migration alone leaves historical gripper tokens nil. The explicit
+`OPENLIFT_MIGRATE_GRIPPER_MODELS_2026_09_17` launch flag and **Cycle → Store
+Gripper Models as G / T / 1** share the synchronous backup-protected handler.
+It clears the numeric field only for exact recognized ordinals, saves semantic
+identities, and preserves unknown values. It neither activates a program revision
+nor consolidates rows. The copied-phone gate verifies all unrelated SQL tables,
+set identities/reps/prefill meanings, backup failure safety and cold reopen.
+
 The clustered architecture has no persisted draft-context or sub-rotation
 entity. One `ClusterRotationState` owns each whole cluster. A completed cluster's
 `ClusterOccurrenceRecord` freezes its structural step, stable progression keys,
@@ -210,7 +221,7 @@ represented by fake cycle IDs or sentinel day indices.
 ## Current migration gates
 
 The maintained suite covers unversioned-store recognition, every additive schema
-stage through V15, full legacy-entity readback, rollback readback, deliberate
+stage through V16, full legacy-entity readback, rollback readback, deliberate
 migration failure with unchanged file hashes, clustered rollout idempotency,
 three-state hydration, immutable occurrence recovery, progression-key isolation,
 and completed-cluster export filtering. The real-store migration helper works on

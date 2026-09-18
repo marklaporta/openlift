@@ -47,7 +47,7 @@ final class GripperLoadPresentationTests: XCTestCase {
         XCTAssertEqual(effort.rows, rows)
     }
 
-    func testExportLabelsKeepRawHistoryAndOldExportsDecode() throws {
+    func testExportUsesSemanticStorageAndExerciseMetadataRemainsOptional() throws {
         let payload = SessionExportService.ExportExercise(
             exercise_id: GripperLoadPresentation.exerciseId.uuidString,
             exercise_name: "Captain of Crush", muscle: "forearms",
@@ -55,8 +55,10 @@ final class GripperLoadPresentationTests: XCTestCase {
         )
         let encoded = try JSONEncoder().encode(payload)
         let decoded = try JSONDecoder().decode(SessionExportService.ExportExercise.self, from: encoded)
-        XCTAssertEqual(decoded.sets.map(\.weight), [3, 2])
-        XCTAssertEqual(decoded.weight_encoding, GripperLoadPresentation.exportEncoding)
+        XCTAssertEqual(decoded.sets.map(\.weight), [3, 2]) // transient prefill adapter
+        XCTAssertEqual(decoded.sets.map(\.numericWeight), [0, 0])
+        XCTAssertEqual(decoded.sets.map(\.gripper_model), ["1", "T"])
+        XCTAssertEqual(decoded.weight_encoding, GripperLoadPresentation.semanticEncoding)
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         object.removeValue(forKey: "weight_encoding")
         let old = try JSONDecoder().decode(SessionExportService.ExportExercise.self, from: JSONSerialization.data(withJSONObject: object))

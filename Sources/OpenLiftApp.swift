@@ -4,7 +4,7 @@ import BackgroundTasks
 
 @main
 struct OpenLiftApp: App {
-    private static let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+    private static let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
 
     private static let startup: OpenLiftContainerStartup = {
         AppRuntime.prepareForUITesting()
@@ -149,6 +149,12 @@ struct OpenLiftApp: App {
             } catch {
                 print("OPENLIFT_CLUSTERED_SHRUGS_AUDIT_FAILED \(error.localizedDescription)")
             }
+        }
+        if startup.issue == nil, AppRuntime.shouldMigrateGripperModels {
+            do {
+                let result = try GripperModelStorage.migrate(modelContext: ModelContext(startup.container))
+                print("OPENLIFT_GRIPPER_MODELS applied=\(result.didApply) converted=\(result.converted) unknown=\(result.unknown) backup=\(result.backupURL?.lastPathComponent ?? "none")")
+            } catch { print("OPENLIFT_GRIPPER_MODELS_FAILED \(error.localizedDescription)") }
         }
         if startup.issue == nil, AppRuntime.shouldConsolidateCSDBRow {
             do {

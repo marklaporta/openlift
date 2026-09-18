@@ -457,7 +457,7 @@ final class BootstrapDataServiceTests: XCTestCase {
 
     @MainActor
     func testTargetedFixedRetryReplacesEverySameSessionCopyWithResistanceProfile() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let exercise = Exercise(
@@ -626,7 +626,7 @@ final class BootstrapDataServiceTests: XCTestCase {
         }
         """.data(using: .utf8)!
         let payload = try XCTUnwrap(SessionExportService.decodeExportPayload(data: json))
-        let schema = Schema(versionedSchema: OpenLiftSchemaV11.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let cycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 0)
@@ -1634,7 +1634,7 @@ final class OpenLiftStateResolverTests: XCTestCase {
 
     @MainActor
     func testPendingReadinessMirrorRetriesToUploaded() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV11.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let check = DailyReadinessCheck(
@@ -1689,7 +1689,7 @@ final class OpenLiftStateResolverTests: XCTestCase {
 
     @MainActor
     func testReadinessEnqueueCommitsPendingBeforeCloudWriteCompletes() async throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV11.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let check = DailyReadinessCheck(

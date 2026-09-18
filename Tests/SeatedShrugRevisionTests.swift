@@ -14,7 +14,7 @@ final class SeatedShrugRevisionTests: XCTestCase {
     }
 
     private func fixture() throws -> Fixture {
-        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let context = ModelContext(container)
         _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: context)
         let exercises = try context.fetch(FetchDescriptor<Exercise>())
@@ -263,7 +263,7 @@ final class SeatedShrugRevisionTests: XCTestCase {
     }
 
     func testCatalogLabelCorrectionRefusesToMergeTwoExistingIdentities() throws {
-        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+        let container = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let context = ModelContext(container)
         let old = Exercise(name: "Seated Dumbbell Shrug", primaryMuscle: .traps, type: .isolation, equipment: .dumbbell)
         let current = Exercise(name: "Seated Dumbbell Shrugs", primaryMuscle: .traps, type: .isolation, equipment: .dumbbell)
@@ -306,7 +306,7 @@ final class SeatedShrugRevisionTests: XCTestCase {
         XCTAssertEqual(Set(exports.compactMap { $0.fixed_cycle?.program_version }), [1, 2, 3])
         let encoded = try JSONEncoder().encode(exports)
         let roundTripped = try JSONDecoder().decode([SessionExportService.ExportPayload].self, from: encoded)
-        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV15.self))
+        let destination = OpenLiftModelContainerFactory.makeInMemory(schema: Schema(versionedSchema: OpenLiftSchemaV16.self))
         let recovered = ModelContext(destination)
         _ = try BootstrapDataService.prepareClusteredProgramRollout(modelContext: recovered)
         let cycle = try XCTUnwrap(try recovered.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
