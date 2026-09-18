@@ -7,7 +7,7 @@ final class ClusterSquatSwapTests: XCTestCase {
     private typealias Program = FixedCycleClusterProgramService
 
     private func container(at url: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         return try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configurations: [ModelConfiguration("SquatSwap", schema: schema, url: url, cloudKitDatabase: .none)])
     }

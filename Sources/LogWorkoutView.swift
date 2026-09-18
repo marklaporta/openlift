@@ -407,7 +407,8 @@ struct LogWorkoutView: View {
                         setIndex: index + 1,
                         weight: set.weight,
                         reps: set.reps,
-                        isLocked: true
+                        isLocked: true,
+                        loadExerciseName: exercises.first(where: { $0.id == exerciseInput.exerciseId })?.name
                     )
                     try entry.validate()
                     modelContext.insert(entry)

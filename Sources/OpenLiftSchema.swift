@@ -1,9 +1,79 @@
 import Foundation
 import SwiftData
 
+/// Frozen V1–V15 set shapes. V16 adds semantic equipment identity without changing shipped checksums.
+enum LegacyNumericLoadModels {
+    @Model
+    final class AdaptiveSetEntry {
+        @Attribute(.unique) var id: UUID
+        var adaptiveSessionId: UUID
+        var occurrenceId: UUID
+        var exerciseId: UUID
+        var setIndex: Int
+        var weight: Double
+        var reps: Int
+        var isLocked: Bool
+        var lockedAt: Date?
+
+        init(
+            id: UUID = UUID(),
+            adaptiveSessionId: UUID,
+            occurrenceId: UUID,
+            exerciseId: UUID,
+            setIndex: Int,
+            weight: Double = 0,
+            reps: Int = 0,
+            isLocked: Bool = false,
+            lockedAt: Date? = nil
+        ) {
+            self.id = id
+            self.adaptiveSessionId = adaptiveSessionId
+            self.occurrenceId = occurrenceId
+            self.exerciseId = exerciseId
+            self.setIndex = setIndex
+            self.weight = weight
+            self.reps = reps
+            self.isLocked = isLocked
+            self.lockedAt = lockedAt
+        }
+    }
+
+    @Model
+    final class SetEntry {
+        @Attribute(.unique) var id: UUID
+        var sessionId: UUID
+        var exerciseId: UUID
+        var setIndex: Int
+        var weight: Double
+        var reps: Int
+        var isLocked: Bool = false
+        var lockedAt: Date?
+
+        init(
+            id: UUID = UUID(),
+            sessionId: UUID,
+            exerciseId: UUID,
+            setIndex: Int,
+            weight: Double,
+            reps: Int,
+            isLocked: Bool = false,
+            lockedAt: Date? = nil
+        ) {
+            self.id = id
+            self.sessionId = sessionId
+            self.exerciseId = exerciseId
+            self.setIndex = setIndex
+            self.weight = weight
+            self.reps = reps
+            self.isLocked = isLocked
+            self.lockedAt = lockedAt
+        }
+    }
+}
+
 /// The schema shipped before Adaptive programming was introduced.
 ///
-/// These are intentionally the existing model types so an unversioned OpenLift
+/// These preserve the shipped model shapes so an unversioned OpenLift
 /// store retains the same entity identities and schema checksum when it is first
 /// opened with an explicit migration plan.
 enum OpenLiftSchemaV1: VersionedSchema {
@@ -19,7 +89,7 @@ enum OpenLiftSchemaV1: VersionedSchema {
         RotationIndex.self,
         ActiveCycleInstance.self,
         Session.self,
-        SetEntry.self,
+        LegacyNumericLoadModels.SetEntry.self,
         SessionSlotOverride.self
     ]
 }
@@ -107,7 +177,7 @@ enum OpenLiftSchemaV3: VersionedSchema {
         PlannedComplexSnapshot.self,
         GeneratedWorkoutPlan.self,
         AdaptiveWorkoutSession.self,
-        AdaptiveSetEntry.self,
+        LegacyNumericLoadModels.AdaptiveSetEntry.self,
         AdaptiveSetOccurrenceLink.self,
         ComplexFeedback.self,
         AdHocExerciseFeedback.self,
@@ -169,8 +239,8 @@ enum OpenLiftSchemaV8: VersionedSchema {
     ]
 }
 
-private let currentSetEntryModel = SetEntry.self
-private let currentAdaptiveSetEntryModel = AdaptiveSetEntry.self
+private let currentSetEntryModel = LegacyNumericLoadModels.SetEntry.self
+private let currentAdaptiveSetEntryModel = LegacyNumericLoadModels.AdaptiveSetEntry.self
 
 /// Adds Fixed Cycle readiness audit records, occurrence-only skip provenance,
 /// and immutable ordered occurrence snapshots as parallel entities. No shipped
@@ -317,8 +387,8 @@ enum OpenLiftSchemaV10: VersionedSchema {
         ObjectIdentifier($0) != ObjectIdentifier(OpenLiftSchemaV9.SetEntry.self)
             && ObjectIdentifier($0) != ObjectIdentifier(OpenLiftSchemaV9.AdaptiveSetEntry.self)
     } + [
-        SetEntry.self,
-        AdaptiveSetEntry.self
+        LegacyNumericLoadModels.SetEntry.self,
+        LegacyNumericLoadModels.AdaptiveSetEntry.self
     ]
 }
 
@@ -431,6 +501,14 @@ enum OpenLiftSchemaV15: VersionedSchema {
     } + [ExerciseResistanceProfile.self]
 }
 
+enum OpenLiftSchemaV16: VersionedSchema {
+    static let versionIdentifier = Schema.Version(16, 0, 0)
+    static let models: [any PersistentModel.Type] = OpenLiftSchemaV15.models.filter {
+        ObjectIdentifier($0) != ObjectIdentifier(LegacyNumericLoadModels.SetEntry.self)
+            && ObjectIdentifier($0) != ObjectIdentifier(LegacyNumericLoadModels.AdaptiveSetEntry.self)
+    } + [SetEntry.self, AdaptiveSetEntry.self]
+}
+
 enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
     static let schemas: [any VersionedSchema.Type] = [
         OpenLiftSchemaV1.self,
@@ -447,7 +525,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
         OpenLiftSchemaV12.self,
         OpenLiftSchemaV13.self,
         OpenLiftSchemaV14.self,
-        OpenLiftSchemaV15.self
+        OpenLiftSchemaV15.self,
+        OpenLiftSchemaV16.self
     ]
 
     static let stages: [MigrationStage] = [
@@ -503,7 +582,8 @@ enum OpenLiftSchemaMigrationPlan: SchemaMigrationPlan {
             fromVersion: OpenLiftSchemaV13.self,
             toVersion: OpenLiftSchemaV14.self
         ),
-        .lightweight(fromVersion: OpenLiftSchemaV14.self, toVersion: OpenLiftSchemaV15.self)
+        .lightweight(fromVersion: OpenLiftSchemaV14.self, toVersion: OpenLiftSchemaV15.self),
+        .lightweight(fromVersion: OpenLiftSchemaV15.self, toVersion: OpenLiftSchemaV16.self)
     ]
 }
 

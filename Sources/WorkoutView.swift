@@ -1856,7 +1856,8 @@ struct WorkoutView: View {
                     setIndex: set.set_index,
                     weight: set.weight,
                     reps: set.reps,
-                    isLocked: true
+                    isLocked: true,
+                    loadExerciseName: exercise.name
                 )
                 try entry.validate()
                 modelContext.insert(entry)
@@ -2298,7 +2299,8 @@ struct WorkoutView: View {
                     setIndex: setIndex,
                     weight: prefills.weight,
                     reps: prefills.reps,
-                    isLocked: false
+                    isLocked: false,
+                    loadExerciseName: exercises.first(where: { $0.id == resolved.exerciseId })?.name
                 )
                 try entry.validate()
                 modelContext.insert(entry)
@@ -2326,7 +2328,8 @@ struct WorkoutView: View {
                 exerciseId: exerciseId,
                 setIndex: newIndex,
                 weight: prefills.weight,
-                reps: prefills.reps
+                reps: prefills.reps,
+                loadExerciseName: exercises.first(where: { $0.id == exerciseId })?.name
             )
             try newEntry.validate()
             modelContext.insert(newEntry)
@@ -2457,7 +2460,8 @@ struct WorkoutView: View {
                         exerciseId: exercise.id,
                         setIndex: setIndex,
                         weight: values.weight,
-                        reps: values.reps
+                        reps: values.reps,
+                        loadExerciseName: exercise.name
                     )
                 )
             }
@@ -2746,7 +2750,8 @@ struct WorkoutView: View {
                 exerciseId: exercise.id,
                 setIndex: setIndex,
                 weight: values.weight,
-                reps: values.reps
+                reps: values.reps,
+                loadExerciseName: exercise.name
             )
             try entry.validate()
             modelContext.insert(entry)
@@ -3060,7 +3065,8 @@ struct WorkoutView: View {
                             exerciseId: slot.exerciseId,
                             setIndex: index,
                             weight: value.weight,
-                            reps: value.reps
+                            reps: value.reps,
+                            loadExerciseName: exercises.first(where: { $0.id == slot.exerciseId })?.name
                         )
                     )
                 }
@@ -3118,7 +3124,8 @@ struct WorkoutView: View {
                         exerciseId: exercise.id,
                         setIndex: index,
                         weight: value.weight,
-                        reps: value.reps
+                        reps: value.reps,
+                        loadExerciseName: exercise.name
                     )
                 )
             }

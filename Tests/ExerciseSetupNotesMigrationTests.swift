@@ -15,7 +15,7 @@ final class ExerciseSetupNotesMigrationTests: XCTestCase {
     }
 
     private func open(_ store: URL) throws -> ModelContext {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
             configurations: [ModelConfiguration(schema: schema, url: store, cloudKitDatabase: .none)])
         return ModelContext(container)

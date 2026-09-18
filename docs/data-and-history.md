@@ -401,17 +401,24 @@ Workout recovery retains known historical IDs for snapshot consistency;
 name-only imports resolve to the canonical row. Catalog seeding and new-entry
 validation do not recreate selectable aliases.
 
-## CoC gripper model labels
+## CoC gripper model storage (V16)
 
-Captain of Crush / CoC Gripper uses **G**, **T**, and **1** model choices in
-Fixed Cycle, Adaptive, and ad hoc entry. Existing numeric set values remain
-unchanged: `1 → G`, `2 → T`, `3 → 1`. These are ordinal model identifiers,
-not pounds; they must not be included in pound-based tonnage calculations.
-Prior efforts, recaps, and history display the model labels. Unknown legacy
-values stay visible as unknown models with their original values. Other exercises
-retain numeric load entry.
+Captain of Crush / CoC Gripper stores the model identity **G**, **T**, or **1**
+in `gripperModel`, with `numericWeight = 0` (not a zero-pound gripper). New
+Fixed Cycle, Adaptive, and ad hoc sets use this representation. `weight` is a
+computed compatibility adapter for the existing picker/prefill algorithms, not
+a persisted ordinal. Other exercises keep their original numeric loads.
 
-New JSON exercise payloads add optional `weight_encoding` metadata
-(`coc_model_ordinal_v1:1=G,2=T,3=1;not_weight`). Old exports without the field
-still decode, and recovery retains the original numeric sets and exercise identity.
-No store migration or historical set rewrite is required.
+The explicit **Cycle → Store Gripper Models as G / T / 1** action converts
+historical ordinals `1 → G`, `2 → T`, `3 → "1"` after a verified full-store
+backup. It retains session/set identities, reps, timestamps and all unrelated
+program state. Unknown legacy values remain numeric and visibly unknown;
+they are never rounded, guessed, or erased. Drafts/pending edits block the
+operation, repeated activation is a no-op, and program/row revisions are separate.
+
+JSON sets use `gripper_model` plus `load_encoding: "coc_model_identity_v2"`
+and `weight: 0`. The semantic token `"1"` cannot be confused with legacy
+numeric `1` (model G). Both Fixed/ad hoc and Adaptive exports carry this
+metadata. Invalid tagged values fail decoding rather than falling back to a
+numeric import. Untagged historical exports still decode with the old mapping;
+recovery and new prefills save recognized values as semantic identities.

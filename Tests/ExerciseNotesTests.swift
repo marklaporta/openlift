@@ -9,7 +9,7 @@ final class ExerciseNotesTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("notes.store")
-        let schema = Schema(versionedSchema: OpenLiftSchemaV15.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         func openStore() throws -> ModelContainer {
             try ModelContainer(for: schema, migrationPlan: OpenLiftSchemaMigrationPlan.self,
                 configurations: [ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none)])

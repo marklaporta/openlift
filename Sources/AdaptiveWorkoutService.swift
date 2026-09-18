@@ -460,7 +460,8 @@ enum AdaptiveWorkoutService {
                             exerciseId: exercise.exerciseId,
                             setIndex: setIndex,
                             weight: prior?.weight ?? 0,
-                            reps: prior?.reps ?? 0
+                            reps: prior?.reps ?? 0,
+                            loadExerciseName: exercise.exerciseName
                         )
                     )
                 }
@@ -536,7 +537,8 @@ enum AdaptiveWorkoutService {
                         exerciseId: exercise.id,
                         setIndex: setIndex,
                         weight: previous?.weight ?? 0,
-                        reps: previous?.reps ?? 0
+                        reps: previous?.reps ?? 0,
+                        loadExerciseName: exercise.name
                     )
                 )
             }
@@ -938,7 +940,8 @@ enum AdaptiveWorkoutService {
                             exerciseId: exercise.exerciseId,
                             setIndex: setIndex,
                             weight: prior?.weight ?? 0,
-                            reps: prior?.reps ?? 0
+                            reps: prior?.reps ?? 0,
+                            loadExerciseName: exercise.exerciseName
                         )
                     )
                 }
@@ -1022,7 +1025,8 @@ enum AdaptiveWorkoutService {
             adaptiveSessionId: session.id,
             occurrenceId: snapshot.occurrenceId,
             exerciseId: existingEntries.first?.exerciseId ?? snapshot.exerciseId,
-            setIndex: (existingEntries.map(\.setIndex).max() ?? 0) + 1
+            setIndex: (existingEntries.map(\.setIndex).max() ?? 0) + 1,
+            loadExerciseName: snapshot.exerciseName
         )
         modelContext.insert(entry)
         snapshot.prescribedSetCount = existingEntries.count + 1

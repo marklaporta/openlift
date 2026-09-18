@@ -38,6 +38,7 @@ struct CycleView: View {
     @State private var didAddSideDelt = false
     @State private var didReorderSideDelts = false
     @State private var didReviseChestBack = false
+    @State private var gripperMigrationMessage: String?
     @State private var didConsolidateCSDBRow = false
 
     private var activeTemplate: CycleTemplate? {
@@ -157,6 +158,22 @@ struct CycleView: View {
                                 Text("Finish your current workout first.")
                                     .font(.caption).accessibilityIdentifier("cycle.chestBackDraftBlocker")
                             }
+                        }
+                        if !trainingPreferences.contains(where: { $0.key == GripperModelStorage.marker }) {
+                            Button("Store Gripper Models as G / T / 1") {
+                                do {
+                                    let result = try GripperModelStorage.migrate(modelContext: modelContext)
+                                    gripperMigrationMessage = "Gripper models stored as G, T, and 1. \(result.converted) historical sets converted; \(result.unknown) unknown values retained."
+                                } catch { errorMessage = error.localizedDescription }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("cycle.migrateGripperModels")
+                            .disabled(hasPendingWorkout)
+                            if hasPendingWorkout { Text("Finish your current workout first.") }
+                        }
+                        if let gripperMigrationMessage {
+                            Label(gripperMigrationMessage, systemImage: "checkmark.circle.fill")
+                                .accessibilityIdentifier("cycle.gripperModelsSuccess")
                         }
                         if !trainingPreferences.contains(where: { $0.key == CSDBRowIdentity.marker }),
                            Set(exercises.map(\.id)).isSuperset(of: CSDBRowIdentity.legacyIDs.union([CSDBRowIdentity.canonicalID])) {
