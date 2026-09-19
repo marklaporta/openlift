@@ -172,6 +172,12 @@ struct OpenLiftApp: App {
                 print("OPENLIFT_CS_DB_ROW_CONSOLIDATION applied=\(result.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
             } catch { print("OPENLIFT_CS_DB_ROW_CONSOLIDATION_FAILED \(error.localizedDescription)") }
         }
+        if startup.issue == nil, AppRuntime.shouldRepairCSDBRowRecovery {
+            do {
+                let result = try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: ModelContext(startup.container))
+                print("OPENLIFT_CS_DB_ROW_RECOVERY_REPAIR applied=\(result.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
+            } catch { print("OPENLIFT_CS_DB_ROW_RECOVERY_REPAIR_FAILED \(error.localizedDescription)") }
+        }
         if startup.issue == nil, AppRuntime.shouldSwapChestBackRows {
             do {
                 let result = try BootstrapDataService.applyChestBackRowPairingWithFreshBackup(modelContext: ModelContext(startup.container))

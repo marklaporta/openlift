@@ -39,6 +39,7 @@ enum AppRuntime {
         "OPENLIFT_UI_TESTING_SHRUG_ACTIVATION"
     )
     static let shouldMigrateGripperModels = ProcessInfo.processInfo.arguments.contains("OPENLIFT_MIGRATE_GRIPPER_MODELS_2026_09_17")
+    static let shouldRepairCSDBRowRecovery = ProcessInfo.processInfo.arguments.contains("OPENLIFT_REPAIR_CS_DB_ROW_RECOVERY_2026_09_18")
     static let shouldConsolidateCSDBRow = ProcessInfo.processInfo.arguments.contains("OPENLIFT_CONSOLIDATE_CS_DB_ROW_2026_09_17")
     static let shouldSwapChestBackRows = ProcessInfo.processInfo.arguments.contains("OPENLIFT_SWAP_CHEST_BACK_ROWS_2026_09_18")
     static let shouldReviseChestBack = ProcessInfo.processInfo.arguments.contains("OPENLIFT_REVISE_CHEST_BACK_2026_09_17")

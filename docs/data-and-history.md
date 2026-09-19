@@ -397,9 +397,18 @@ old identities only after activation, retaining key/profile precedence and
 each effort's literal rows; it never concatenates sets from two identities.
 Stored resistance profiles are not reinterpreted as dumbbell pounds.
 Published-template imports resolve old IDs and names to the canonical entry.
-Workout recovery retains known historical IDs for snapshot consistency;
-name-only imports resolve to the canonical row. Catalog seeding and new-entry
+Workout recovery retains known historical IDs and exact/expanded-name catalog
+matches, including inactive legacy rows. Only unresolved names fall back to the
+canonical equivalent: redirecting a known name-only export would duplicate its
+sets alongside the preserved historical identity. Catalog seeding and new-entry
 validation do not recreate selectable aliases.
+
+`OPENLIFT_REPAIR_CS_DB_ROW_RECOVERY_2026_09_18` is an explicit, idempotent repair
+for two verified duplicate set UUIDs introduced by the old recovery resolver.
+It validates their original rows and exact session/load/rep/index evidence,
+requires completed consolidation and no drafts/pending edits, and verifies a
+fresh full-store snapshot before deleting only those two duplicate UUIDs.
+It does not deduplicate equal-valued legitimate sets or rewrite exports.
 
 ## CoC gripper model storage (V16)
 

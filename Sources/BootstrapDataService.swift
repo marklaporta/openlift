@@ -1229,7 +1229,6 @@ enum BootstrapDataService {
         if let id, let exact = byId[id] {
             return exact
         }
-        if let canonical = CSDBRowIdentity.resolve(id: id, name: name, exercises: Array(byId.values)) { return canonical }
         if let exact = byName[name.lowercased()] {
             return exact
         }
@@ -1243,7 +1242,10 @@ enum BootstrapDataService {
                 return match.count == 1 ? match[0] : nil
             }
         }
-        return nil
+        // Completed recovery keeps the original identity, including name-only
+        // exports from before IDs were recorded. Equivalence is for future
+        // selection/history lookup, not for importing a second copy of a set.
+        return CSDBRowIdentity.resolve(id: id, name: name, exercises: Array(byId.values))
     }
 
     private static func canonicalExerciseName(_ name: String) -> String {

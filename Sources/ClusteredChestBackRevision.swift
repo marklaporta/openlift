@@ -230,6 +230,62 @@ extension BootstrapDataService {
         } catch { modelContext.rollback(); throw error }
     }
 
+    /// Remove only the two rows proven newly inserted by name-only export
+    /// hydration after consolidation. Never deduplicate sets by value.
+    @MainActor
+    static func repairCSDBRowRecoveryDuplicates(modelContext: ModelContext, backupDirectory: URL? = nil,
+        snapshot: (URL, URL) throws -> Void = StoreBackupService.snapshot
+    ) throws -> RowConsolidationResult {
+        guard !modelContext.hasChanges else { throw ClusterRevisionError.pendingChanges }
+        let sessions = try modelContext.fetch(FetchDescriptor<Session>())
+        guard !sessions.contains(where: { $0.status == .draft }),
+              !(try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())).contains(where: { $0.status == .draft }) else {
+            throw ClusterRevisionError.draftHasWork
+        }
+        guard CSDBRowIdentity.canonical(in: try modelContext.fetch(FetchDescriptor<Exercise>())) != nil,
+              try modelContext.fetch(FetchDescriptor<TrainingPreference>()).contains(where: { $0.key == CSDBRowIdentity.marker }) else {
+            throw ClusterRevisionError.invalidState
+        }
+        let sessionID = UUID(uuidString: "35AB747E-1761-41C4-963B-877C62D0B472")!
+        let legacyID = UUID(uuidString: "45F7D9A2-52D5-4172-ACE7-78AEB5BF2C6F")!
+        guard sessions.contains(where: { $0.id == sessionID && $0.status == .completed }) else {
+            throw ClusterRevisionError.invalidState
+        }
+        let evidence: [(duplicate: UUID, original: UUID, index: Int, reps: Int)] = [
+            (UUID(uuidString: "6F101C1C-4233-4AB5-884E-B61F9DDA12C0")!, UUID(uuidString: "6CEEFF75-B0D7-4542-AA56-2329FC4611EB")!, 1, 15),
+            (UUID(uuidString: "AADC432A-80B9-45AC-97BF-693F09C494B9")!, UUID(uuidString: "42D2AB5B-04A2-48CE-A4C4-6B2AA649D9FA")!, 2, 8)
+        ]
+        let entries = try modelContext.fetch(FetchDescriptor<SetEntry>())
+        var duplicates: [SetEntry] = []
+        for item in evidence {
+            func matches(_ row: SetEntry, exerciseID: UUID) -> Bool {
+                row.sessionId == sessionID && row.exerciseId == exerciseID && row.setIndex == item.index
+                    && row.weight == 40 && row.reps == item.reps && row.isLocked
+                    && row.lockedAt == nil && row.gripperModel == nil
+            }
+            guard let original = entries.first(where: { $0.id == item.original }),
+                  matches(original, exerciseID: legacyID) else { throw ClusterRevisionError.invalidState }
+            if let duplicate = entries.first(where: { $0.id == item.duplicate }) {
+                guard matches(duplicate, exerciseID: CSDBRowIdentity.canonicalID) else { throw ClusterRevisionError.invalidState }
+                duplicates.append(duplicate)
+            }
+        }
+        guard !duplicates.isEmpty else { return RowConsolidationResult(didApply: false, backupURL: nil) }
+        guard let storeURL = modelContext.container.configurations.first?.url,
+              FileManager.default.fileExists(atPath: storeURL.path) else { throw SeatedShrugBackupError.persistentStoreRequired }
+        let directory = try backupDirectory ?? FileManager.default.url(for: .documentDirectory,
+            in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("OpenLift/revision-backups")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let backup = directory.appendingPathComponent("before-cs-db-row-recovery-repair-\(UUID().uuidString).sqlite")
+        try snapshot(storeURL, backup)
+        guard StoreBackupService.isValidSnapshot(at: backup) else { throw SeatedShrugBackupError.verificationFailed }
+        do {
+            duplicates.forEach(modelContext.delete)
+            try modelContext.save()
+            return RowConsolidationResult(didApply: true, backupURL: backup)
+        } catch { modelContext.rollback(); throw error }
+    }
+
     /// Only future selection references change. Completed evidence is untouched.
     static func normalizeCSDBRowSelections(modelContext: ModelContext) throws {
         func mapped(_ id: UUID) -> UUID { CSDBRowIdentity.legacyIDs.contains(id) ? CSDBRowIdentity.canonicalID : id }
