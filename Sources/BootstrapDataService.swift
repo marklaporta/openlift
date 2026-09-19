@@ -3073,7 +3073,8 @@ enum FixedCycleClusterProgramService {
             return ResolvedSlot(
                 slot: slot,
                 exerciseId: exerciseId,
-                progressionKey: (selection.cluster == .cluster2 && slot.position == 0
+                progressionKey: pairedRowProgressionKey(selection: selection, slotPosition: slot.position, exerciseId: exerciseId)
+                    ?? (selection.cluster == .cluster2 && slot.position == 0
                     && [3, 5].contains(selection.effectiveStep % 6)
                     ? selection.squatProgressionKeys[exerciseId] : nil)
                     ?? progressionKey(selection: selection, slotPosition: slot.position)

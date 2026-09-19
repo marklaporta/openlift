@@ -63,6 +63,16 @@ struct OpenLiftApp: App {
                             }
                         }
                         try? modelContext.save()
+                        if ProcessInfo.processInfo.environment["OPENLIFT_ROW_PAIRING_UI"] == "1" {
+                            let cable = Exercise(name: "SA CS Cable Row", primaryMuscle: .back, type: .compound, equipment: .cable)
+                            cable.id = FixedCycleClusterProgramService.pairedCableRowID
+                            modelContext.insert(cable)
+                            try? modelContext.save()
+                            _ = try? BootstrapDataService.prepareChestBackRevision(modelContext: modelContext, backupConfirmed: true)
+                            modelContext.insert(ClusterExercisePreference(programVersionID: FixedCycleClusterProgramService.chestBackVersionID,
+                                templateDayPosition: 1, slotPosition: 1, exerciseId: cable.id))
+                            try? modelContext.save()
+                        }
                     }
                     let states = try? modelContext.fetch(FetchDescriptor<ClusterRotationState>())
                     states?.first { $0.programVersionID == FixedCycleClusterProgramService.sideDeltVersionID && $0.clusterID == "cluster-3" }?.positionIndex = (ProcessInfo.processInfo.environment["OPENLIFT_SIDE_DELT_UI_ORDER"] == "1"
@@ -161,6 +171,12 @@ struct OpenLiftApp: App {
                 let result = try BootstrapDataService.consolidateCSDBRow(modelContext: ModelContext(startup.container))
                 print("OPENLIFT_CS_DB_ROW_CONSOLIDATION applied=\(result.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
             } catch { print("OPENLIFT_CS_DB_ROW_CONSOLIDATION_FAILED \(error.localizedDescription)") }
+        }
+        if startup.issue == nil, AppRuntime.shouldSwapChestBackRows {
+            do {
+                let result = try BootstrapDataService.applyChestBackRowPairingWithFreshBackup(modelContext: ModelContext(startup.container))
+                print("OPENLIFT_CHEST_BACK_ROW_PAIRING applied=\(result.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
+            } catch { print("OPENLIFT_CHEST_BACK_ROW_PAIRING_FAILED \(error.localizedDescription)") }
         }
         if startup.issue == nil, AppRuntime.shouldReviseChestBack {
             do {

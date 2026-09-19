@@ -246,3 +246,87 @@ extension BootstrapDataService {
         }
     }
 }
+
+extension FixedCycleClusterProgramService {
+    static let pairedCableRowID = UUID(uuidString: "9FCBF4C1-2E7E-4A2E-AD81-F0FB1CA7B2B8")!
+
+    /// B/D exchange equipment, not progression identities. Other substitutions
+    /// retain the existing slot-isolation semantics.
+    static func pairedRowProgressionKey(selection: Selection, slotPosition: Int, exerciseId: UUID) -> String? {
+        guard selection.programVersionID == chestBackVersionID, selection.cluster == .cluster1,
+              slotPosition == 1, [1, 3].contains(selection.effectiveStep) else { return nil }
+        if exerciseId == CSDBRowIdentity.canonicalID { return chestBackProgressionKey(step: 3, slotPosition: 1) }
+        if exerciseId == pairedCableRowID { return chestBackProgressionKey(step: 1, slotPosition: 1) }
+        return nil
+    }
+}
+
+extension BootstrapDataService {
+    @MainActor
+    static func applyChestBackRowPairingWithFreshBackup(
+        modelContext: ModelContext,
+        backupDirectory: URL? = nil,
+        snapshot: (URL, URL) throws -> Void = StoreBackupService.snapshot
+    ) throws -> ClusterSquatSwapResult {
+        guard !modelContext.hasChanges else { throw ClusterRevisionError.pendingChanges }
+        typealias Program = FixedCycleClusterProgramService
+        let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let cycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>()).filter { cycle in
+            templates.contains { $0.id == cycle.templateId && Program.isProgramTemplate($0) }
+        }
+        guard cycles.count == 1, let cycle = cycles.first,
+              let template = templates.first(where: { $0.id == cycle.templateId }),
+              Program.versionID(for: template) == Program.chestBackVersionID else { throw ClusterRevisionError.invalidState }
+        let preferences = try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>())
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let targets = [(1, CSDBRowIdentity.canonicalID, Program.pairedCableRowID),
+                       (15, Program.pairedCableRowID, CSDBRowIdentity.canonicalID)]
+        var ids = Program.persistentExerciseIDsByKey(preferences: preferences, programVersionID: Program.chestBackVersionID)
+        var changed = false
+        for (position, target, original) in targets {
+            let key = ClusterExercisePreference.key(programVersionID: Program.chestBackVersionID,
+                templateDayPosition: position, slotPosition: 1)
+            guard let day = template.days.first(where: { $0.position == position }),
+                  let row = day.slots.first(where: { $0.position == 1 }),
+                  day.slots.first(where: { $0.position == 0 })?.exerciseId == Program.recoveryMovements[position == 1 ? 0 : 2].0,
+                  exercises.contains(where: { $0.id == target }),
+                  preferences.filter({ $0.key == key }).count <= 1,
+                  [original, target].contains(ids[key] ?? row.exerciseId) else { throw ClusterRevisionError.invalidState }
+            changed = changed || (ids[key] ?? row.exerciseId) != target
+            ids[key] = target
+        }
+        try Program.validatePersistentExercisePreferences(template: template, exerciseIDsByPreferenceKey: ids)
+        guard changed else { return ClusterSquatSwapResult(didApply: false, backupURL: nil) }
+        guard !(try modelContext.fetch(FetchDescriptor<Session>())).contains(where: { $0.status == .draft }),
+              !(try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())).contains(where: { $0.status == .draft }) else {
+            throw ClusterRevisionError.draftHasWork
+        }
+        guard let storeURL = modelContext.container.configurations.first?.url,
+              FileManager.default.fileExists(atPath: storeURL.path) else { throw SeatedShrugBackupError.persistentStoreRequired }
+        let directory = try backupDirectory ?? FileManager.default.url(for: .documentDirectory,
+            in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("OpenLift/revision-backups")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let backupURL = directory.appendingPathComponent("before-row-pairing-\(UUID().uuidString).sqlite")
+        do {
+            try snapshot(storeURL, backupURL)
+            guard StoreBackupService.isValidSnapshot(at: backupURL) else { throw SeatedShrugBackupError.verificationFailed }
+        } catch {
+            try? FileManager.default.removeItem(at: backupURL)
+            throw error
+        }
+        do {
+            for (position, target, _) in targets {
+                let key = ClusterExercisePreference.key(programVersionID: Program.chestBackVersionID,
+                    templateDayPosition: position, slotPosition: 1)
+                if let existing = preferences.first(where: { $0.key == key }) {
+                    if existing.exerciseId != target { existing.exerciseId = target; existing.updatedAt = .now }
+                } else {
+                    modelContext.insert(ClusterExercisePreference(programVersionID: Program.chestBackVersionID,
+                        templateDayPosition: position, slotPosition: 1, exerciseId: target))
+                }
+            }
+            try modelContext.save()
+            return ClusterSquatSwapResult(didApply: true, backupURL: backupURL)
+        } catch { modelContext.rollback(); throw error }
+    }
+}

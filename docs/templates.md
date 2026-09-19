@@ -304,3 +304,9 @@ Cluster1 logically advances A/B/C/D; raw completion counters remain unchanged.
 Verified phone counter24
 remains24 (A next after the September17 flye exposure). Historical v4 counters and
 occurrences are archived unchanged.
+
+The explicit v6 **Pair Rows with Flye Setup** equipment revision exchanges only
+the B/D back preferences: **Seated Cable Flye + CS DB Row** and
+**Incline DB Flye + SA CS Cable Row**. It retains exercise-linked progression,
+performed-set carry-forward and raw rotation counters; A/C and other clusters
+are unchanged. See [activation and verification](migration-safety.md#september-18-v6-chestback-row-pairing).
