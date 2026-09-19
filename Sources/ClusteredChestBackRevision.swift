@@ -41,7 +41,7 @@ extension FixedCycleClusterProgramService {
         func existing(_ index: Int) throws -> UUID {
             let item = recoveryMovements[index]
             guard let exercise = exercises.first(where: { $0.id == item.0 })
-                    ?? exercises.first(where: { $0.name == item.1 }) else {
+                    ?? CompactExerciseName.resolve(item.1, in: exercises) else {
                 throw ProgramError.requiredExerciseMissing(item.1)
             }
             return exercise.id

@@ -1663,7 +1663,7 @@ struct AdaptiveWorkoutView: View {
                     "Cable Lateral Raise"
                 ]
                 fixtureExercises = names.compactMap { name in
-                    catalog.first(where: { $0.name == name })
+                    CompactExerciseName.resolve(name, in: catalog)
                 }
                 guard fixtureExercises.count == names.count else { return }
             } else {

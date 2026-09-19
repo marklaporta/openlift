@@ -422,3 +422,14 @@ numeric `1` (model G). Both Fixed/ad hoc and Adaptive exports carry this
 metadata. Invalid tagged values fail decoding rather than falling back to a
 numeric import. Untagged historical exports still decode with the old mapping;
 recovery and new prefills save recognized values as semantic identities.
+
+### Compact catalog labels
+
+Normal catalog bootstrap shortens `Dumbbell` → `DB`, `Single-Arm` → `SA`,
+and `Chest-Supported` → `CS` (including spaced variants), retaining UUIDs.
+Published templates and Fixed/Adaptive recovery accept old and compact names.
+Exact labels/UUIDs take priority; ambiguous compact aliases never select an
+arbitrary movement. Existing names whose compact labels collide remain unchanged.
+Completed occurrence snapshots, progression keys, drafts, and program selections
+are not renamed or reset. `CS DB Row` is a label, not consolidation activation;
+combined history still requires the canonical entry and both inactive legacy IDs.

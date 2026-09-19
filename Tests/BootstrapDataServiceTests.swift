@@ -38,7 +38,7 @@ final class BootstrapDataServiceTests: XCTestCase {
             equipment: .machine
         )
         let inclinePress = Exercise(
-            name: "Incline Dumbbell Press",
+            name: "Incline DB Press",
             primaryMuscle: .chest,
             type: .compound,
             equipment: .dumbbell
@@ -584,7 +584,7 @@ final class BootstrapDataServiceTests: XCTestCase {
           "date": "2026-05-03T21:22:07Z",
           "exercises": [
             {
-              "exercise_name": "Incline Dumbbell Press",
+              "exercise_name": "Incline DB Press",
               "sets": [
                 { "weight": 75, "reps": 10 },
                 { "weight": 75, "reps": 9 }
@@ -601,7 +601,7 @@ final class BootstrapDataServiceTests: XCTestCase {
 
         XCTAssertEqual(payload.cycle_name, "Off-Schedule")
         XCTAssertEqual(payload.cycle_day_index, 0)
-        XCTAssertEqual(payload.exercises.first?.exercise_name, "Incline Dumbbell Press")
+        XCTAssertEqual(payload.exercises.first?.exercise_name, "Incline DB Press")
         XCTAssertEqual(payload.exercises.first?.sets.map(\.set_index), [1, 2])
         XCTAssertNotNil(UUID(uuidString: payload.session_id))
     }
@@ -908,8 +908,8 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(
             upperA,
             [
-                "Flat Dumbbell Press",
-                "Single-Arm Dumbbell Row",
+                "Flat DB Press",
+                "SA DB Row",
                 "Assisted Pull-Up",
                 "Cable Crossover Lateral Raise",
                 "Assisted Dips",
@@ -932,7 +932,7 @@ final class BootstrapDataServiceTests: XCTestCase {
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
-        let inclinePress = try XCTUnwrap(catalog.first { $0.name == "Incline Dumbbell Press" })
+        let inclinePress = try XCTUnwrap(catalog.first { $0.name == "Incline DB Press" })
         let sessionId = UUID(uuidString: "8DC5D239-F5FB-4E0F-B181-DF1F8EA5B52B")!
         let cycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 2)
         let partialSession = Session(
@@ -965,7 +965,7 @@ final class BootstrapDataServiceTests: XCTestCase {
             date: "2026-07-20T12:00:00-07:00",
             exercises: [
                 .init(exercise_name: "Belt Squat", muscle: "quads", sets: [.init(set_index: 1, weight: 185, reps: 9)], volume_feedback: "tooLittle"),
-                .init(exercise_name: "Incline Dumbbell Press", muscle: "chest", sets: [.init(set_index: 1, weight: 60, reps: 9)], volume_feedback: "tooLittle"),
+                .init(exercise_name: "Incline DB Press", muscle: "chest", sets: [.init(set_index: 1, weight: 60, reps: 9)], volume_feedback: "tooLittle"),
                 .init(exercise_name: "Bayesian Curl", muscle: "biceps", sets: [.init(set_index: 1, weight: 24, reps: 9)], volume_feedback: "tooLittle"),
                 .init(exercise_name: "Cable Lateral Raise", muscle: "sideDelts", sets: [.init(set_index: 1, weight: 12, reps: 12)], volume_feedback: "tooLittle")
             ],
@@ -993,8 +993,8 @@ final class BootstrapDataServiceTests: XCTestCase {
         XCTAssertEqual(importedSets.count, 4)
         XCTAssertEqual(valuesByName["Belt Squat"]?.0, 185)
         XCTAssertEqual(valuesByName["Belt Squat"]?.1, 9)
-        XCTAssertEqual(valuesByName["Incline Dumbbell Press"]?.0, 60)
-        XCTAssertEqual(valuesByName["Incline Dumbbell Press"]?.1, 9)
+        XCTAssertEqual(valuesByName["Incline DB Press"]?.0, 60)
+        XCTAssertEqual(valuesByName["Incline DB Press"]?.1, 9)
         XCTAssertEqual(valuesByName["Bayesian Curl"]?.0, 24)
         XCTAssertEqual(valuesByName["Bayesian Curl"]?.1, 9)
         XCTAssertEqual(valuesByName["Cable Lateral Raise"]?.0, 12)
@@ -1088,8 +1088,8 @@ final class BootstrapDataServiceTests: XCTestCase {
 
     private func starterExercises() -> [Exercise] {
         [
-            Exercise(name: "Flat Dumbbell Press", primaryMuscle: .chest, type: .compound, equipment: .dumbbell),
-            Exercise(name: "Single-Arm Dumbbell Row", primaryMuscle: .back, type: .compound, equipment: .dumbbell),
+            Exercise(name: "Flat DB Press", primaryMuscle: .chest, type: .compound, equipment: .dumbbell),
+            Exercise(name: "SA DB Row", primaryMuscle: .back, type: .compound, equipment: .dumbbell),
             Exercise(name: "Assisted Pull-Up", primaryMuscle: .back, type: .compound, equipment: .machine),
             Exercise(name: "Cable Crossover Lateral Raise", primaryMuscle: .sideDelts, type: .isolation, equipment: .cable),
             Exercise(name: "Assisted Dips", primaryMuscle: .triceps, type: .compound, equipment: .machine),
@@ -1098,11 +1098,11 @@ final class BootstrapDataServiceTests: XCTestCase {
             Exercise(name: "Stiff-Leg Deadlift", primaryMuscle: .hamstrings, type: .compound, equipment: .barbell),
             Exercise(name: "Leg Press", primaryMuscle: .quads, type: .compound, equipment: .machine),
             Exercise(name: "Leg Curl", primaryMuscle: .hamstrings, type: .isolation, equipment: .machine),
-            Exercise(name: "Incline Dumbbell Press", primaryMuscle: .chest, type: .compound, equipment: .dumbbell),
-            Exercise(name: "Chest Supported Row", primaryMuscle: .back, type: .compound, equipment: .machine),
+            Exercise(name: "Incline DB Press", primaryMuscle: .chest, type: .compound, equipment: .dumbbell),
+            Exercise(name: "CS Row", primaryMuscle: .back, type: .compound, equipment: .machine),
             Exercise(name: "Lat Pulldown", primaryMuscle: .back, type: .compound, equipment: .machine),
-            Exercise(name: "Dumbbell Lateral Raise", primaryMuscle: .sideDelts, type: .isolation, equipment: .dumbbell),
-            Exercise(name: "Dumbbell Skullcrusher", primaryMuscle: .triceps, type: .isolation, equipment: .dumbbell),
+            Exercise(name: "DB Lateral Raise", primaryMuscle: .sideDelts, type: .isolation, equipment: .dumbbell),
+            Exercise(name: "DB Skullcrusher", primaryMuscle: .triceps, type: .isolation, equipment: .dumbbell),
             Exercise(name: "EZ Bar Curl", primaryMuscle: .biceps, type: .isolation, equipment: .barbell),
             Exercise(name: "Hack Squat", primaryMuscle: .quads, type: .compound, equipment: .machine),
             Exercise(name: "Romanian Deadlift", primaryMuscle: .hamstrings, type: .compound, equipment: .barbell),
@@ -1755,7 +1755,7 @@ final class OpenLiftStateResolverTests: XCTestCase {
 
     func testExerciseHistorySearchCombinesFixedAndAdaptiveWorkNewestFirst() {
         let exercise = Exercise(
-            name: "Incline Dumbbell Press",
+            name: "Incline DB Press",
             primaryMuscle: .chest,
             type: .compound,
             equipment: .dumbbell

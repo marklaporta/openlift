@@ -8,8 +8,8 @@ final class SwapExerciseUITests: OpenLiftUITestCase {
         app.tabBars.buttons["Workout"].tap()
         submitFixedReadiness(in: app)
 
-        scrollToElement(app.staticTexts["Flat Dumbbell Press"], in: app)
-        XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
+        scrollToElement(app.staticTexts["Flat DB Press"], in: app)
+        XCTAssertTrue(app.staticTexts["Flat DB Press"].waitForExistence(timeout: 5))
 
         let swapButton = app.buttons["workout.swap.0"]
         XCTAssertTrue(swapButton.waitForExistence(timeout: 5))

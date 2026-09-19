@@ -118,20 +118,20 @@ final class ClusteredProgramTests: XCTestCase {
                 CycleOrdering.sortedSlots(day.slots).compactMap { names[$0.exerciseId] }
             },
             [
-                ["Incline Dumbbell Press", "Lat Pulldown"],
-                ["Flat Dumbbell Press", "Lat Prayer"],
-                ["Incline Press-Flye", "Chest Supported Row"],
+                ["Incline DB Press", "Lat Pulldown"],
+                ["Flat DB Press", "Lat Prayer"],
+                ["Incline Press-Flye", "CS Row"],
                 ["Belt Squat", "Overhead Cable Extension", "Incline Curl"],
-                ["Stiff-Leg Deadlift", "Cable Pushdown", "Dumbbell Preacher Curl"],
-                ["Sumo Belt Squat", "Dumbbell Skullcrusher", "Bayesian Curl"],
+                ["Stiff-Leg Deadlift", "Cable Pushdown", "DB Preacher Curl"],
+                ["Sumo Belt Squat", "DB Skullcrusher", "Bayesian Curl"],
                 ["Back Extension", "Overhead Cable Extension", "Incline Curl"],
-                ["Bulgarian Split Squat", "Cable Pushdown", "Dumbbell Preacher Curl"],
-                ["Leg Curl", "Dumbbell Skullcrusher", "Bayesian Curl"],
-                ["Super ROM Dumbbell Lateral Raise", "Stair Calves"],
+                ["Bulgarian Split Squat", "Cable Pushdown", "DB Preacher Curl"],
+                ["Leg Curl", "DB Skullcrusher", "Bayesian Curl"],
+                ["Super ROM DB Lateral Raise", "Stair Calves"],
                 ["Cable Lateral Raise", "Bench-Supported Cable Wrist Curl (Supinated)"],
-                ["Super ROM Dumbbell Lateral Raise", "Stair Calves"],
+                ["Super ROM DB Lateral Raise", "Stair Calves"],
                 ["Cable Lateral Raise", "Bench-Supported Cable Wrist Extension (Pronated)"],
-                ["Super ROM Dumbbell Lateral Raise", "Stair Calves"],
+                ["Super ROM DB Lateral Raise", "Stair Calves"],
                 ["Cable Lateral Raise", "Captain of Crush"]
             ]
         )
@@ -230,7 +230,7 @@ final class ClusteredProgramTests: XCTestCase {
         })
         let canonicalID = slot.exerciseId
         let persistentExercise = try XCTUnwrap(exercises.first { $0.name == "Cable Pushdown" })
-        let todayExercise = try XCTUnwrap(exercises.first { $0.name == "Dumbbell Skullcrusher" })
+        let todayExercise = try XCTUnwrap(exercises.first { $0.name == "DB Skullcrusher" })
         let sessionID = UUID()
         let preference = ClusterExercisePreference(
             programVersionID: FixedCycleClusterProgramService.programVersionID,
@@ -316,7 +316,7 @@ final class ClusteredProgramTests: XCTestCase {
         )
         let slot = try XCTUnwrap(CycleOrdering.sortedSlots(selection.day.slots).first)
         let originalExerciseID = slot.exerciseId
-        let replacement = try XCTUnwrap(exercises.first { $0.name == "Flat Dumbbell Press" })
+        let replacement = try XCTUnwrap(exercises.first { $0.name == "Flat DB Press" })
         let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
         context.insert(template)
         context.insert(cycle)
@@ -508,7 +508,7 @@ final class ClusteredProgramTests: XCTestCase {
         let slot = try XCTUnwrap(CycleOrdering.sortedSlots(selection.day.slots).first)
         let canonicalExerciseID = slot.exerciseId
         let sameClusterReplacement = try XCTUnwrap(
-            exercises.first { $0.name == "Flat Dumbbell Press" }
+            exercises.first { $0.name == "Flat DB Press" }
         )
         let cluster2FutureDay = try XCTUnwrap(template.days.first { $0.position == 4 })
         let cluster2FutureSlot = try XCTUnwrap(
@@ -567,7 +567,7 @@ final class ClusteredProgramTests: XCTestCase {
             states: states
         )
         let slot = try XCTUnwrap(CycleOrdering.sortedSlots(selection.day.slots).first)
-        let replacement = try XCTUnwrap(exercises.first { $0.name == "Flat Dumbbell Press" })
+        let replacement = try XCTUnwrap(exercises.first { $0.name == "Flat DB Press" })
         let session = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
         let override = ClusterExerciseOccurrenceOverride(
             sessionId: session.id,
@@ -919,7 +919,7 @@ final class ClusteredProgramTests: XCTestCase {
             template.days.first { $0.position == 10 }?.slots.last?.exerciseId,
             existingDumbbellWristCurl.id
         )
-        XCTAssertFalse(catalog.contains { $0.name == "Incline Dumbbell Press-Flye" })
+        XCTAssertFalse(catalog.contains { $0.name == "Incline DB Press-Flye" })
         XCTAssertFalse(catalog.contains { $0.name == "Captains of Crush" })
     }
 
@@ -929,7 +929,7 @@ final class ClusteredProgramTests: XCTestCase {
         )
         let context = ModelContext(container)
         let partialPatchFlye = Exercise(
-            name: "Incline Dumbbell Press-Flye",
+            name: "Incline DB Press-Flye",
             primaryMuscle: .chest,
             type: .compound,
             equipment: .dumbbell
@@ -1435,7 +1435,7 @@ final class ClusteredProgramTests: XCTestCase {
             occurrence: occurrence,
             states: states
         )
-        let durableExercise = try XCTUnwrap(catalog.first { $0.name == "Flat Dumbbell Press" })
+        let durableExercise = try XCTUnwrap(catalog.first { $0.name == "Flat DB Press" })
         let preference = ClusterExercisePreference(
             programVersionID: FixedCycleClusterProgramService.programVersionID,
             templateDayPosition: 1,
@@ -3034,9 +3034,9 @@ extension ClusteredProgramTests {
         XCTAssertTrue(states.allSatisfy { $0.positionIndex == 12 })
         let byID = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0.name) })
         let expected = [
-            ["Flat Dumbbell Press", "Lat Pulldown"], ["Incline Dumbbell Press", "Chest Supported Row"], ["Incline Press-Flye", "Dumbbell Lat Pullover"],
-            ["Leg Curl", "Overhead Cable Extension", "Incline Curl"], ["Belt Squat", "Cable Pushdown", "Dumbbell Preacher Curl"], ["Stiff-Leg Deadlift", "Dumbbell Skullcrusher", "Bayesian Curl"],
-            ["Safety Bar Squat", "Overhead Cable Extension", "Incline Curl"], ["Back Extension", "Cable Pushdown", "Dumbbell Preacher Curl"], ["Bulgarian Split Squat", "Dumbbell Skullcrusher", "Bayesian Curl"]
+            ["Flat DB Press", "Lat Pulldown"], ["Incline DB Press", "CS Row"], ["Incline Press-Flye", "DB Lat Pullover"],
+            ["Leg Curl", "Overhead Cable Extension", "Incline Curl"], ["Belt Squat", "Cable Pushdown", "DB Preacher Curl"], ["Stiff-Leg Deadlift", "DB Skullcrusher", "Bayesian Curl"],
+            ["Safety Bar Squat", "Overhead Cable Extension", "Incline Curl"], ["Back Extension", "Cable Pushdown", "DB Preacher Curl"], ["Bulgarian Split Squat", "DB Skullcrusher", "Bayesian Curl"]
         ]
         for day in revised.days where day.position < 9 {
             XCTAssertEqual(day.slots.sorted { $0.position < $1.position }.map { byID[$0.exerciseId]! }, expected[day.position])
@@ -3050,7 +3050,7 @@ extension ClusteredProgramTests {
                     let key = FixedCycleClusterProgramService.progressionKey(selection: selection, slotPosition: slot.position)
                     let effort = ExerciseEffortLookupService.fixedCycleEffort(exerciseId: slot.exerciseId, cycleInstanceId: cycle.id, cycleDayIndex: selection.day.position, adaptiveSessions: [], adaptiveSetEntries: [], rotationSessions: try context.fetch(FetchDescriptor<Session>()), rotationSetEntries: rows, progressionKey: key, progressionOccurrences: history)
                     let name = byID[slot.exerciseId]!
-                    if name == "Dumbbell Lat Pullover" || name == "Safety Bar Squat" {
+                    if name == "DB Lat Pullover" || name == "Safety Bar Squat" {
                         XCTAssertNil(effort)
                         XCTAssertEqual(slot.defaultSetCount, 2)
                     } else {
@@ -3244,7 +3244,7 @@ extension ClusteredProgramTests {
         let cycle = try XCTUnwrap(try context.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
         let catalog = try context.fetch(FetchDescriptor<Exercise>())
         let safety = try XCTUnwrap(catalog.first { $0.name == "Safety Bar Squat" })
-        let source = clusteredExport(template: template, cycle: cycle, exercise: catalog.first { $0.name == "Incline Dumbbell Press" }!, absoluteStep: 0, pointerCount: 1, date: Date(timeIntervalSince1970: 1000))
+        let source = clusteredExport(template: template, cycle: cycle, exercise: catalog.first { $0.name == "Incline DB Press" }!, absoluteStep: 0, pointerCount: 1, date: Date(timeIntervalSince1970: 1000))
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(source)) as? [String: Any])
         var metadata = try XCTUnwrap(object["fixed_cycle"] as? [String: Any])
         metadata["cluster_exercise_overrides"] = [[

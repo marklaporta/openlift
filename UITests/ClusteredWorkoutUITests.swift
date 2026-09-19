@@ -11,12 +11,12 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "cycle.squatSwapSuccess").firstMatch.exists)
         app.tabBars.buttons["Workout"].tap()
         submitFixedReadiness(in: app)
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         scrollToElement(weight, in: app)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         reps.tap(); reps.typeText("12")
-        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        app.buttons["fixed.lock.Flat DB Press.1"].tap()
         let complete = app.buttons["Complete Cluster 1"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]
@@ -39,12 +39,12 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         XCTAssertTrue(app.staticTexts["cycle.shrugDraftBlocker"].exists)
         app.tabBars.buttons["Workout"].tap()
         submitFixedReadiness(in: app)
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         scrollToElement(weight, in: app)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         reps.tap(); reps.typeText("12")
-        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        app.buttons["fixed.lock.Flat DB Press.1"].tap()
         let complete = app.buttons["Complete Cluster 1"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]
@@ -64,7 +64,7 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         scrollToElement(nextThird, in: app)
         XCTAssertTrue(nextThird.label.contains("Unchanged"))
         XCTAssertTrue(nextThird.label.contains("Next: A"))
-        XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrugs"))
+        XCTAssertTrue(nextThird.label.contains("Seated DB Shrugs"))
     }
 
     func testAlternatingShrugRevisionStartsBlankAndAdvancesOnlyCompletedThirdCluster() throws {
@@ -74,18 +74,18 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         scrollToElement(target, in: app)
         XCTAssertTrue(target.exists)
         XCTAssertEqual(target.label, "Target: 12–16 reps")
-        let weight = app.textFields["fixed.weight.Seated Dumbbell Shrugs.1"]
+        let weight = app.textFields["fixed.weight.Seated DB Shrugs.1"]
         scrollToElement(weight, in: app)
         XCTAssertTrue(weight.exists)
         XCTAssertEqual(weight.value as? String, "Weight")
-        let second = app.textFields["fixed.weight.Seated Dumbbell Shrugs.2"]
+        let second = app.textFields["fixed.weight.Seated DB Shrugs.2"]
         XCTAssertTrue(second.exists)
-        XCTAssertFalse(app.textFields["fixed.weight.Seated Dumbbell Shrugs.3"].exists)
-        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "fixed.resistanceProfile.Seated Dumbbell Shrugs").firstMatch.exists)
+        XCTAssertFalse(app.textFields["fixed.weight.Seated DB Shrugs.3"].exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "fixed.resistanceProfile.Seated DB Shrugs").firstMatch.exists)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Seated Dumbbell Shrugs.1"]
+        let reps = app.textFields["fixed.reps.Seated DB Shrugs.1"]
         reps.tap(); reps.typeText("14")
-        app.buttons["fixed.lock.Seated Dumbbell Shrugs.1"].tap()
+        app.buttons["fixed.lock.Seated DB Shrugs.1"].tap()
         let complete = app.buttons["Complete Cluster 3"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]
@@ -108,7 +108,7 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         let state = app.descendants(matching: .any).matching(identifier: "workout.clusterState.cluster-1").firstMatch
         scrollToElement(state, in: app, toward: .top)
         XCTAssertTrue(state.label.contains("Not started"))
-        let lock = app.buttons["fixed.lock.Flat Dumbbell Press.1"]
+        let lock = app.buttons["fixed.lock.Flat DB Press.1"]
         scrollToElement(lock, in: app)
         lock.tap()
         scrollToElement(state, in: app, toward: .top)
@@ -173,11 +173,11 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         XCTAssertTrue(reset.waitForExistence(timeout: 5))
         reset.tap()
 
-        let canonicalWeight = app.textFields["fixed.weight.Incline Dumbbell Press.1"]
+        let canonicalWeight = app.textFields["fixed.weight.Incline DB Press.1"]
         scrollToElement(canonicalWeight, in: app)
         XCTAssertTrue(canonicalWeight.exists)
         XCTAssertTrue(canonicalWeight.isEnabled)
-        XCTAssertFalse(app.textFields["fixed.weight.Flat Dumbbell Press.1"].exists)
+        XCTAssertFalse(app.textFields["fixed.weight.Flat DB Press.1"].exists)
     }
 
     private func assertClusteredReplacementRowsAreEditable(scopeButton: String) -> XCUIApplication {
@@ -190,7 +190,7 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         swap.tap()
 
         XCTAssertTrue(app.navigationBars["Replace Exercise in Cluster 1 · A"].waitForExistence(timeout: 5))
-        let replacement = app.buttons["swap.candidate.Flat Dumbbell Press"]
+        let replacement = app.buttons["swap.candidate.Flat DB Press"]
         XCTAssertTrue(replacement.waitForExistence(timeout: 5))
         replacement.tap()
 
@@ -198,17 +198,17 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
         XCTAssertTrue(scope.waitForExistence(timeout: 5))
         scope.tap()
 
-        scrollToElement(app.staticTexts["Flat Dumbbell Press"], in: app)
-        XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].exists)
+        scrollToElement(app.staticTexts["Flat DB Press"], in: app)
+        XCTAssertTrue(app.staticTexts["Flat DB Press"].exists)
         XCTAssertTrue(app.buttons["workout.swap.cluster-1.0.0"].exists)
 
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         XCTAssertTrue(weight.waitForExistence(timeout: 5))
         XCTAssertTrue(weight.isEnabled)
         weight.tap()
         weight.typeText("35")
 
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         XCTAssertTrue(reps.waitForExistence(timeout: 5))
         XCTAssertTrue(reps.isEnabled)
         reps.tap()

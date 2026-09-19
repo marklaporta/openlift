@@ -65,7 +65,7 @@ enum ExerciseSetupNotesMigration {
         guard targets.count == reviewedNotes.count else {
             return Result(status: .notApplicable, updatedCount: 0, backupURL: nil)
         }
-        guard targets.allSatisfy({ $0.exercise.name == $0.note.exerciseName }) else {
+        guard targets.allSatisfy({ CompactExerciseName.key($0.exercise.name) == CompactExerciseName.key($0.note.exerciseName) }) else {
             throw MigrationError.targetMismatch
         }
         guard let storeURL = modelContext.container.configurations.first?.url,

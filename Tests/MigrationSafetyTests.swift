@@ -2138,7 +2138,7 @@ extension MigrationSafetyTests {
         let template = try XCTUnwrap(try context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == result.templateId })
         let selection = try FixedCycleClusterProgramService.selections(template: template, cycleInstanceId: result.cycleId, states: states)
         let byID = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0.name) })
-        XCTAssertEqual(selection[0].day.slots.sorted { $0.position < $1.position }.map { byID[$0.exerciseId]! }, ["Flat Dumbbell Press", "Lat Pulldown"])
+        XCTAssertEqual(selection[0].day.slots.sorted { $0.position < $1.position }.map { byID[$0.exerciseId]! }, ["Flat DB Press", "Lat Pulldown"])
         XCTAssertEqual(selection[1].day.slots.sorted { $0.position < $1.position }.map { byID[$0.exerciseId]! }, ["Leg Curl", "Overhead Cable Extension", "Incline Curl"])
         XCTAssertEqual(template.days.first { $0.position == 2 }?.slots.first { $0.position == 1 }?.defaultSetCount, 2)
         XCTAssertFalse(try BootstrapDataService.prepareSeptember2026ClusterRevision(modelContext: context, backupConfirmed: true).didApply)

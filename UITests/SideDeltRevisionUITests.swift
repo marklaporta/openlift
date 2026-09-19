@@ -22,12 +22,12 @@ final class SideDeltRevisionUITests: OpenLiftUITestCase {
         XCTAssertTrue(app.staticTexts["cycle.sideDeltDraftBlocker"].exists)
         app.tabBars.buttons["Workout"].tap()
         submitFixedReadiness(in: app)
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         scrollToElement(weight, in: app)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         reps.tap(); reps.typeText("12")
-        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        app.buttons["fixed.lock.Flat DB Press.1"].tap()
         let complete = app.buttons["Complete Cluster 1"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]
@@ -50,8 +50,8 @@ final class SideDeltRevisionUITests: OpenLiftUITestCase {
         let nextThird = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-3").firstMatch
         scrollToElement(nextThird, in: app)
         XCTAssertTrue(nextThird.label.contains("Next: A"))
-        XCTAssertTrue(nextThird.label.contains("Super ROM Dumbbell Lateral Raise"))
-        XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrugs"))
+        XCTAssertTrue(nextThird.label.contains("Super ROM DB Lateral Raise"))
+        XCTAssertTrue(nextThird.label.contains("Seated DB Shrugs"))
     }
 
     func testPermanentOrderButtonBlocksDraftThenPersistsThroughColdLaunch() throws {
@@ -64,12 +64,12 @@ final class SideDeltRevisionUITests: OpenLiftUITestCase {
         XCTAssertTrue(app.staticTexts["cycle.sideDeltOrderDraftBlocker"].exists)
         app.tabBars.buttons["Workout"].tap()
         submitFixedReadiness(in: app)
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         scrollToElement(weight, in: app)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         reps.tap(); reps.typeText("12")
-        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        app.buttons["fixed.lock.Flat DB Press.1"].tap()
         let complete = app.buttons["Complete Cluster 1"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]
@@ -92,8 +92,8 @@ final class SideDeltRevisionUITests: OpenLiftUITestCase {
         let nextThird = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-3").firstMatch
         scrollToElement(nextThird, in: app)
         XCTAssertTrue(nextThird.label.contains("Next: A"))
-        XCTAssertTrue(nextThird.label.contains("Incline Side-Lying Dumbbell Lateral Raise"))
-        XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrugs"))
+        XCTAssertTrue(nextThird.label.contains("Incline Side-Lying DB Lateral Raise"))
+        XCTAssertTrue(nextThird.label.contains("Seated DB Shrugs"))
     }
 
     func testNewMovementStartsWithTwoBlankRowsAndPerSideLoggingNote() throws {
@@ -103,7 +103,7 @@ final class SideDeltRevisionUITests: OpenLiftUITestCase {
         scrollToElement(note, in: app)
         XCTAssertTrue(note.exists)
         XCTAssertTrue(note.label.contains("one set on each side"))
-        let name = "Incline Side-Lying Dumbbell Lateral Raise"
+        let name = "Incline Side-Lying DB Lateral Raise"
         let weight = app.textFields["fixed.weight.\(name).1"]
         scrollToElement(weight, in: app)
         XCTAssertEqual(weight.value as? String, "Weight")
@@ -125,7 +125,7 @@ final class SideDeltRevisionUITests: OpenLiftUITestCase {
         scrollToElement(third, in: app)
         XCTAssertTrue(third.label.contains("Next: C"))
         XCTAssertTrue(third.label.contains("Cable Lateral Raise"))
-        XCTAssertTrue(third.label.contains("Seated Dumbbell Shrugs"))
+        XCTAssertTrue(third.label.contains("Seated DB Shrugs"))
     }
     func testReorderedInclineStartsBlankAndAdvancesToSuperROM() throws {
         let app = launchSideDeltFixture(rows: true, order: true)
@@ -134,7 +134,7 @@ final class SideDeltRevisionUITests: OpenLiftUITestCase {
         scrollToElement(note, in: app)
         XCTAssertTrue(note.exists)
         XCTAssertTrue(note.label.contains("one set on each side"))
-        let name = "Incline Side-Lying Dumbbell Lateral Raise"
+        let name = "Incline Side-Lying DB Lateral Raise"
         let weight = app.textFields["fixed.weight.\(name).1"]
         scrollToElement(weight, in: app)
         XCTAssertEqual(weight.value as? String, "Weight")
@@ -155,7 +155,7 @@ final class SideDeltRevisionUITests: OpenLiftUITestCase {
         let third = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-3").firstMatch
         scrollToElement(third, in: app)
         XCTAssertTrue(third.label.contains("Next: B"))
-        XCTAssertTrue(third.label.contains("Super ROM Dumbbell Lateral Raise"))
+        XCTAssertTrue(third.label.contains("Super ROM DB Lateral Raise"))
 
     }
 }
