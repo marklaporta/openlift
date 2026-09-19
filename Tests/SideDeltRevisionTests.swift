@@ -95,6 +95,7 @@ final class SideDeltRevisionTests: XCTestCase {
     }
     @MainActor
     private func verifyRevision(_ f: Fixture) throws {
+        _ = try BootstrapDataService.ensureExerciseCatalog(modelContext: f.context)
         let before = try databaseRows(at: f.url)
         let (oldTemplate, cycle) = try active(f.context)
         let oldTemplateID = oldTemplate.id
@@ -209,10 +210,11 @@ final class SideDeltRevisionTests: XCTestCase {
     func testConsistentShoulderPreferencesFollowIdentityAndConflictingPreferencesFailClosed() throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let exercise = try XCTUnwrap(f.context.fetch(FetchDescriptor<Exercise>()).first { $0.name == "Dumbbell Lateral Raise" })
+        let exercise = try XCTUnwrap(f.context.fetch(FetchDescriptor<Exercise>()).first { $0.name == "DB Lateral Raise" })
         f.context.insert(ClusterExercisePreference(programVersionID: Program.shrugVersionID,
             templateDayPosition: 9, slotPosition: 0, exerciseId: exercise.id))
         try f.context.save()
+        _ = try BootstrapDataService.ensureExerciseCatalog(modelContext: f.context)
         let before = try databaseRows(at: f.url)
         XCTAssertThrowsError(try BootstrapDataService.prepareSideDeltClusterRevision(modelContext: f.context, backupConfirmed: true))
         XCTAssertEqual(try databaseRows(at: f.url), before)
@@ -231,6 +233,7 @@ final class SideDeltRevisionTests: XCTestCase {
     func testBackupFailurePendingEditsAndDraftsCannotApply() throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try BootstrapDataService.ensureExerciseCatalog(modelContext: f.context)
         let before = try databaseRows(at: f.url)
         XCTAssertThrowsError(try BootstrapDataService.prepareSideDeltClusterRevision(modelContext: f.context))
         enum Injected: Error { case failed }
@@ -441,6 +444,7 @@ final class SideDeltRevisionTests: XCTestCase {
 
     @MainActor
     private func verifyPermanentOrder(_ f: Fixture) throws {
+        _ = try BootstrapDataService.ensureExerciseCatalog(modelContext: f.context)
         let before = try databaseRows(at: f.url)
         let (oldTemplate, cycle) = try active(f.context)
         XCTAssertEqual(Program.versionID(for: oldTemplate), Program.sideDeltVersionID)
@@ -528,7 +532,7 @@ final class SideDeltRevisionTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try BootstrapDataService.prepareSideDeltClusterRevision(modelContext: f.context, backupConfirmed: true)
         let (template, _) = try active(f.context)
-        let replacement = try XCTUnwrap(f.context.fetch(FetchDescriptor<Exercise>()).first { $0.name == "Dumbbell Lateral Raise" })
+        let replacement = try XCTUnwrap(f.context.fetch(FetchDescriptor<Exercise>()).first { $0.name == "DB Lateral Raise" })
         for position in [9, 12] {
             template.days.first { $0.position == position }?.slots.first { $0.position == 0 }?.defaultSetCount = position == 9 ? 1 : 4
             f.context.insert(ClusterExercisePreference(programVersionID: Program.sideDeltVersionID,
@@ -574,6 +578,7 @@ final class SideDeltRevisionTests: XCTestCase {
                 type: index % 2 == 0 ? .isolation : .compound, equipment: index < 2 ? .cable : .dumbbell))
         }
         try f.context.save()
+        _ = try BootstrapDataService.ensureExerciseCatalog(modelContext: f.context)
         let before = try databaseRows(at: f.url)
         XCTAssertThrowsError(try BootstrapDataService.prepareChestBackRevision(modelContext: f.context))
         XCTAssertEqual(try databaseRows(at: f.url), before)
@@ -679,6 +684,7 @@ final class SideDeltRevisionTests: XCTestCase {
 
     @MainActor
     private func verifyChestBackRevision(_ f: Fixture) throws {
+        _ = try BootstrapDataService.ensureExerciseCatalog(modelContext: f.context)
         let before = try databaseRows(at: f.url)
         let (old, cycle) = try active(f.context)
         let oldStates = try f.context.fetch(FetchDescriptor<ClusterRotationState>()).filter { $0.templateId == old.id }
@@ -813,7 +819,7 @@ extension SideDeltRevisionTests {
         context.delete(draft); try context.save()
         XCTAssertThrowsError(try BootstrapDataService.consolidateCSDBRow(modelContext: context, backupDirectory: root,
             snapshot: { _, _ in throw NSError(domain: "test-backup", code: 1) }))
-        XCTAssertEqual(canonical.name, "Chest-Supported Dumbbell Row")
+        XCTAssertEqual(canonical.name, "CS DB Row")
         let result = try BootstrapDataService.consolidateCSDBRow(modelContext: context, backupDirectory: root)
         XCTAssertTrue(result.didApply)
         XCTAssertTrue(StoreBackupService.isValidSnapshot(at: try XCTUnwrap(result.backupURL)))
@@ -918,8 +924,8 @@ extension SideDeltRevisionTests {
         XCTAssertEqual(sheets.count, 3)
         XCTAssertEqual(sheets.flatMap(\.sets).count, 4)
         XCTAssertEqual(sheets.filter { $0.resistanceProfile != nil }.count, 1)
-        // Before explicit activation, the original catalog name leaves lookup unchanged.
-        canonical.name = "Chest-Supported Dumbbell Row"
+        // Compact names alone do not authorize consolidation.
+        for exercise in catalog where CSDBRowIdentity.legacyIDs.contains(exercise.id) { exercise.isActive = true }
         XCTAssertEqual(ExerciseEffortLookupService.globalEffort(exerciseId: canonical.id,
             adaptiveSessions: [], adaptiveSetEntries: [], rotationSessions: [first, latest],
             rotationSetEntries: entries, resistanceProfiles: [profile], exercises: catalog)?.rows.map(\.weight), [40])

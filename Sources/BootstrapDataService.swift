@@ -190,8 +190,8 @@ enum BootstrapDataService {
         var currentExercises = try modelContext.fetch(FetchDescriptor<Exercise>())
         // Label correction only: retain the seeded UUID referenced by templates,
         // drafts and completed work. Never merge two existing exercise identities.
-        let oldShrugs = currentExercises.filter { $0.name.caseInsensitiveCompare("Seated Dumbbell Shrug") == .orderedSame }
-        let namedShrugs = currentExercises.filter { $0.name.caseInsensitiveCompare(FixedCycleClusterProgramService.shrugExerciseName) == .orderedSame }
+        let oldShrugs = currentExercises.filter { CompactExerciseName.key($0.name) == CompactExerciseName.key("Seated Dumbbell Shrug") }
+        let namedShrugs = currentExercises.filter { CompactExerciseName.key($0.name) == CompactExerciseName.key(FixedCycleClusterProgramService.shrugExerciseName) }
         guard oldShrugs.count <= 1, oldShrugs.isEmpty || namedShrugs.isEmpty else {
             throw ExerciseCatalogError.duplicateName(FixedCycleClusterProgramService.shrugExerciseName)
         }
@@ -200,13 +200,14 @@ enum BootstrapDataService {
             old.name = FixedCycleClusterProgramService.shrugExerciseName
             changed = true
         }
-        let currentNames = Set(currentExercises.map { $0.name.lowercased() })
+        changed = CompactExerciseName.normalize(currentExercises) || changed
+        let currentNames = Set(currentExercises.map { CompactExerciseName.key($0.name) })
         let defaultsByName = Dictionary(
-            uniqueKeysWithValues: defaultExerciseCatalog.map { ($0.0.lowercased(), $0) }
+            uniqueKeysWithValues: defaultExerciseCatalog.map { (CompactExerciseName.key($0.0), $0) }
         )
 
         for exercise in currentExercises {
-            guard let canonical = defaultsByName[exercise.name.lowercased()] else { continue }
+            guard let canonical = defaultsByName[CompactExerciseName.key(exercise.name)] else { continue }
             if exercise.primaryMuscle != canonical.1 {
                 exercise.primaryMuscle = canonical.1
                 changed = true
@@ -222,10 +223,10 @@ enum BootstrapDataService {
             }
         }
         for entry in defaultExerciseCatalog where
-            !currentNames.contains(entry.0.lowercased())
+            !currentNames.contains(CompactExerciseName.key(entry.0))
                 && !currentExercises.contains(where: { satisfiesCatalogAlias($0, for: entry.0) })
                 && CSDBRowIdentity.resolve(id: nil, name: entry.0, exercises: currentExercises) == nil {
-            let exercise = Exercise(name: entry.0, primaryMuscle: entry.1, type: entry.2, equipment: entry.3)
+            let exercise = Exercise(name: CompactExerciseName.display(entry.0), primaryMuscle: entry.1, type: entry.2, equipment: entry.3)
             if entry.0 == FixedCycleClusterProgramService.sideDeltExerciseName {
                 guard !currentExercises.contains(where: { $0.id == FixedCycleClusterProgramService.sideDeltExerciseID }) else {
                     throw ExerciseCatalogError.duplicateName(entry.0)
@@ -255,7 +256,7 @@ enum BootstrapDataService {
             return exercise.name.caseInsensitiveCompare("Safety Squat Bar Squat") == .orderedSame
                 && exercise.primaryMuscle == .quads && exercise.equipment == .barbell
         case "Incline Press-Flye":
-            return exercise.name.caseInsensitiveCompare("Incline Dumbbell Press-Flye") == .orderedSame
+            return CompactExerciseName.key(exercise.name) == CompactExerciseName.key("Incline Dumbbell Press-Flye")
                 && exercise.primaryMuscle == .chest
                 && exercise.equipment == .dumbbell
         case "Captain of Crush":
@@ -494,8 +495,8 @@ enum BootstrapDataService {
         // live activation never seeds these movements or changes their notes.
         if revisionExports.contains(where: { $0.fixed_cycle?.program_version == 6 }) {
             for (index, item) in FixedCycleClusterProgramService.recoveryMovements.enumerated()
-                where !catalog.contains(where: { $0.id == item.0 || $0.name == item.1 }) {
-                let exercise = Exercise(id: item.0, name: item.1,
+                where !catalog.contains(where: { $0.id == item.0 || CompactExerciseName.key($0.name) == CompactExerciseName.key(item.1) }) {
+                let exercise = Exercise(id: item.0, name: CompactExerciseName.display(item.1),
                     primaryMuscle: index % 2 == 0 ? .chest : .back,
                     type: index % 2 == 0 ? .isolation : .compound,
                     equipment: index < 2 ? .cable : .dumbbell)
@@ -632,13 +633,14 @@ enum BootstrapDataService {
             if let existing = resolveImportedExercise(id: UUID(uuidString: id), name: name, byId: exercisesById, byName: exercisesByName) {
                 return existing
             }
-            guard let uuid = UUID(uuidString: id),
+            guard !catalog.contains(where: { CompactExerciseName.key($0.name) == CompactExerciseName.key(name) }),
+                  let uuid = UUID(uuidString: id),
                   let primaryMuscle = MuscleGroup(rawValue: muscle),
                   let exerciseType = ExerciseType(rawValue: type),
                   let equipmentType = EquipmentType(rawValue: equipment) else { return nil }
             let exercise = Exercise(
                 id: uuid,
-                name: name,
+                name: CompactExerciseName.display(name),
                 primaryMuscle: primaryMuscle,
                 type: exerciseType,
                 equipment: equipmentType
@@ -1231,24 +1233,21 @@ enum BootstrapDataService {
         if let exact = byName[name.lowercased()] {
             return exact
         }
-        let canonicalCatalog = Dictionary(
-            byName.values.map { (canonicalExerciseName($0.name), $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        let canonicalCatalog = Dictionary(grouping: byName.values, by: { canonicalExerciseName($0.name) })
         let canonical = canonicalExerciseName(name)
         if let exact = canonicalCatalog[canonical] {
-            return exact
+            return exact.count == 1 ? exact[0] : nil
         }
         for alias in safeExerciseAliases(for: canonical) {
             if let match = canonicalCatalog[alias] {
-                return match
+                return match.count == 1 ? match[0] : nil
             }
         }
         return nil
     }
 
     private static func canonicalExerciseName(_ name: String) -> String {
-        name.lowercased()
+        CompactExerciseName.expanded(name)
             .replacingOccurrences(of: "dumbell", with: "dumbbell")
             .replacingOccurrences(of: "ez-bar", with: "ez bar")
             .replacingOccurrences(of: "ezbar", with: "ez bar")
@@ -2199,11 +2198,8 @@ enum BootstrapDataService {
         sourceTemplate: CycleTemplate?,
         sourceAdaptiveProgram: AdaptiveProgram? = nil
     ) throws -> CycleTemplate {
-        let byName = Dictionary(uniqueKeysWithValues: exercises.map {
-            ($0.name.lowercased(), $0)
-        })
         func required(_ name: String) throws -> Exercise {
-            guard let value = byName[name.lowercased()] else {
+            guard let value = CompactExerciseName.resolve(name, in: exercises) else {
                 throw PushPullRolloutError.requiredExerciseMissing(name)
             }
             return value
@@ -2330,11 +2326,9 @@ enum BootstrapDataService {
     }
 
     static func defaultStarterTemplate(exercises: [Exercise]) throws -> CycleTemplate {
-        let exercisesByName = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name.lowercased(), $0) })
-
         func exercise(named name: String) throws -> Exercise {
             if let canonical = CSDBRowIdentity.resolve(id: nil, name: name, exercises: exercises) { return canonical }
-            guard let exercise = exercisesByName[name.lowercased()] else {
+            guard let exercise = CompactExerciseName.resolve(name, in: exercises) else {
                 throw NSError(
                     domain: "OpenLiftBootstrapDataService",
                     code: 1,
@@ -2612,13 +2606,13 @@ enum FixedCycleClusterProgramService {
     static let shrugVersionID = "\(programIdentifier).v3"
     static let shrugTemplateName = "Clustered Hypertrophy v3"
     static let shrugIdentityKey = "openlift_clustered_hypertrophy_v3"
-    static let shrugExerciseName = "Seated Dumbbell Shrugs"
+    static let shrugExerciseName = "Seated DB Shrugs"
     static let shrugProgressionKey = "\(shrugVersionID).cluster-3.traps.seated-dumbbell-shrug"
 
     static let sideDeltVersionID = "\(programIdentifier).v4"
     static let sideDeltTemplateName = "Clustered Hypertrophy v4"
     static let sideDeltIdentityKey = "openlift_clustered_hypertrophy_v4"
-    static let sideDeltExerciseName = "Incline Side-Lying Dumbbell Lateral Raise"
+    static let sideDeltExerciseName = "Incline Side-Lying DB Lateral Raise"
     static let sideDeltExerciseID = UUID(uuidString: "6AB50DE4-7104-4396-BC69-2574F1104F04")!
     static let sideDeltProgressionKey = "\(sideDeltVersionID).cluster-3.shoulders.incline-side-lying"
 
@@ -2740,14 +2734,13 @@ enum FixedCycleClusterProgramService {
         if chestBackRecovery { return try makeChestBackTemplate(exercises: exercises) }
         let thirdSideDelt = thirdSideDelt || inclineFirst
         let shrugs = shrugs || thirdSideDelt
-        let byName = Dictionary(exercises.map { ($0.name.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
         func required(_ candidates: [String]) throws -> Exercise {
             if candidates.contains(sideDeltExerciseName), let exercise = exercises.first(where: { $0.id == sideDeltExerciseID }) {
                 return exercise
             }
             for candidate in candidates {
                 if let canonical = CSDBRowIdentity.resolve(id: nil, name: candidate, exercises: exercises) { return canonical }
-                if let exercise = byName[candidate.lowercased()] { return exercise }
+                if let exercise = CompactExerciseName.resolve(candidate, in: exercises) { return exercise }
             }
             throw ProgramError.requiredExerciseMissing(candidates[0])
         }

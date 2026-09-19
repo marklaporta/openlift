@@ -61,6 +61,20 @@ final class PublishedCycleServiceTests: XCTestCase {
         XCTAssertEqual(parsed.days[0].slots[0].exerciseId, exercises[0].id)
     }
 
+    func testLongTemplateNameResolvesCompactCatalogWithoutChoosingCollision() throws {
+        let row = Exercise(name: "SA CS DB Row", primaryMuscle: .back, type: .compound, equipment: .dumbbell)
+        let url = try writeJSON("""
+        {"name":"Legacy","days":[{"label":"A","slots":[{"muscle":"back","exerciseName":"Single-Arm Chest-Supported Dumbbell Row","defaultSetCount":2}]}]}
+        """)
+        XCTAssertEqual(try PublishedCycleService.parseTemplate(at: url, exercises: [row]).days[0].slots[0].exerciseId, row.id)
+        let a = Exercise(name: "Chest Supported Cable Row", primaryMuscle: .back, type: .compound, equipment: .cable)
+        let b = Exercise(name: "Chest-Supported Cable Row", primaryMuscle: .back, type: .compound, equipment: .cable)
+        let collision = try writeJSON("""
+        {"name":"Ambiguous","days":[{"label":"A","slots":[{"muscle":"back","exerciseName":"CS Cable Row","defaultSetCount":2}]}]}
+        """)
+        XCTAssertThrowsError(try PublishedCycleService.parseTemplate(at: collision, exercises: [a, b]))
+    }
+
     private func writeJSON(_ content: String) throws -> URL {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

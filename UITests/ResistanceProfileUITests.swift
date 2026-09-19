@@ -7,7 +7,7 @@ final class ResistanceProfileUITests: OpenLiftUITestCase {
         let app = launchApp()
         submitFixedReadiness(in: app)
         XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["fixed.resistanceProfile.Flat Dumbbell Press"].exists)
+        XCTAssertFalse(app.buttons["fixed.resistanceProfile.Flat DB Press"].exists)
         let profile = app.buttons["fixed.resistanceProfile.Cable Crossover Lateral Raise"]
         scrollToElement(profile, in: app)
         let weight = app.textFields["fixed.weight.Cable Crossover Lateral Raise.1"]

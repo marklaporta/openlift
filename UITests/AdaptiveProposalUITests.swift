@@ -60,7 +60,7 @@ final class AdaptiveProposalUITests: OpenLiftUITestCase {
         let proposedPlan = app.staticTexts["2 · Design"]
         scrollToElement(proposedPlan, in: app, toward: .top)
         XCTAssertTrue(proposedPlan.waitForExistence(timeout: 5))
-        for (exercise, direction) in [("Flat Dumbbell Press", ScrollDestination.bottom), ("Cable Row", .top)] {
+        for (exercise, direction) in [("Flat DB Press", ScrollDestination.bottom), ("Cable Row", .top)] {
             let plannedExercise = app.staticTexts[exercise]
             scrollToElement(plannedExercise, in: app, toward: direction)
             XCTAssertTrue(plannedExercise.exists)
@@ -69,7 +69,7 @@ final class AdaptiveProposalUITests: OpenLiftUITestCase {
         let splitDose = app.staticTexts["2 sets"].firstMatch
         scrollToElement(splitDose, in: app)
         XCTAssertTrue(splitDose.exists)
-        let priorPerformance = app.staticTexts["adaptive.previous.Flat Dumbbell Press"]
+        let priorPerformance = app.staticTexts["adaptive.previous.Flat DB Press"]
         scrollToElement(priorPerformance, in: app)
         XCTAssertEqual(priorPerformance.label, "Previous: 60.0 x 9")
 
@@ -77,10 +77,10 @@ final class AdaptiveProposalUITests: OpenLiftUITestCase {
         scrollToElement(useWorkout, in: app)
         useWorkout.tap()
 
-        let firstWeight = app.textFields["adaptive.weight.Flat Dumbbell Press.1"]
+        let firstWeight = app.textFields["adaptive.weight.Flat DB Press.1"]
         scrollToElement(firstWeight, in: app)
         XCTAssertEqual(firstWeight.value as? String, "60")
-        let firstReps = app.textFields["adaptive.reps.Flat Dumbbell Press.1"]
+        let firstReps = app.textFields["adaptive.reps.Flat DB Press.1"]
         XCTAssertEqual(firstReps.value as? String, "9")
     }
 }

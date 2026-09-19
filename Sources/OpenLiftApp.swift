@@ -55,7 +55,7 @@ struct OpenLiftApp: App {
                         if ProcessInfo.processInfo.environment["OPENLIFT_CS_DB_ROW_UI"] == "1" {
                             let catalog = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
                             for (name, targetID) in [("Helms Row", "45F7D9A2-52D5-4172-ACE7-78AEB5BF2C6F"), ("Chest Supported Row", "7C799565-C77C-4332-B5C8-F70EC9BC6B49")] {
-                                guard let exercise = catalog.first(where: { $0.name == name }) else { continue }
+                                guard let exercise = CompactExerciseName.resolve(name, in: catalog) else { continue }
                                 let oldID = exercise.id
                                 exercise.id = UUID(uuidString: targetID)!
                                 for slot in (try? modelContext.fetch(FetchDescriptor<CycleSlot>())) ?? [] where slot.exerciseId == oldID { slot.exerciseId = exercise.id }

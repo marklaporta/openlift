@@ -31,19 +31,19 @@ final class FixedCyclePushPullTests: XCTestCase {
         )
         XCTAssertEqual(
             CycleOrdering.sortedSlots(days[0].slots).prefix(2).compactMap { byId[$0.exerciseId] },
-            ["Lat Pulldown", "Chest-Supported Cable Row"]
+            ["Lat Pulldown", "CS Cable Row"]
         )
         XCTAssertEqual(
             CycleOrdering.sortedSlots(days[1].slots).prefix(2).compactMap { byId[$0.exerciseId] },
-            ["Incline Dumbbell Press", "Flat Cable Flye"]
+            ["Incline DB Press", "Flat Cable Flye"]
         )
         XCTAssertEqual(
             CycleOrdering.sortedSlots(days[2].slots).prefix(2).compactMap { byId[$0.exerciseId] },
-            ["Chest-Supported Cable Row", "Lat Pulldown"]
+            ["CS Cable Row", "Lat Pulldown"]
         )
         XCTAssertEqual(
             CycleOrdering.sortedSlots(days[3].slots).prefix(2).compactMap { byId[$0.exerciseId] },
-            ["Flat Dumbbell Press", "Incline Cable Flye"]
+            ["Flat DB Press", "Incline Cable Flye"]
         )
     }
 
@@ -1283,7 +1283,7 @@ final class FixedCyclePushPullTests: XCTestCase {
         let (_, context) = makeContext()
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
         let first = try XCTUnwrap(catalog.first { $0.name == "Lat Pulldown" })
-        let second = try XCTUnwrap(catalog.first { $0.name == "Chest-Supported Cable Row" })
+        let second = try XCTUnwrap(catalog.first { $0.name == "CS Cable Row" })
         let day = CycleDay(
             label: "Pull A",
             slots: [

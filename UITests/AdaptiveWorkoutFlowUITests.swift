@@ -130,25 +130,25 @@ final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
         scrollToElement(addToFrozen, in: app, toward: .top)
         addToFrozen.tap()
         XCTAssertTrue(app.navigationBars["Add Movement"].waitForExistence(timeout: 5))
-        let addedAfterFreeze = app.buttons["Flat Dumbbell Press"].firstMatch
+        let addedAfterFreeze = app.buttons["Flat DB Press"].firstMatch
         XCTAssertTrue(addedAfterFreeze.waitForExistence(timeout: 5))
         addedAfterFreeze.tap()
-        let editFrozen = app.descendants(matching: .any)["Edit Flat Dumbbell Press"].firstMatch
+        let editFrozen = app.descendants(matching: .any)["Edit Flat DB Press"].firstMatch
         // Prior-effort context adds height; the appended movement may be outside
         // the lazy List's realized viewport until explicitly scrolled into view.
         scrollToElement(editFrozen, in: app)
-        XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Flat DB Press"].waitForExistence(timeout: 5))
         editFrozen.tap()
         app.buttons["Move Earlier"].tap()
-        let editMoved = app.descendants(matching: .any)["Edit Flat Dumbbell Press"].firstMatch
+        let editMoved = app.descendants(matching: .any)["Edit Flat DB Press"].firstMatch
         scrollToElement(editMoved, in: app, toward: .top)
         editMoved.tap()
         app.buttons["Skip"].tap()
-        let restoreAddedAfterFreeze = app.buttons["Restore Flat Dumbbell Press"].firstMatch
+        let restoreAddedAfterFreeze = app.buttons["Restore Flat DB Press"].firstMatch
         scrollToElement(restoreAddedAfterFreeze, in: app)
         restoreAddedAfterFreeze.tap()
-        XCTAssertTrue(app.staticTexts["Flat Dumbbell Press"].waitForExistence(timeout: 5))
-        let editRestored = app.descendants(matching: .any)["Edit Flat Dumbbell Press"].firstMatch
+        XCTAssertTrue(app.staticTexts["Flat DB Press"].waitForExistence(timeout: 5))
+        let editRestored = app.descendants(matching: .any)["Edit Flat DB Press"].firstMatch
         scrollToElement(editRestored, in: app)
         editRestored.tap()
         app.buttons["Skip"].tap()

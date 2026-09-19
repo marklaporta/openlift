@@ -20,14 +20,14 @@ final class FixedCycleWorkoutUITests: OpenLiftUITestCase {
         submitFixedReadiness(in: app)
         XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
 
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         scrollToElement(weight, in: app)
         weight.tap()
         weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         reps.tap()
         reps.typeText("10")
-        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        app.buttons["fixed.lock.Flat DB Press.1"].tap()
 
         let finishButton = app.buttons["Finish Workout"]
         for _ in 0..<8 {

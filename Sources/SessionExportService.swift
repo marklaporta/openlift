@@ -2412,22 +2412,21 @@ enum AdaptiveExportService {
 
         let currentExercises = try modelContext.fetch(FetchDescriptor<Exercise>())
         var exerciseById = Dictionary(uniqueKeysWithValues: currentExercises.map { ($0.id, $0) })
-        var exerciseByName = Dictionary(uniqueKeysWithValues: currentExercises.map { ($0.name.lowercased(), $0) })
         func resolvedExercise(_ set: SetV2) -> Exercise? {
             guard let exportedId = UUID(uuidString: set.exercise_id),
                   let muscle = MuscleGroup(rawValue: set.muscle) else { return nil }
             if let found = exerciseById[exportedId] { return found }
-            if let found = exerciseByName[set.exercise_name.lowercased()] { return found }
+            if let found = CompactExerciseName.resolve(set.exercise_name, in: Array(exerciseById.values)) { return found }
+            guard !exerciseById.values.contains(where: { CompactExerciseName.key($0.name) == CompactExerciseName.key(set.exercise_name) }) else { return nil }
             let created = Exercise(
                 id: exportedId,
-                name: set.exercise_name,
+                name: CompactExerciseName.display(set.exercise_name),
                 primaryMuscle: muscle,
                 type: ExerciseType(rawValue: set.exercise_type) ?? .isolation,
                 equipment: EquipmentType(rawValue: set.equipment) ?? .cable
             )
             modelContext.insert(created)
             exerciseById[created.id] = created
-            exerciseByName[created.name.lowercased()] = created
             return created
         }
 

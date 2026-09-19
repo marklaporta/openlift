@@ -11,6 +11,49 @@ enum ExerciseCatalogError: LocalizedError, Equatable {
     }
 }
 
+/// Label aliases only; no movement equivalence or history consolidation.
+enum CompactExerciseName {
+    static func display(_ name: String) -> String {
+        var result = name
+        for (pattern, replacement) in [(#"\bDumbbell\b"#, "DB"), (#"\bSingle[- ]Arm\b"#, "SA"), (#"\bChest[- ]Supported\b"#, "CS")] {
+            result = result.replacingOccurrences(of: pattern, with: replacement, options: [.regularExpression, .caseInsensitive])
+        }
+        return result
+    }
+
+    static func expanded(_ name: String) -> String {
+        var result = display(name).lowercased()
+        for (pattern, replacement) in [(#"\bdb\b"#, "dumbbell"), (#"\bsa\b"#, "single-arm"), (#"\bcs\b"#, "chest-supported")] {
+            result = result.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+        }
+        return result
+    }
+
+    static func key(_ name: String) -> String {
+        expanded(name).filter { $0.isLetter || $0.isNumber }
+    }
+
+    static func resolve(_ name: String, in exercises: [Exercise]) -> Exercise? {
+        let exact = exercises.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        if !exact.isEmpty { return exact.count == 1 ? exact[0] : nil }
+        let matches = exercises.filter { key($0.name) == key(name) }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    @discardableResult
+    static func normalize(_ exercises: [Exercise]) -> Bool {
+        let groups = Dictionary(grouping: exercises, by: { key($0.name) })
+        var changed = false
+        for exercise in exercises where groups[key(exercise.name)]?.count == 1 {
+            let name = display(exercise.name)
+            if exercise.name != name { exercise.name = name; changed = true }
+        }
+        // Existing ambiguous identities keep their distinct labels. A naming
+        // correction must not choose which movement owns a shared short name.
+        return changed
+    }
+}
+
 enum ExerciseCatalogService {
     static func makeExercise(
         name: String,
@@ -40,7 +83,7 @@ enum ExerciseCatalogService {
     }
 
     static func normalizedExerciseName(_ name: String) -> String {
-        name
+        CompactExerciseName.display(name)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .split(whereSeparator: \.isWhitespace)
@@ -58,7 +101,7 @@ enum CSDBRowIdentity {
     ]
     static let name = "CS DB Row"
     static let marker = "exercise-consolidation-cs-db-row-2026-09-17"
-    static let names = ["CS DB Row", "Helms Row", "Chest Supported Row", "Chest-Supported Dumbbell Row", "CS Dumbbell Row", "Chest Supported DB Row"]
+    static let names = ["CS DB Row", "Helms Row", "Chest Supported Row", "CS Row", "Chest-Supported Dumbbell Row", "CS Dumbbell Row", "Chest Supported DB Row"]
 
     static func matches(_ name: String) -> Bool {
         let key = name.lowercased().filter { $0.isLetter || $0.isNumber }
@@ -66,7 +109,10 @@ enum CSDBRowIdentity {
     }
 
     static func canonical(in exercises: [Exercise]) -> Exercise? {
-        exercises.first { $0.id == canonicalID && $0.name == name && $0.isActive }
+        // The short label alone is not evidence of the explicit consolidation.
+        let legacy = exercises.filter { legacyIDs.contains($0.id) }
+        guard Set(legacy.map(\.id)) == legacyIDs, legacy.allSatisfy({ !$0.isActive }) else { return nil }
+        return exercises.first { $0.id == canonicalID && $0.name == name && $0.isActive }
     }
 
     static func resolve(id: UUID?, name: String?, exercises: [Exercise]) -> Exercise? {

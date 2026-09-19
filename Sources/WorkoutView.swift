@@ -1833,9 +1833,8 @@ struct WorkoutView: View {
         try completed.validate()
         modelContext.insert(completed)
 
-        let exercisesByName = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name.lowercased(), $0) })
         for exportExercise in export.exercises {
-            guard let exercise = exercisesByName[exportExercise.exercise_name.lowercased()] else { continue }
+            guard let exercise = CompactExerciseName.resolve(exportExercise.exercise_name, in: exercises) else { continue }
             for set in exportExercise.sets where set.reps > 0 {
                 let entry = SetEntry(
                     sessionId: completed.id,

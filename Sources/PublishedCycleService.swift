@@ -182,10 +182,9 @@ enum PublishedCycleService {
     }
 
     private static func canonicalizeName(_ name: String) -> String {
-        let lowered = name.lowercased()
+        let lowered = CompactExerciseName.expanded(name)
         let normalizedTypos = lowered
             .replacingOccurrences(of: "dumbell", with: "dumbbell")
-            .replacingOccurrences(of: "db", with: "dumbbell")
             .replacingOccurrences(of: "ez-bar", with: "ez bar")
             .replacingOccurrences(of: "ezbar", with: "ez bar")
             .replacingOccurrences(of: "single arm", with: "single-arm")

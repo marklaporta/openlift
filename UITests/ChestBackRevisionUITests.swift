@@ -19,12 +19,12 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
         XCTAssertTrue(app.staticTexts["cycle.chestBackDraftBlocker"].exists)
         app.tabBars.buttons["Workout"].tap()
         submitFixedReadiness(in: app)
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         scrollToElement(weight, in: app)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         reps.tap(); reps.typeText("12")
-        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        app.buttons["fixed.lock.Flat DB Press.1"].tap()
         let complete = app.buttons["Complete Cluster 1"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]
@@ -47,8 +47,8 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
         let nextThird = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-3").firstMatch
         scrollToElement(nextThird, in: app)
         XCTAssertTrue(nextThird.label.contains("Next: A"))
-        XCTAssertTrue(nextThird.label.contains("Super ROM Dumbbell Lateral Raise"))
-        XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrugs"))
+        XCTAssertTrue(nextThird.label.contains("Super ROM DB Lateral Raise"))
+        XCTAssertTrue(nextThird.label.contains("Seated DB Shrugs"))
     }
 
     func testCSDBRowConsolidationButtonAndColdLaunch() throws {
@@ -65,12 +65,12 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
         XCTAssertFalse(apply.isEnabled)
         app.tabBars.buttons["Workout"].tap()
         submitFixedReadiness(in: app)
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         scrollToElement(weight, in: app)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         reps.tap(); reps.typeText("12")
-        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        app.buttons["fixed.lock.Flat DB Press.1"].tap()
         let complete = app.buttons["Complete Cluster 1"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]
@@ -93,8 +93,8 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
         let nextThird = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-3").firstMatch
         scrollToElement(nextThird, in: app)
         XCTAssertTrue(nextThird.label.contains("Next: A"))
-        XCTAssertTrue(nextThird.label.contains("Super ROM Dumbbell Lateral Raise"))
-        XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrugs"))
+        XCTAssertTrue(nextThird.label.contains("Super ROM DB Lateral Raise"))
+        XCTAssertTrue(nextThird.label.contains("Seated DB Shrugs"))
         app.tabBars.buttons["Log"].tap()
         let picker = app.buttons["log.exercisePicker"].firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 5)); picker.tap()
@@ -102,7 +102,7 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
         scrollToElement(row, in: app)
         XCTAssertTrue(row.exists)
         XCTAssertFalse(app.buttons["Helms Row"].exists)
-        XCTAssertFalse(app.buttons["Chest Supported Row"].exists)
+        XCTAssertFalse(app.buttons["CS Row"].exists)
         XCTAssertFalse(app.buttons["Chest-Supported Dumbbell Row"].exists)
         row.tap()
         XCTAssertTrue(picker.label.contains("CS DB Row") || (picker.value as? String)?.contains("CS DB Row") == true)
@@ -123,12 +123,12 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
         XCTAssertFalse(apply.isEnabled)
         app.tabBars.buttons["Workout"].tap()
         submitFixedReadiness(in: app)
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         scrollToElement(weight, in: app)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         reps.tap(); reps.typeText("12")
-        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        app.buttons["fixed.lock.Flat DB Press.1"].tap()
         let complete = app.buttons["Complete Cluster 1"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]
@@ -155,13 +155,13 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
         scrollToElement(nextFirst, in: app)
         XCTAssertTrue(nextFirst.label.contains("Next: B"))
         XCTAssertTrue(nextFirst.label.contains("Seated Cable Flye"))
-        XCTAssertTrue(nextFirst.label.contains("Chest-Supported Dumbbell Row"))
+        XCTAssertTrue(nextFirst.label.contains("CS DB Row"))
         XCTAssertFalse(nextFirst.label.contains("SA CS Cable Row"))
         let nextThird = app.descendants(matching: .any).matching(identifier: "fixed.nextCluster.cluster-3").firstMatch
         scrollToElement(nextThird, in: app)
         XCTAssertTrue(nextThird.label.contains("Next: A"))
-        XCTAssertTrue(nextThird.label.contains("Super ROM Dumbbell Lateral Raise"))
-        XCTAssertTrue(nextThird.label.contains("Seated Dumbbell Shrugs"))
+        XCTAssertTrue(nextThird.label.contains("Super ROM DB Lateral Raise"))
+        XCTAssertTrue(nextThird.label.contains("Seated DB Shrugs"))
     }
 
 }

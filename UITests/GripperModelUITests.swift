@@ -45,12 +45,12 @@ final class GripperModelUITests: OpenLiftUITestCase {
         XCTAssertFalse(apply.isEnabled)
         app.tabBars.buttons["Workout"].tap()
         submitFixedReadiness(in: app)
-        let weight = app.textFields["fixed.weight.Flat Dumbbell Press.1"]
+        let weight = app.textFields["fixed.weight.Flat DB Press.1"]
         scrollToElement(weight, in: app)
         weight.tap(); weight.typeText("45")
-        let reps = app.textFields["fixed.reps.Flat Dumbbell Press.1"]
+        let reps = app.textFields["fixed.reps.Flat DB Press.1"]
         reps.tap(); reps.typeText("12")
-        app.buttons["fixed.lock.Flat Dumbbell Press.1"].tap()
+        app.buttons["fixed.lock.Flat DB Press.1"].tap()
         let complete = app.buttons["Complete Cluster 1"]
         scrollToElement(complete, in: app); complete.tap()
         let finish = app.buttons["Finish Workout"]

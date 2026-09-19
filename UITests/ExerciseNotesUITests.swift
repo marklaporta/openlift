@@ -4,7 +4,7 @@ final class ExerciseNotesUITests: OpenLiftUITestCase {
     func testFixedNoteSaveReopenCancelAndClearSharedWithAdHocLogging() throws {
         let app = launchApp()
         submitFixedReadiness(in: app)
-        let note = app.buttons["exercise.notes.Flat Dumbbell Press"]
+        let note = app.buttons["exercise.notes.Flat DB Press"]
         scrollToElement(note, in: app)
         XCTAssertEqual(note.value as? String, "No note")
         note.tap()
@@ -23,7 +23,7 @@ final class ExerciseNotesUITests: OpenLiftUITestCase {
 
         app.tabBars.buttons["Log"].tap()
         app.buttons["log.exercisePicker"].firstMatch.tap()
-        let selected = app.buttons["Flat Dumbbell Press"].firstMatch
+        let selected = app.buttons["Flat DB Press"].firstMatch
         scrollToElement(selected, in: app)
         selected.tap()
         XCTAssertTrue(note.waitForExistence(timeout: 5))
