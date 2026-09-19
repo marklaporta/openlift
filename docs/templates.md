@@ -97,7 +97,7 @@ The Cycle tab supports:
 
 Changing to a different active template requires confirmation.
 
-`Clustered Hypertrophy v1`–`v5` are internal versioned program templates rather
+`Clustered Hypertrophy v1`–`v7` are internal versioned program templates rather
 than a general editable template. The Cycle tab disables editing and cloning it,
 and rejects a published import that tries to replace its reserved name. Its
 three cluster state rows and stable progression identities are created only by
@@ -310,3 +310,30 @@ the B/D back preferences: **Seated Cable Flye + CS DB Row** and
 **Incline DB Flye + SA CS Cable Row**. It retains exercise-linked progression,
 performed-set carry-forward and raw rotation counters; A/C and other clusters
 are unchanged. See [activation and verification](migration-safety.md#september-18-v6-chestback-row-pairing).
+
+## September 18 balanced rotation (v7)
+
+Explicit **Cycle → Apply Balanced Rotation**, or launch flag
+`OPENLIFT_APPLY_BALANCED_ROTATION_2026_09_18`, upgrades active v6 only.
+Installation does not activate it. Raw whole-cluster counters and completed
+records remain unchanged. There are still three counters, not separate lanes.
+
+- Cluster 1 retains its four effective chest/back pairs and progression keys.
+- Cluster 2 has 24 structural steps: eight leg movements × three arm phases.
+  Leg order by raw counter modulo eight is Back Extension, Belt Squat, SLDL,
+  Bulgarian Split Squat, Reverse Hyper, Safety Bar Squat, Leg Curl, Leg Extension.
+  Arms continue modulo three, including across the eighth leg exposure.
+  Counter 25 therefore starts Belt Squat + Cable Pushdown + DB Preacher Curl.
+- Cluster 3 retains its six-step accessory pattern. Shoulders repeat Incline
+  Side-Lying DB Lateral Raise → Super ROM DB Lateral Raise → Cable Lateral Raise.
+  The former Lying Cable Flye substitution remains in historical records only.
+
+Each retained leg variation now returns every eight rather than six leg
+exposures; this adds variety, not extra exercises per workout. Shoulder, calf,
+and leg progression uses an exercise UUID/role key, joining prior compatible
+performed snapshots and safe unkeyed history. Latest compatible effort wins;
+rows are never summed. Literal previous set counts, loads, reps and profile
+comparability survive revision and subsequent manual count changes.
+
+V7 exports include every effective future selection, so export-only recovery
+preserves carried substitutions even before those slots have been performed.

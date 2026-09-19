@@ -2469,7 +2469,8 @@ enum ExerciseEffortLookupService {
             let identityBySession = Dictionary(
                 progressionOccurrences.compactMap { occurrence -> (UUID, ClusterExerciseProgressionSnapshot)? in
                     guard let snapshot = occurrence.exerciseSnapshots.first(where: {
-                        $0.progressionKey == progressionKey
+                        (($0.progressionKey == progressionKey) || FixedCycleClusterProgramService.acceptsBalancedHistory(
+                            requestedKey: progressionKey, exerciseId: exerciseId, snapshot: $0, occurrence: occurrence))
                             && CSDBRowIdentity.historicalIDs(for: exerciseId, exercises: exercises).contains($0.exerciseId)
                             && $0.completionStatus == .performed
                     }) else { return nil }
@@ -2495,9 +2496,15 @@ enum ExerciseEffortLookupService {
                     usesHistoricalProfileOverride: true
                 )
             }
-            if let result = preferred(sameIdentity) {
-                return result
+            if FixedCycleClusterProgramService.isBalancedMovementKey(progressionKey, exerciseId: exerciseId) {
+                let legacy = globalEffort(exerciseId: exerciseId, excludingSessionId: excludingSessionId,
+                    adaptiveSessions: adaptiveSessions, adaptiveSetEntries: adaptiveSetEntries,
+                    rotationSessions: rotationSessions, rotationSetEntries: rotationSetEntries,
+                    excludingSessionIds: Set(progressionOccurrences.map(\.sessionId)),
+                    resistanceRequirement: resistanceRequirement, resistanceProfiles: resistanceProfiles, exercises: exercises)
+                return preferred(sameIdentity + [legacy].compactMap { $0 })
             }
+            if let result = preferred(sameIdentity) { return result }
             // Legacy sessions deliberately have no progression occurrence.
             // A fresh key retains the old global exercise/profile fallback
             // without guessing which new structural identity owned old work.
