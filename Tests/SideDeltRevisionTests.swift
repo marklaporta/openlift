@@ -873,7 +873,7 @@ extension SideDeltRevisionTests {
             XCTAssertEqual(BootstrapDataService.resolveImportedExercise(id: id, name: "Helms Row", byId: byID, byName: byName)?.id, id)
             XCTAssertEqual(CSDBRowIdentity.resolve(id: id, name: nil, exercises: catalog)?.id, canonical.id)
         }
-        XCTAssertEqual(BootstrapDataService.resolveImportedExercise(id: nil, name: "Helms Row", byId: byID, byName: byName)?.id, canonical.id)
+        XCTAssertEqual(BootstrapDataService.resolveImportedExercise(id: nil, name: "Helms Row", byId: byID, byName: byName)?.id, byName["helms row"]?.id)
         XCTAssertEqual(try BootstrapDataService.ensureExerciseCatalog(modelContext: context).count, 77)
         XCTAssertFalse(try BootstrapDataService.consolidateCSDBRow(modelContext: context, snapshot: { _, _ in XCTFail("Repeat must not back up") }).didApply)
         let reopened = ModelContext(try open(url))
@@ -929,5 +929,146 @@ extension SideDeltRevisionTests {
         XCTAssertEqual(ExerciseEffortLookupService.globalEffort(exerciseId: canonical.id,
             adaptiveSessions: [], adaptiveSetEntries: [], rotationSessions: [first, latest],
             rotationSetEntries: entries, resistanceProfiles: [profile], exercises: catalog)?.rows.map(\.weight), [40])
+    }
+}
+
+extension SideDeltRevisionTests {
+    private var recoverySessionID: UUID { UUID(uuidString: "35AB747E-1761-41C4-963B-877C62D0B472")! }
+    private var recoveryDuplicateIDs: Set<UUID> {
+        [UUID(uuidString: "6F101C1C-4233-4AB5-884E-B61F9DDA12C0")!, UUID(uuidString: "AADC432A-80B9-45AC-97BF-693F09C494B9")!]
+    }
+    private func legacyRowExport(context: ModelContext) throws -> SessionExportService.ExportPayload {
+        let session = try XCTUnwrap(context.fetch(FetchDescriptor<Session>()).first { $0.id == recoverySessionID })
+        return SessionExportService.ExportPayload(session_id: session.id.uuidString,
+            cycle_name: session.cycleNameSnapshot ?? "Rotation", cycle_day_index: session.cycleDayIndex,
+            date: ISO8601DateFormatter().string(from: session.finishedAt!),
+            exercises: [.init(exercise_name: "Helms Row", muscle: "back", sets: [
+                .init(set_index: 1, weight: 40, reps: 15), .init(set_index: 2, weight: 40, reps: 8)])])
+    }
+    private func recoveryRows(_ context: ModelContext) throws -> [String] {
+        try context.fetch(FetchDescriptor<SetEntry>()).map {
+            "\($0.id)|\($0.sessionId)|\($0.exerciseId)|\($0.setIndex)|\($0.weight)|\($0.reps)|\($0.isLocked)|\(String(describing: $0.lockedAt))|\(String(describing: $0.gripperModel))"
+        }.sorted()
+    }
+
+    @MainActor
+    func testCSDBRowHistoricalRecoveryRetainsNameOnlyIdentityAndRepairGuards() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("default.store")
+        let store = try open(url)
+        let context = ModelContext(store)
+        let seededRows = [
+            Exercise(id: CSDBRowIdentity.canonicalID, name: "CS DB Row", primaryMuscle: .back, type: .compound, equipment: .dumbbell),
+            Exercise(id: UUID(uuidString: "45F7D9A2-52D5-4172-ACE7-78AEB5BF2C6F")!, name: "Helms Row", primaryMuscle: .back, type: .compound, equipment: .dumbbell),
+            Exercise(id: UUID(uuidString: "7C799565-C77C-4332-B5C8-F70EC9BC6B49")!, name: "CS Row", primaryMuscle: .back, type: .compound, equipment: .dumbbell)
+        ]
+        seededRows.forEach(context.insert)
+        try context.save()
+        let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
+        let cycle = ActiveCycleInstance(templateId: UUID())
+        context.insert(cycle)
+        let session = Session(id: recoverySessionID, cycleInstanceId: cycle.id, cycleDayIndex: 0,
+            finishedAt: Date(timeIntervalSince1970: 1000), status: .completed)
+        context.insert(session)
+        let helmsID = UUID(uuidString: "45F7D9A2-52D5-4172-ACE7-78AEB5BF2C6F")!
+        let originals = [
+            SetEntry(id: UUID(uuidString: "6CEEFF75-B0D7-4542-AA56-2329FC4611EB")!, sessionId: session.id, exerciseId: helmsID, setIndex: 1, weight: 40, reps: 15, isLocked: true),
+            SetEntry(id: UUID(uuidString: "42D2AB5B-04A2-48CE-A4C4-6B2AA649D9FA")!, sessionId: session.id, exerciseId: helmsID, setIndex: 2, weight: 40, reps: 8, isLocked: true)
+        ]
+        originals.forEach(context.insert)
+        try context.save()
+        _ = try BootstrapDataService.consolidateCSDBRow(modelContext: context, backupDirectory: root)
+        let before = try recoveryRows(context)
+        let export = try legacyRowExport(context: context)
+        _ = try BootstrapDataService.reconcileWorkoutExports([export], cycle: cycle, modelContext: context)
+        XCTAssertEqual(try recoveryRows(context), before)
+        let byID = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
+        let byName = Dictionary(uniqueKeysWithValues: catalog.map { ($0.name.lowercased(), $0) })
+        for name in ["Chest Supported Row", "CS Row"] {
+            XCTAssertEqual(BootstrapDataService.resolveImportedExercise(id: nil, name: name, byId: byID, byName: byName)?.id,
+                UUID(uuidString: "7C799565-C77C-4332-B5C8-F70EC9BC6B49"))
+        }
+        // A genuine canonical effort with equal load/reps must survive repair.
+        let legitimate = SetEntry(sessionId: UUID(), exerciseId: CSDBRowIdentity.canonicalID, setIndex: 1, weight: 40, reps: 15, isLocked: true)
+        context.insert(legitimate)
+        let duplicates = originals.map { original in
+            SetEntry(id: original.setIndex == 1 ? UUID(uuidString: "6F101C1C-4233-4AB5-884E-B61F9DDA12C0")! : UUID(uuidString: "AADC432A-80B9-45AC-97BF-693F09C494B9")!,
+                sessionId: session.id, exerciseId: CSDBRowIdentity.canonicalID, setIndex: original.setIndex, weight: 40, reps: original.reps, isLocked: true)
+        }
+        duplicates.forEach(context.insert)
+        try context.save()
+        originals[0].reps = 14
+        XCTAssertThrowsError(try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: context, backupDirectory: root))
+        try context.save()
+        XCTAssertThrowsError(try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: context, backupDirectory: root))
+        originals[0].reps = 15; try context.save()
+        let draft = Session(cycleInstanceId: cycle.id, cycleDayIndex: 0)
+        context.insert(draft); try context.save()
+        XCTAssertThrowsError(try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: context, backupDirectory: root))
+        context.delete(draft); try context.save()
+        XCTAssertThrowsError(try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: context, backupDirectory: root,
+            snapshot: { _, _ in throw NSError(domain: "backup", code: 1) }))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 5)
+        let repaired = try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: context, backupDirectory: root)
+        XCTAssertTrue(repaired.didApply)
+        XCTAssertTrue(StoreBackupService.isValidSnapshot(at: try XCTUnwrap(repaired.backupURL)))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<SetEntry>()), 3)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<SetEntry>()).contains { $0.id == legitimate.id })
+        let reopened = ModelContext(try open(url))
+        let reopenedCycle = try XCTUnwrap(reopened.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
+        _ = try BootstrapDataService.reconcileWorkoutExports([export], cycle: reopenedCycle, modelContext: reopened)
+        XCTAssertEqual(try recoveryRows(reopened), try recoveryRows(context))
+        XCTAssertFalse(try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: reopened,
+            snapshot: { _, _ in XCTFail("repeat must not back up") }).didApply)
+    }
+
+    @MainActor
+    func testCSDBRowCopiedStoreRecoveryAndExactDuplicateRepair() throws {
+        let sourceRoot = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OpenLiftCopiedRowRecovery")
+        guard FileManager.default.fileExists(atPath: sourceRoot.appendingPathComponent("before.store").path) else {
+            throw XCTSkip("Stage verified pre/post consolidation stores and recovery exports")
+        }
+        for phase in ["before", "after"] {
+            let source = sourceRoot.appendingPathComponent("\(phase).store")
+            let hash = SHA256.hash(data: try Data(contentsOf: source))
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let url = root.appendingPathComponent("default.store")
+            try FileManager.default.copyItem(at: source, to: url)
+            let store = try open(url)
+            let context = ModelContext(store)
+            let cycle = try active(context).1
+            let originalRows = try recoveryRows(context)
+            XCTAssertEqual(originalRows.count, phase == "before" ? 784 : 786)
+            if phase == "before" {
+                XCTAssertTrue(try BootstrapDataService.consolidateCSDBRow(modelContext: context, backupDirectory: root).didApply)
+            } else {
+                let beforeTables = try databaseRows(at: url)
+                XCTAssertTrue(try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: context, backupDirectory: root).didApply)
+                let afterTables = try databaseRows(at: url)
+                let mutable: Set<String> = ["ZSETENTRY", "Z_PRIMARYKEY", "ACHANGE", "ATRANSACTION", "ATRANSACTIONSTRING"]
+                for table in beforeTables.keys where !mutable.contains(table) {
+                    XCTAssertEqual(beforeTables[table], afterTables[table], table)
+                }
+            }
+            let expected = originalRows.filter { row in !recoveryDuplicateIDs.contains(where: { row.hasPrefix($0.uuidString + "|") }) }
+            XCTAssertEqual(try recoveryRows(context), expected)
+            var exports = try FileManager.default.contentsOfDirectory(at: sourceRoot.appendingPathComponent("exports"), includingPropertiesForKeys: nil)
+                .filter { $0.lastPathComponent.hasPrefix("workout-") && $0.pathExtension == "json" }
+                .compactMap { try SessionExportService.decodeExportPayload(data: Data(contentsOf: $0), fileURL: $0) }
+            exports.append(try legacyRowExport(context: context))
+            // Same hydration entry point used by normal WorkoutView startup.
+            _ = try BootstrapDataService.reconcileWorkoutExports(exports, cycle: cycle, modelContext: context)
+            XCTAssertEqual(try recoveryRows(context), expected)
+            let reopened = ModelContext(try open(url))
+            _ = try BootstrapDataService.ensureExerciseCatalog(modelContext: reopened)
+            _ = try BootstrapDataService.reconcileWorkoutExports(exports, cycle: try active(reopened).1, modelContext: reopened)
+            XCTAssertEqual(try recoveryRows(reopened), expected)
+            XCTAssertFalse(try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: reopened).didApply)
+            XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: source)), hash)
+            print("OPENLIFT_CS_DB_ROW_RECOVERY_COPY phase=\(phase) rows=784 exports=\(exports.count) coldReopen=true originalsUnchanged=true")
+        }
     }
 }
