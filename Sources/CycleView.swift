@@ -16,6 +16,7 @@ struct CycleView: View {
     @Query private var setEntries: [SetEntry]
     @Query private var clusterPointers: [ClusterRotationState]
     @Query private var progressionOccurrences: [ClusterOccurrenceRecord]
+    @Query private var clusterExercisePreferences: [ClusterExercisePreference]
     @Query private var trainingPreferences: [TrainingPreference]
     @Query private var adaptivePrograms: [AdaptiveProgram]
     @Query private var workoutSizePreferences: [AdaptiveWorkoutSizePreference]
@@ -38,6 +39,7 @@ struct CycleView: View {
     @State private var didAddSideDelt = false
     @State private var didReorderSideDelts = false
     @State private var didReviseChestBack = false
+    @State private var didPairChestBackRows = false
     @State private var gripperMigrationMessage: String?
     @State private var didConsolidateCSDBRow = false
 
@@ -50,6 +52,13 @@ struct CycleView: View {
             preferredTemplateId: UserDefaults.standard.string(forKey: "openlift.lastActivatedTemplateId")
                 .flatMap(UUID.init(uuidString:))
         )
+    }
+
+    private var hasPairedChestBackRows: Bool {
+        let version = FixedCycleClusterProgramService.chestBackVersionID
+        return [(1, CSDBRowIdentity.canonicalID), (15, FixedCycleClusterProgramService.pairedCableRowID)].allSatisfy { day, exercise in
+            clusterExercisePreferences.contains { $0.programVersionID == version && $0.templateDayPosition == day && $0.slotPosition == 1 && $0.exerciseId == exercise }
+        }
     }
 
     private var trainingMode: TrainingMode {
@@ -157,6 +166,25 @@ struct CycleView: View {
                             if hasPendingWorkout {
                                 Text("Finish your current workout first.")
                                     .font(.caption).accessibilityIdentifier("cycle.chestBackDraftBlocker")
+                            }
+                        }
+                        if FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.chestBackVersionID {
+                            if !hasPairedChestBackRows {
+                                Button("Pair Rows with Flye Setup") {
+                                    do {
+                                        let result = try BootstrapDataService.applyChestBackRowPairingWithFreshBackup(modelContext: modelContext)
+                                        didPairChestBackRows = result.didApply
+                                    } catch { errorMessage = error.localizedDescription }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("cycle.pairChestBackRows")
+                                .disabled(hasPendingWorkout)
+                                if hasPendingWorkout { Text("Finish your current workout first.").accessibilityIdentifier("cycle.rowPairingDraftBlocker") }
+                            }
+                            if hasPairedChestBackRows || didPairChestBackRows {
+                                Label("Cable flyes + CS DB rows; DB flyes + SA CS cable rows.", systemImage: "checkmark.circle.fill")
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityIdentifier("cycle.rowPairingSuccess")
                             }
                         }
                         if !trainingPreferences.contains(where: { $0.key == GripperModelStorage.marker }) {

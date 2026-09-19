@@ -475,3 +475,27 @@ existing movements fail closed rather than creating duplicate live catalog rows.
 The source version, templates, pointers, overrides, completed occurrences,
 profiles, and exercise notes are retained. Export recovery recognizes v6 and its
 four-step Cluster1 mapping, with D at template position15.
+
+## September 18 v6 chest/back row pairing
+
+**Cycle → Pair Rows with Flye Setup**, or the explicit launch argument
+`OPENLIFT_SWAP_CHEST_BACK_ROWS_2026_09_18`, applies the same synchronous,
+backup-protected operation. A unique verified `VACUUM INTO` snapshot is retained
+in `Documents/OpenLift/revision-backups`. Installation and ordinary startup do
+not activate it. Pending edits, Fixed/Adaptive drafts, unsupported v6 contents,
+or unrelated row substitutions block activation without discarding work.
+
+Only the v6 back preferences at B (template day 1) and D (template day 15) change:
+B pairs Seated Cable Flye with canonical CS DB Row; D pairs Incline DB Flye with
+the existing SA CS Cable Row. Progression keys follow those exercise identities,
+including literal performed-row counts, loads and reps. Raw rotation counters,
+all other selections, templates, completed evidence and profiles are unchanged.
+Repeat activation is a no-op, including after cold reopen.
+
+`ChestBackRowPairingTests` checks rollback guards, retained backup contents,
+all unaffected SQL tables, other preferences, all clusters, same-exercise
+progression and cold persistence. Stage a verified v6 snapshot as `default.store`
+in a separate verification simulator app's
+`Documents/OpenLiftCopiedRowPairingStore` to run its copied-real-store test.
+`ChestBackRevisionUITests/testRowPairingButtonAndColdLaunch` exercises the actual
+button, draft blocker and persisted B pairing after relaunch.
