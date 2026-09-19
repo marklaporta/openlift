@@ -72,6 +72,9 @@ struct OpenLiftApp: App {
                             modelContext.insert(ClusterExercisePreference(programVersionID: FixedCycleClusterProgramService.chestBackVersionID,
                                 templateDayPosition: 1, slotPosition: 1, exerciseId: cable.id))
                             try? modelContext.save()
+                            if ProcessInfo.processInfo.environment["OPENLIFT_BALANCED_UI"] == "1" {
+                                _ = try? BootstrapDataService.applyChestBackRowPairingWithFreshBackup(modelContext: modelContext)
+                            }
                         }
                     }
                     let states = try? modelContext.fetch(FetchDescriptor<ClusterRotationState>())
@@ -177,6 +180,12 @@ struct OpenLiftApp: App {
                 let result = try BootstrapDataService.repairCSDBRowRecoveryDuplicates(modelContext: ModelContext(startup.container))
                 print("OPENLIFT_CS_DB_ROW_RECOVERY_REPAIR applied=\(result.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
             } catch { print("OPENLIFT_CS_DB_ROW_RECOVERY_REPAIR_FAILED \(error.localizedDescription)") }
+        }
+        if startup.issue == nil, ProcessInfo.processInfo.arguments.contains("OPENLIFT_APPLY_BALANCED_ROTATION_2026_09_18") {
+            do {
+                let result = try BootstrapDataService.applyBalancedRevisionWithFreshBackup(modelContext: ModelContext(startup.container))
+                print("OPENLIFT_BALANCED_REVISION applied=\(result.revision.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
+            } catch { print("OPENLIFT_BALANCED_REVISION_FAILED \(error.localizedDescription)") }
         }
         if startup.issue == nil, AppRuntime.shouldSwapChestBackRows {
             do {

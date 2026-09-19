@@ -499,3 +499,16 @@ in a separate verification simulator app's
 `Documents/OpenLiftCopiedRowPairingStore` to run its copied-real-store test.
 `ChestBackRevisionUITests/testRowPairingButtonAndColdLaunch` exercises the actual
 button, draft blocker and persisted B pairing after relaunch.
+
+### Balanced clustered program v7
+
+This is a content revision on schema V16, not a schema migration. The synchronous
+activation handler requires a clean context and no Fixed/Adaptive draft, creates
+and verifies a unique retained SQLite snapshot, then archives the old v6 template,
+preferences and three states without rewriting them. It inserts one v7 template
+(34 days / 95 slots), three states with identical raw counters, and one revision
+marker; only the active template reference and rollout-marker value are updated.
+Repeated activation is a no-op. Catalog entries and immutable completed evidence
+are not edited. Historical shoulder/calf/leg aliases are read-time UUID/role
+matches; another exercise or incompatible resistance profile cannot supply a
+comparable target. Existing row consolidation/recovery identity rules remain in force.

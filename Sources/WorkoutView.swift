@@ -1479,13 +1479,13 @@ struct WorkoutView: View {
                                 slotPosition: slot.position,
                                 overrides: clusterExerciseOverrides
                             ) != nil
-                        if selection.programVersionID == FixedCycleClusterProgramService.chestBackVersionID,
+                        if [FixedCycleClusterProgramService.chestBackVersionID, FixedCycleClusterProgramService.balancedVersionID].contains(selection.programVersionID),
                            resolved.exerciseId == FixedCycleClusterProgramService.singleArmPulldownID {
                             Text("Seated side-on. Each row = one set on each side; log load and reps per side, not the combined total.")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("workout.singleArmPulldownLoggingNote")
                         }
-                        if key == FixedCycleClusterProgramService.sideDeltProgressionKey {
+                        if key == FixedCycleClusterProgramService.sideDeltProgressionKey || (selection.programVersionID == FixedCycleClusterProgramService.balancedVersionID && resolved.exerciseId == FixedCycleClusterProgramService.sideDeltExerciseID) {
                             Text("Each row = one set on each side. Log the single dumbbell's weight and reps per side, not the left + right total.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

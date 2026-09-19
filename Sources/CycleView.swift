@@ -187,6 +187,23 @@ struct CycleView: View {
                                     .accessibilityIdentifier("cycle.rowPairingSuccess")
                             }
                         }
+                        if FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.chestBackVersionID {
+                            Text("Eight alternating leg movements; three shoulder raises. Shoulder and calf progression follows each movement. Arms and chest/back stay unchanged; previous set counts carry forward.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Button("Apply Balanced Rotation") {
+                                do { _ = try BootstrapDataService.applyBalancedRevisionWithFreshBackup(modelContext: modelContext) }
+                                catch { errorMessage = error.localizedDescription }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("cycle.applyBalancedRotation")
+                            .disabled(hasPendingWorkout)
+                            if hasPendingWorkout { Text("Finish your current workout first.").accessibilityIdentifier("cycle.balancedDraftBlocker") }
+                        }
+                        if FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.balancedVersionID {
+                            Label("Balanced rotation active; history and progression preserved.", systemImage: "checkmark.circle.fill")
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("cycle.balancedSuccess")
+                        }
                         if !trainingPreferences.contains(where: { $0.key == GripperModelStorage.marker }) {
                             Button("Store Gripper Models as G / T / 1") {
                                 do {

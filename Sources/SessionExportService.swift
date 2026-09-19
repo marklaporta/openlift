@@ -654,6 +654,19 @@ enum SessionExportService {
         clusterExerciseOverrides: [ClusterExerciseOccurrenceOverride] = []
     ) -> FixedCycleMetadata {
         let exerciseById = Dictionary(uniqueKeysWithValues: exercises.map { ($0.id, $0) })
+        // V7 captures effective carried selections, including untouched future
+        // slots. Recovery must not reconstruct them from older defaults.
+        var exportedClusterPreferences = clusterExercisePreferences
+        if FixedCycleClusterProgramService.versionID(for: template) == FixedCycleClusterProgramService.balancedVersionID {
+            let version = FixedCycleClusterProgramService.balancedVersionID
+            for day in template.days { for slot in day.slots {
+                let key = ClusterExercisePreference.key(programVersionID: version, templateDayPosition: day.position, slotPosition: slot.position)
+                if !exportedClusterPreferences.contains(where: { $0.key == key }) {
+                    exportedClusterPreferences.append(ClusterExercisePreference(programVersionID: version, templateDayPosition: day.position,
+                        slotPosition: slot.position, exerciseId: slot.exerciseId, updatedAt: session.finishedAt ?? session.createdAt))
+                }
+            } }
+        }
         let sessionOverrides = overrides.filter { $0.sessionId == session.id }
         let skippedMuscles = Set(sessionOverrides.filter {
             $0.kind == .skipMuscle
@@ -881,7 +894,7 @@ enum SessionExportService {
             absolute_cluster_step: nil,
             cluster_occurrences: isClustered ? clusterPayloads : nil,
             cluster_rotation_states: isClustered ? statePayloads : nil,
-            cluster_exercise_preferences: isClustered ? clusterExercisePreferences
+            cluster_exercise_preferences: isClustered ? exportedClusterPreferences
                 .filter { $0.programVersionID == (occurrenceProgramVersionID ?? FixedCycleClusterProgramService.versionID(for: template)) }
                 .sorted { $0.key < $1.key }
                 .compactMap {
