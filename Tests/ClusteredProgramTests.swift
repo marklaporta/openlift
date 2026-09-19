@@ -865,6 +865,18 @@ final class ClusteredProgramTests: XCTestCase {
         )
     }
 
+    func testDraftSetCountDoesNotCopyIneligibleProfileHistory() {
+        let effort = ExerciseEffortLookupResult(
+            sessionId: UUID(), completedAt: Date(timeIntervalSince1970: 100),
+            sourceKind: .fixedCycle, matchKind: .globalLatest,
+            cycleName: nil, dayLabel: nil,
+            rows: (1...3).map { ComparableSetRow(setIndex: $0, weight: 20, reps: 12, isLocked: true) },
+            resistanceProfile: nil, profileComparison: .unknown
+        )
+        XCTAssertFalse(effort.isProgressionPrefillEligible)
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: effort), 2)
+    }
+
     func testTemplateReusesExistingCatalogIdentitiesBeforeFreshFallbacks() throws {
         let container = OpenLiftModelContainerFactory.makeInMemory(
             schema: Schema(versionedSchema: OpenLiftSchemaV16.self)
@@ -1151,11 +1163,11 @@ final class ClusteredProgramTests: XCTestCase {
         let sameKeyOtherProfile = completed(200)
         let global = completed(300)
         let otherKey = completed(400)
-        func row(_ session: Session, _ weight: Double) -> SetEntry {
+        func row(_ session: Session, _ weight: Double, setIndex: Int = 1) -> SetEntry {
             SetEntry(
                 sessionId: session.id,
                 exerciseId: exerciseID,
-                setIndex: 1,
+                setIndex: setIndex,
                 weight: weight,
                 reps: 10,
                 isLocked: true
@@ -1213,9 +1225,10 @@ final class ClusteredProgramTests: XCTestCase {
             otherKeyOccurrence
         ]
         let sessions = [exact, sameKeyOtherProfile, global, otherKey]
-        let entries = [
-            row(exact, 70), row(sameKeyOtherProfile, 25), row(global, 99), row(otherKey, 400)
-        ]
+        let entries = (1...3).map { row(exact, 70, setIndex: $0) }
+            + [row(sameKeyOtherProfile, 25)]
+            + (1...4).map { row(global, 99, setIndex: $0) }
+            + (1...5).map { row(otherKey, 400, setIndex: $0) }
 
         let exactResult = ExerciseEffortLookupService.fixedCycleEffort(
             exerciseId: exerciseID,
@@ -1231,6 +1244,8 @@ final class ClusteredProgramTests: XCTestCase {
         )
         XCTAssertEqual(exactResult?.sessionId, exact.id)
         XCTAssertEqual(exactResult?.rows.first?.weight, 70)
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: exactResult), 3,
+            "Exact-profile history wins over newer counts from other profiles or keys")
 
         let sameKeyFallback = ExerciseEffortLookupService.fixedCycleEffort(
             exerciseId: exerciseID,
@@ -1246,6 +1261,8 @@ final class ClusteredProgramTests: XCTestCase {
         )
         XCTAssertEqual(sameKeyFallback?.sessionId, sameKeyOtherProfile.id)
         XCTAssertTrue(sameKeyFallback?.isProgressionPrefillEligible == true)
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: sameKeyFallback), 1,
+            "The same-key alternate-profile fallback keeps its own literal count")
 
         let globalFallback = ExerciseEffortLookupService.fixedCycleEffort(
             exerciseId: exerciseID,
@@ -1260,6 +1277,8 @@ final class ClusteredProgramTests: XCTestCase {
         )
         XCTAssertEqual(globalFallback?.sessionId, global.id)
         XCTAssertEqual(globalFallback?.matchKind, .globalLatest)
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: globalFallback), 4,
+            "Safe unkeyed history supplies its count without pooling versioned efforts")
     }
 
     func testFreshProgressionKeyFallbackExcludesEveryVersionedSession() throws {

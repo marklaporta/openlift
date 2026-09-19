@@ -432,21 +432,8 @@ enum FixedCycleWorkoutService {
 
     static func draftSetCount(
         defaultSetCount: Int,
-        effort: ExerciseEffortLookupResult?,
-        selection: FixedCycleClusterProgramService.Selection? = nil,
-        exerciseId: UUID? = nil, progressionKey: String? = nil,
-        occurrences: [ClusterOccurrenceRecord] = []
+        effort: ExerciseEffortLookupResult?
     ) -> Int {
-        if let selection, selection.programVersionID == FixedCycleClusterProgramService.chestBackVersionID,
-           selection.cluster == .cluster1, let exerciseId,
-           !occurrences.contains(where: { occurrence in
-               occurrence.programVersionID == selection.programVersionID
-                   && occurrence.sessionId == effort?.sessionId
-                   && occurrence.cycleInstanceId == selection.cycleInstanceId
-                   && occurrence.clusterID == selection.cluster.rawValue
-                   && occurrence.exerciseSnapshots.contains { $0.exerciseId == exerciseId
-                       && $0.progressionKey == progressionKey && $0.completionStatus == .performed }
-           }) { return 2 }
         return effort?.isProgressionPrefillEligible == true
             ? max(1, effort?.rows.count ?? defaultSetCount)
             : max(1, defaultSetCount)
@@ -2279,8 +2266,7 @@ struct WorkoutView: View {
             )
             let setCount = FixedCycleWorkoutService.draftSetCount(
                 defaultSetCount: slot.defaultSetCount,
-                effort: effort, selection: selection, exerciseId: resolved.exerciseId,
-                progressionKey: progressionKey, occurrences: clusterOccurrences
+                effort: effort
             )
 
             for setIndex in 1...max(1, setCount) {
@@ -2737,7 +2723,7 @@ struct WorkoutView: View {
             progressionKey: key
         )
         let setCount = FixedCycleWorkoutService.draftSetCount(defaultSetCount: fallbackSetCount,
-            effort: effort, selection: selection, exerciseId: exercise.id, progressionKey: key, occurrences: clusterOccurrences)
+            effort: effort)
         for setIndex in 1...setCount {
             let values = prefillValues(
                 exerciseId: exercise.id,

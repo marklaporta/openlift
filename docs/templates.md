@@ -292,10 +292,11 @@ exercise UUID. Restored back movements use new clustered keys with safe unkeyed
 same-exercise history fallback. Single-arm pulldowns are seated side-on; one row
 means one set per side, not a combined left/right total.
 
-All chest/back slots start with two rows. Prefill keeps historical loads/reps but
-cannot reinstate a pre-v6 third row. Once the selected qualifying effort belongs
-to v6, its literal row count resumes normal repeat-last behavior; this is not a
-global cap. Other clusters, exact-slot substitutions, doses, and counters remain
+Chest/back slots default to two rows only when no qualifying prior effort exists.
+A qualifying effort supplies its literal set count, loads, and reps, including
+pre-v6 history: three completed sets recommend three again, and a later manual
+reduction carries forward. Progression-key and resistance-profile lookup rules
+are unchanged. Other clusters, exact-slot substitutions, and counters remain
 unchanged, including the live v4 side-delt choices (v5 is not implicitly applied).
 
 D uses template position15 so other clusters retain their exact slot addresses.

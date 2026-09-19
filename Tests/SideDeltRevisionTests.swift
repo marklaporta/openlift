@@ -566,7 +566,7 @@ final class SideDeltRevisionTests: XCTestCase {
     /// Read-only SQLite observes committed WAL state without opening the source in SwiftData.
 
     @MainActor
-    func testChestBackRevisionBackupDraftAndInitialDoseGuards() throws {
+    func testChestBackRevisionBackupDraftAndSetCountCarryForward() throws {
         let f = try fixture()
         _ = try BootstrapDataService.prepareSideDeltClusterRevision(modelContext: f.context, backupConfirmed: true)
         for (index, item) in Program.recoveryMovements.enumerated() {
@@ -599,11 +599,37 @@ final class SideDeltRevisionTests: XCTestCase {
         f.context.insert(pending)
         XCTAssertThrowsError(try BootstrapDataService.applyChestBackRevisionWithFreshBackup(modelContext: f.context))
         f.context.rollback()
+        let (oldTemplate, oldCycle) = try active(f.context)
+        let oldStates = Program.makeRotationStates(cycleInstanceId: oldCycle.id, templateId: oldTemplate.id,
+            programVersionID: Program.sideDeltVersionID)
+        let oldSelection = try Program.selection(cluster: .cluster1, template: oldTemplate,
+            cycleInstanceId: oldCycle.id, states: oldStates)
+        let oldItem = Program.resolvedSlots(selection: oldSelection, sessionId: UUID(), preferences: [], overrides: [])[0]
+        let oldSession = Session(cycleInstanceId: oldCycle.id, cycleDayIndex: 0,
+            finishedAt: Date(timeIntervalSince1970: 2000), status: .completed)
+        f.context.insert(oldSession)
+        let oldRows = (1...3).map { SetEntry(sessionId: oldSession.id, exerciseId: oldItem.exerciseId,
+            setIndex: $0, weight: 20, reps: 10, isLocked: true) }
+        oldRows.forEach(f.context.insert)
+        let oldOccurrence = try Program.makeOccurrence(session: oldSession, selection: oldSelection,
+            exercises: f.context.fetch(FetchDescriptor<Exercise>()), entries: oldRows, resistanceProfiles: [])
+        XCTAssertEqual(oldOccurrence.programVersionID, Program.sideDeltVersionID)
+        f.context.insert(oldOccurrence)
+        try f.context.save()
         try verifyChestBackRevision(f)
         let (template, activeCycle) = try active(f.context)
-        let states = try f.context.fetch(FetchDescriptor<ClusterRotationState>())
+        let states = Program.makeRotationStates(cycleInstanceId: activeCycle.id, templateId: template.id,
+            programVersionID: Program.chestBackVersionID)
         let selection = try Program.selection(cluster: .cluster1, template: template, cycleInstanceId: activeCycle.id, states: states)
         let item = Program.resolvedSlots(selection: selection, sessionId: UUID(), preferences: [], overrides: [])[0]
+        XCTAssertEqual(item.exerciseId, oldItem.exerciseId)
+        XCTAssertEqual(item.progressionKey, oldItem.progressionKey)
+        let preRevision = try XCTUnwrap(effort(f.context, item: item))
+        XCTAssertEqual(preRevision.sessionId, oldSession.id)
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: item.slot.defaultSetCount,
+            effort: preRevision), 3, "Qualifying pre-v6 sets must carry forward on the first v6 exposure")
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: item.slot.defaultSetCount,
+            effort: nil), 2, "Two rows remain the no-history default")
         let session = Session(cycleInstanceId: activeCycle.id, cycleDayIndex: 0, finishedAt: .now, status: .completed)
         f.context.insert(session)
         let manual = (1...3).map { SetEntry(sessionId: session.id, exerciseId: item.exerciseId,
@@ -615,13 +641,21 @@ final class SideDeltRevisionTests: XCTestCase {
         try f.context.save()
         let prior = try XCTUnwrap(effort(f.context, item: item))
         XCTAssertEqual(prior.rows.count, 3)
-        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: prior,
-            selection: selection, exerciseId: item.exerciseId, progressionKey: item.progressionKey, occurrences: [occurrence]), 3,
-            "An explicit later v6 three-set choice must carry forward normally")
-        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: prior,
-            selection: selection, exerciseId: item.exerciseId, progressionKey: item.progressionKey, occurrences: []), 2)
         XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: prior), 3,
-            "No global cap outside this revision")
+            "An explicit later v6 three-set choice must carry forward normally")
+        let reducedSession = Session(cycleInstanceId: activeCycle.id, cycleDayIndex: 0,
+            finishedAt: session.finishedAt!.addingTimeInterval(1), status: .completed)
+        f.context.insert(reducedSession)
+        let reduced = SetEntry(sessionId: reducedSession.id, exerciseId: item.exerciseId,
+            setIndex: 1, weight: 25, reps: 12, isLocked: true)
+        f.context.insert(reduced)
+        f.context.insert(try Program.makeOccurrence(session: reducedSession, selection: selection,
+            exercises: f.context.fetch(FetchDescriptor<Exercise>()), entries: [reduced], resistanceProfiles: []))
+        try f.context.save()
+        let reducedEffort = try XCTUnwrap(effort(f.context, item: item))
+        XCTAssertEqual(reducedEffort.sessionId, reducedSession.id)
+        XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: reducedEffort), 1,
+            "A later manual reduction must replace the older three-set count")
     }
 
     @MainActor
@@ -695,9 +729,8 @@ final class SideDeltRevisionTests: XCTestCase {
             for item in items {
                 XCTAssertEqual(item.slot.defaultSetCount, 2)
                 let prior = try effort(f.context, item: item)
-                XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: prior,
-                    selection: selection, exerciseId: item.exerciseId, progressionKey: item.progressionKey,
-                    occurrences: try f.context.fetch(FetchDescriptor<ClusterOccurrenceRecord>())), 2)
+                XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: 2, effort: prior),
+                    prior?.isProgressionPrefillEligible == true ? prior!.rows.count : 2)
                 print("CHEST_BACK_PREFILL step=\(step) id=\(item.exerciseId) key=\(item.progressionKey) rows=\(prior?.rows.count ?? 0)")
             }
         }
