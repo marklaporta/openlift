@@ -1479,17 +1479,22 @@ struct WorkoutView: View {
                                 slotPosition: slot.position,
                                 overrides: clusterExerciseOverrides
                             ) != nil
-                        if [FixedCycleClusterProgramService.chestBackVersionID, FixedCycleClusterProgramService.balancedVersionID].contains(selection.programVersionID),
+                        if [FixedCycleClusterProgramService.chestBackVersionID, FixedCycleClusterProgramService.balancedVersionID, FixedCycleClusterProgramService.syncedArmsVersionID].contains(selection.programVersionID),
                            resolved.exerciseId == FixedCycleClusterProgramService.singleArmPulldownID {
                             Text("Seated side-on. Each row = one set on each side; log load and reps per side, not the combined total.")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("workout.singleArmPulldownLoggingNote")
                         }
-                        if key == FixedCycleClusterProgramService.sideDeltProgressionKey || (selection.programVersionID == FixedCycleClusterProgramService.balancedVersionID && resolved.exerciseId == FixedCycleClusterProgramService.sideDeltExerciseID) {
+                        if key == FixedCycleClusterProgramService.sideDeltProgressionKey || ([FixedCycleClusterProgramService.balancedVersionID, FixedCycleClusterProgramService.syncedArmsVersionID].contains(selection.programVersionID) && resolved.exerciseId == FixedCycleClusterProgramService.sideDeltExerciseID) {
                             Text("Each row = one set on each side. Log the single dumbbell's weight and reps per side, not the left + right total.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .accessibilityIdentifier("workout.sideDeltLoggingNote")
+                        }
+                        if selection.programVersionID == FixedCycleClusterProgramService.syncedArmsVersionID && resolved.exerciseId == FixedCycleClusterProgramService.singleArmOverheadID {
+                            Text("Each row = one set on each side. Log cable load and reps per side, not the combined total.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("workout.singleArmOverheadLoggingNote")
                         }
                         if key == FixedCycleClusterProgramService.shrugProgressionKey,
                            exercise?.name == FixedCycleClusterProgramService.shrugExerciseName {

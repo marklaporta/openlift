@@ -222,6 +222,7 @@ enum RotationPoolKey: String, Codable, CaseIterable {
     case clusteredHypertrophyV5 = "openlift_clustered_hypertrophy_v5"
     case clusteredHypertrophyV6 = "openlift_clustered_hypertrophy_v6"
     case clusteredHypertrophyV7 = "openlift_clustered_hypertrophy_v7"
+    case clusteredHypertrophyV8 = "openlift_clustered_hypertrophy_v8"
 }
 
 enum TrainingMode: String, Codable, CaseIterable, Hashable {

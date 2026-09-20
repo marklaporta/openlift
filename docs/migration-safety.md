@@ -512,3 +512,29 @@ Repeated activation is a no-op. Catalog entries and immutable completed evidence
 are not edited. Historical shoulder/calf/leg aliases are read-time UUID/role
 matches; another exercise or incompatible resistance profile cannot supply a
 comparable target. Existing row consolidation/recovery identity rules remain in force.
+
+## v8 synchronized-arm activation
+
+This is a program revision, not a SwiftData schema change. Use Cycle →
+**Synchronize Arm Rotation**, or the same backup-protected handler through
+`OPENLIFT_APPLY_SYNCED_ARMS_2026_09_19`. Normal startup does not apply it.
+`applySyncedArmsRevisionWithFreshBackup` blocks pending edits and either draft
+kind, creates and verifies a unique `before-synced-arms-*.sqlite` snapshot outside
+daily pruning, and applies synchronously. Failed preparation rolls back. Repeat
+activation validates the retained receipt and performs no write or backup.
+
+Permitted changes: append v8 template/days/slots/identity pool and three rotation
+states; append the genuinely new hammer-curl catalog entry; update the active
+cycle's template reference and rollout marker; append the v8 activation marker.
+Existing catalog rows, archived templates/states, exact-slot preferences,
+completed sessions/sets/occurrences, resistance profiles and overrides remain
+unchanged. Counters and their completion metadata are copied literally. V8 exports
+include effective future selections; recovery supports v8 without downgrading a
+newer live cycle or generating redundant same-store overlays.
+
+`SyncedArmsTests` covers a copied phone store, full reachable rotation/wrap,
+unchanged historical records, history-derived row counts, snapshot parity,
+repeat activation, cold reopen, invalid subcycle collapse, both draft guards,
+independent completion and export recovery. `SyncedArmsUITests` exercises the
+actual disabled/enabled activation button, new-movement blank rows, per-side
+logging note and cold persistence.

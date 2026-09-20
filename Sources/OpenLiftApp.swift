@@ -87,6 +87,21 @@ struct OpenLiftApp: App {
                                             templateDayPosition: 5, slotPosition: 0, exerciseId: leg.id))
                                     }
                                     try? modelContext.save()
+                                    if ProcessInfo.processInfo.environment["OPENLIFT_SYNCED_ARMS_UI"] == "1" {
+                                        _ = try? BootstrapDataService.applyQuadPhaseWithFreshBackup(modelContext: modelContext)
+                                        let overhead = Exercise(id: FixedCycleClusterProgramService.singleArmOverheadID, name: "Overhead SA Cable Extension", primaryMuscle: .triceps, type: .isolation, equipment: .cable)
+                                        modelContext.insert(overhead)
+                                        // The activation UI fixture has no fabricated prior occurrences.
+                                        // Start its first completed upper cluster at zero so cold recovery
+                                        // can verify an uninterrupted history. The real-store test owns 26/26/25.
+                                        current.first { $0.programVersionID == FixedCycleClusterProgramService.balancedVersionID && $0.clusterID == "cluster-1" }?.positionIndex = 0
+                                        try? modelContext.save()
+                                        if ProcessInfo.processInfo.environment["OPENLIFT_SYNCED_ARMS_ROWS_UI"] == "1" {
+                                            current.first { $0.programVersionID == FixedCycleClusterProgramService.balancedVersionID && $0.clusterID == "cluster-1" }?.positionIndex = 27
+                                            try? modelContext.save()
+                                            _ = try? BootstrapDataService.applySyncedArmsRevisionWithFreshBackup(modelContext: modelContext)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -200,6 +215,12 @@ struct OpenLiftApp: App {
                 let result = try BootstrapDataService.applyBalancedRevisionWithFreshBackup(modelContext: ModelContext(startup.container))
                 print("OPENLIFT_BALANCED_REVISION applied=\(result.revision.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
             } catch { print("OPENLIFT_BALANCED_REVISION_FAILED \(error.localizedDescription)") }
+        }
+        if startup.issue == nil, ProcessInfo.processInfo.arguments.contains("OPENLIFT_APPLY_SYNCED_ARMS_2026_09_19") {
+            do {
+                let result = try BootstrapDataService.applySyncedArmsRevisionWithFreshBackup(modelContext: ModelContext(startup.container))
+                print("OPENLIFT_SYNCED_ARMS applied=\(result.revision.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
+            } catch { print("OPENLIFT_SYNCED_ARMS_FAILED \(error.localizedDescription)") }
         }
         if startup.issue == nil, ProcessInfo.processInfo.arguments.contains("OPENLIFT_APPLY_QUAD_PHASE_2026_09_19") {
             do {

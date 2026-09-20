@@ -220,6 +220,23 @@ struct CycleView: View {
                                 if hasPendingWorkout { Text("Finish your current workout first.").accessibilityIdentifier("cycle.quadPhaseDraftBlocker") }
                             }
                         }
+                        if FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.balancedVersionID {
+                            Text("Pair arms with chest/back: add seated DB hammer curls and SA overhead cable extensions on day D. Legs advance separately. Prior set counts and progression carry forward.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Button("Synchronize Arm Rotation") {
+                                do { _ = try BootstrapDataService.applySyncedArmsRevisionWithFreshBackup(modelContext: modelContext) }
+                                catch { errorMessage = error.localizedDescription }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("cycle.applySyncedArms")
+                            .disabled(hasPendingWorkout)
+                            if hasPendingWorkout { Text("Finish your current workout first.").accessibilityIdentifier("cycle.syncedArmsDraftBlocker") }
+                        }
+                        if FixedCycleClusterProgramService.versionID(for: activeTemplate) == FixedCycleClusterProgramService.syncedArmsVersionID {
+                            Label("Arms synchronized with chest/back; legs advance separately.", systemImage: "checkmark.circle.fill")
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("cycle.syncedArmsSuccess")
+                        }
                         if !trainingPreferences.contains(where: { $0.key == GripperModelStorage.marker }) {
                             Button("Store Gripper Models as G / T / 1") {
                                 do {

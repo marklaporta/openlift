@@ -487,13 +487,13 @@ enum BootstrapDataService {
         var availableTemplates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
         let revisionExports = exports.filter {
             $0.fixed_cycle?.program_identifier == FixedCycleClusterProgramService.programIdentifier
-                && [2, 3, 4, 5, 6, 7].contains($0.fixed_cycle?.program_version ?? 0)
+                && [2, 3, 4, 5, 6, 7, 8].contains($0.fixed_cycle?.program_version ?? 0)
                 && $0.fixed_cycle?.schema_version == 4
         }
         // V6 reuses catalog identities that predate clustered programming.
         // Recovery of even an A-only export must reconstruct all four lanes;
         // live activation never seeds these movements or changes their notes.
-        if revisionExports.contains(where: { $0.fixed_cycle?.program_version == 6 || $0.fixed_cycle?.program_version == 7 }) {
+        if revisionExports.contains(where: { $0.fixed_cycle?.program_version == 6 || $0.fixed_cycle?.program_version == 7 || $0.fixed_cycle?.program_version == 8 }) {
             for (index, item) in FixedCycleClusterProgramService.recoveryMovements.enumerated()
                 where !catalog.contains(where: { $0.id == item.0 || CompactExerciseName.key($0.name) == CompactExerciseName.key(item.1) }) {
                 let exercise = Exercise(id: item.0, name: CompactExerciseName.display(item.1),
@@ -505,6 +505,11 @@ enum BootstrapDataService {
                 exercisesByName[exercise.name.lowercased()] = exercise
                 exercisesById[exercise.id] = exercise
             }
+        }
+        if revisionExports.contains(where: { $0.fixed_cycle?.program_version == 8 }) {
+            catalog = try ensureSyncedArmExercises(modelContext: modelContext, recovery: true)
+            exercisesByName = Dictionary(uniqueKeysWithValues: catalog.map { ($0.name.lowercased(), $0) })
+            exercisesById = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
         }
         // Recover every versioned template needed by frozen history, not just
         // the newest revision. Older exports must not downgrade the live cycle.
@@ -523,7 +528,9 @@ enum BootstrapDataService {
                 guard FixedCycleClusterProgramService.isProgramTemplate(existing), FixedCycleClusterProgramService.versionNumber(for: existing) == version else { throw ClusterRevisionError.invalidState }
                 revised = existing
             } else {
-                if version == 7 {
+                if version == 8 {
+                    revised = try FixedCycleClusterProgramService.makeSyncedArmsRecoveryTemplate(exercises: catalog)
+                } else if version == 7 {
                     revised = try FixedCycleClusterProgramService.makeBalancedRecoveryTemplate(exercises: catalog)
                 } else {
                     revised = try FixedCycleClusterProgramService.makeTemplate(exercises: catalog, revised: true, shrugs: version >= 3, thirdSideDelt: version >= 4, inclineFirst: version == 5, chestBackRecovery: version == 6)
@@ -890,7 +897,7 @@ enum BootstrapDataService {
                         // V7 exports also describe canonical future selections.
                         // They need no overlay when the retained template already
                         // owns that identity (ordinary same-store recovery).
-                        if payload.program_version_id == FixedCycleClusterProgramService.balancedVersionID,
+                        if [FixedCycleClusterProgramService.balancedVersionID, FixedCycleClusterProgramService.syncedArmsVersionID].contains(payload.program_version_id),
                            clusterPreferencesByKey[key] == nil,
                            templatesByID[recoveredTemplateID(metadata, fallback: cycle.templateId)]?.days
                             .first(where: { $0.position == payload.template_day_position })?.slots
@@ -2635,16 +2642,17 @@ enum FixedCycleClusterProgramService {
     static let sideDeltOrderIdentityKey = "openlift_clustered_hypertrophy_v5"
 
     static func isReservedTemplateName(_ name: String) -> Bool {
-        [templateName, revisionTemplateName, shrugTemplateName, sideDeltTemplateName, sideDeltOrderTemplateName, chestBackTemplateName, balancedTemplateName].contains { name.caseInsensitiveCompare($0) == .orderedSame }
+        [templateName, revisionTemplateName, shrugTemplateName, sideDeltTemplateName, sideDeltOrderTemplateName, chestBackTemplateName, balancedTemplateName, syncedArmsTemplateName].contains { name.caseInsensitiveCompare($0) == .orderedSame }
     }
-    static func supports(version: Int?) -> Bool { [1, 2, 3, 4, 5, 6, 7].contains(version ?? 0) }
+    static func supports(version: Int?) -> Bool { [1, 2, 3, 4, 5, 6, 7, 8].contains(version ?? 0) }
     static func supports(programVersionID: String) -> Bool {
-        [self.programVersionID, revisionVersionID, shrugVersionID, sideDeltVersionID, sideDeltOrderVersionID, chestBackVersionID, balancedVersionID].contains(programVersionID)
+        [self.programVersionID, revisionVersionID, shrugVersionID, sideDeltVersionID, sideDeltOrderVersionID, chestBackVersionID, balancedVersionID, syncedArmsVersionID].contains(programVersionID)
     }
     static func versionID(for template: CycleTemplate) -> String {
         "\(programIdentifier).v\(versionNumber(for: template))"
     }
     static func versionNumber(for template: CycleTemplate) -> Int {
+        if template.rotationPools.contains(where: { $0.key == syncedArmsIdentityKey }) { return 8 }
         if template.rotationPools.contains(where: { $0.key == balancedIdentityKey }) { return 7 }
         if template.rotationPools.contains(where: { $0.key == chestBackIdentityKey }) { return 6 }
         if template.rotationPools.contains(where: { $0.key == sideDeltOrderIdentityKey }) { return 5 }
@@ -2698,6 +2706,7 @@ enum FixedCycleClusterProgramService {
     }
 
     static func isProgramTemplate(_ template: CycleTemplate?) -> Bool {
+        if let template, versionNumber(for: template) == 8 { return isSyncedArmsTemplate(template) }
         if let template, versionNumber(for: template) == 7 { return isBalancedTemplate(template) }
         guard let template,
               template.rotationPools.contains(where: {
@@ -3082,7 +3091,8 @@ enum FixedCycleClusterProgramService {
             return ResolvedSlot(
                 slot: slot,
                 exerciseId: exerciseId,
-                progressionKey: balancedProgressionKey(selection: selection, slotPosition: slot.position, exerciseId: exerciseId)
+                progressionKey: syncedArmsProgressionKey(selection: selection, slotPosition: slot.position, exerciseId: exerciseId)
+                    ?? balancedProgressionKey(selection: selection, slotPosition: slot.position, exerciseId: exerciseId)
                     ?? pairedRowProgressionKey(selection: selection, slotPosition: slot.position, exerciseId: exerciseId)
                     ?? (selection.cluster == .cluster2 && slot.position == 0
                     && [3, 5].contains(selection.effectiveStep % 6)
@@ -3164,7 +3174,7 @@ enum FixedCycleClusterProgramService {
     static func progressionKey(selection: Selection, slotPosition: Int) -> String {
         var step = selection.effectiveStep
         if let slot = selection.day.slots.first(where: { $0.position == slotPosition }),
-           let key = balancedProgressionKey(selection: selection, slotPosition: slotPosition, exerciseId: slot.exerciseId) { return key }
+           let key = syncedArmsProgressionKey(selection: selection, slotPosition: slotPosition, exerciseId: slot.exerciseId) ?? balancedProgressionKey(selection: selection, slotPosition: slotPosition, exerciseId: slot.exerciseId) { return key }
         if selection.programVersionID == chestBackVersionID && selection.cluster == .cluster1 {
             return chestBackProgressionKey(step: step, slotPosition: slotPosition)
         }
