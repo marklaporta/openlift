@@ -203,6 +203,22 @@ struct CycleView: View {
                             Label("Balanced rotation active; history and progression preserved.", systemImage: "checkmark.circle.fill")
                                 .accessibilityElement(children: .combine)
                                 .accessibilityIdentifier("cycle.balancedSuccess")
+                            if trainingPreferences.contains(where: { $0.key == BootstrapDataService.quadPhaseRevisionMarker }) {
+                                Label("Quad rotation shifted; other rotations unchanged.", systemImage: "checkmark.circle.fill")
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityIdentifier("cycle.quadPhaseSuccess")
+                            } else {
+                                Text("Count the September 19 leg extension as the previous quad turn. Next: Belt Squat → Bulgarian Split Squat → Safety Bar Squat → Leg Extension.")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                Button("Shift Quad Rotation") {
+                                    do { _ = try BootstrapDataService.applyQuadPhaseWithFreshBackup(modelContext: modelContext) }
+                                    catch { errorMessage = error.localizedDescription }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("cycle.applyQuadPhase")
+                                .disabled(hasPendingWorkout)
+                                if hasPendingWorkout { Text("Finish your current workout first.").accessibilityIdentifier("cycle.quadPhaseDraftBlocker") }
+                            }
                         }
                         if !trainingPreferences.contains(where: { $0.key == GripperModelStorage.marker }) {
                             Button("Store Gripper Models as G / T / 1") {
