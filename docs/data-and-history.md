@@ -442,3 +442,22 @@ arbitrary movement. Existing names whose compact labels collide remain unchanged
 Completed occurrence snapshots, progression keys, drafts, and program selections
 are not renamed or reset. `CS DB Row` is a label, not consolidation activation;
 combined history still requires the canonical entry and both inactive legacy IDs.
+
+### Fixed Cycle numeric entry
+
+New Fixed/clustered draft rows retain the previous qualifying weight and literal
+set count, but start with no performed reps. The previous weight/reps remain in
+the exercise's inline reference. Existing drafts and completed history are not
+rewritten. Unchanged weight is accepted when the user explicitly completes a set;
+a positive rep count is required (zero weight remains valid for bodyweight work).
+
+Numeric fields select existing text on focus for direct replacement. Raw decimal
+text stays local to the native text field while typing; it does not re-render the
+workout or save SwiftData per keystroke. A one-second idle checkpoint, leaving the
+field, backgrounding, or a workout action flushes validated edits. Keyboard
+**Complete Set** commits the latest character and completes that row in one tap;
+**Done** only saves/dismisses. Invalid input remains visible for correction, and
+failed saves preserve the raw edit for retry. Profile freezing and set completion
+share one save, preserving the resistance source and modifier units.
+
+Adaptive and ad hoc entry are separate flows and are unchanged by this input work.
