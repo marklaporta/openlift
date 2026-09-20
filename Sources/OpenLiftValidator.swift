@@ -107,7 +107,7 @@ enum OpenLiftValidator {
                         throw OpenLiftValidationError.rotationPoolExerciseNotCompoundQuads(exerciseId: entry.exerciseId)
                     }
                 }
-            case .clusteredHypertrophyV1, .clusteredHypertrophyV2, .clusteredHypertrophyV3, .clusteredHypertrophyV4, .clusteredHypertrophyV5, .clusteredHypertrophyV6, .clusteredHypertrophyV7:
+            case .clusteredHypertrophyV1, .clusteredHypertrophyV2, .clusteredHypertrophyV3, .clusteredHypertrophyV4, .clusteredHypertrophyV5, .clusteredHypertrophyV6, .clusteredHypertrophyV7, .clusteredHypertrophyV8:
                 guard pool.entries.isEmpty else {
                     throw OpenLiftValidationError.invalidRotationPoolKey(key: pool.key)
                 }

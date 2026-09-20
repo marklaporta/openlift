@@ -357,3 +357,26 @@ v7 template, creates and integrity-checks a unique SQLite snapshot in
 one-time marker synchronously. Raw counters, template slots, posterior-chain
 and arm selections, other clusters, completed history and profiles are untouched.
 Reactivation is a no-op, including after subsequent user preference changes.
+
+## Explicit v8 synchronized arms (September 19, 2026)
+
+Cycle → **Synchronize Arm Rotation** upgrades an active v7 program only. Installing
+this build does not activate the revision. Cluster 1 now completes chest, back,
+triceps and biceps together over four steps. Its existing A/B/C chest/back pairs
+receive the old A/B/C arm pairs; D receives **Overhead SA Cable Extension** and
+**Seated DB Hammer Curl** (back-supported, neutral grip, no preacher pad).
+Cluster 2 becomes an eight-step legs-only rotation. Cluster 3 remains six steps.
+Completing or skipping a whole cluster advances only that cluster; arms no longer
+advance with a legs-only workout. All three raw counters remain unchanged.
+
+The revision resolves every live v7 exact-slot preference before building v8;
+it refuses to collapse a leg or arm subcycle if repeated positions differ in
+exercise or fallback row count. It does not apply a pending quad reorder or
+change other effective selections. Existing arm progression keys survive their
+move to Cluster 1. Chest/back, leg and accessory progression keys also survive.
+
+The SA overhead cable identity reuses prior compatible history and resistance
+profiles, including its literal completed row count. Its two-row template fallback
+is not a cap. Seated hammer curls are a distinct new identity with two initial
+rows and blank load/reps/previous performance. Each SA overhead row means one set
+on each side; record load and reps per side. Hammer loads are per dumbbell.

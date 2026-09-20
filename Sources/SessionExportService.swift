@@ -657,8 +657,8 @@ enum SessionExportService {
         // V7 captures effective carried selections, including untouched future
         // slots. Recovery must not reconstruct them from older defaults.
         var exportedClusterPreferences = clusterExercisePreferences
-        if FixedCycleClusterProgramService.versionID(for: template) == FixedCycleClusterProgramService.balancedVersionID {
-            let version = FixedCycleClusterProgramService.balancedVersionID
+        if [FixedCycleClusterProgramService.balancedVersionID, FixedCycleClusterProgramService.syncedArmsVersionID].contains(FixedCycleClusterProgramService.versionID(for: template)) {
+            let version = FixedCycleClusterProgramService.versionID(for: template)
             for day in template.days { for slot in day.slots {
                 let key = ClusterExercisePreference.key(programVersionID: version, templateDayPosition: day.position, slotPosition: slot.position)
                 if !exportedClusterPreferences.contains(where: { $0.key == key }) {
