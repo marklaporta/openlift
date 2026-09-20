@@ -72,7 +72,7 @@ enum OpenLiftValidator {
             }
 
             for slot in day.slots {
-                if slot.defaultSetCount < 1 || slot.defaultSetCount > 3 {
+                if slot.defaultSetCount < 1 || slot.defaultSetCount > (ClusterProgramDefinition.embedded(in: template) == nil ? 3 : 20) {
                     throw OpenLiftValidationError.invalidDefaultSetCount(dayLabel: day.label, muscle: slot.muscle, count: slot.defaultSetCount)
                 }
 
@@ -92,7 +92,10 @@ enum OpenLiftValidator {
             }
         }
 
+        let imported = ClusterProgramDefinition.embedded(in: template)
         for pool in template.rotationPools {
+            if let imported, pool.entries.isEmpty,
+               pool.key == imported.identityKey || pool.key.hasPrefix(ClusterProgramDefinition.embeddedPrefix) { continue }
             guard let key = RotationPoolKey(rawValue: pool.key) else {
                 throw OpenLiftValidationError.invalidRotationPoolKey(key: pool.key)
             }

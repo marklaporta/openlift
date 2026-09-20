@@ -36,7 +36,7 @@ extension FixedCycleClusterProgramService {
     /// rename old snapshots or borrow a different exercise's slot history.
     static func acceptsBalancedHistory(requestedKey: String, exerciseId: UUID,
         snapshot: ClusterExerciseProgressionSnapshot, occurrence: ClusterOccurrenceRecord) -> Bool {
-        guard snapshot.exerciseId == exerciseId, supports(programVersionID: occurrence.programVersionID),
+        guard snapshot.exerciseId == exerciseId, occurrence.programVersionID.hasPrefix(programIdentifier + ".v"), (1...8).contains(Int(occurrence.programVersionID.split(separator: ".").last?.dropFirst() ?? "") ?? 0),
               isBalancedMovementKey(requestedKey, exerciseId: exerciseId) else { return false }
         if requestedKey == balancedMovementKey(role: "legs", exerciseId: exerciseId) {
             return occurrence.clusterID == Cluster.cluster2.rawValue && snapshot.position == 0

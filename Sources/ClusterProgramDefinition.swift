@@ -90,7 +90,8 @@ struct ClusterProgramDefinition: Codable, Equatable {
     /// Match structure only: durable exercise choices and literal fallback counts may differ.
     func matches(_ template: CycleTemplate) -> Bool {
         let expected = clusters.flatMap(\.steps)
-        guard template.rotationPools.contains(where: { $0.key == identityKey && $0.entries.isEmpty }),
+        guard (versionNumber < 9 || (template.rotationPools.count == 2 && template.rotationPools.filter { $0.key == identityKey && $0.entries.isEmpty }.count == 1)),
+              template.rotationPools.contains(where: { $0.key == identityKey && $0.entries.isEmpty }),
               template.days.count == expected.count,
               Set(template.days.map(\.position)) == Set(expected.map(\.templatePosition)) else { return false }
         return expected.allSatisfy { step in
@@ -116,8 +117,75 @@ struct ClusterProgramDefinition: Codable, Equatable {
             return CycleDay(label: step.label, slots: slots, position: step.templatePosition)
         }
         let template = CycleTemplate(name: templateName, days: days, rotationPools: [RotationPool(key: identityKey, entries: [])])
+        if versionNumber >= 9 { template.rotationPools.append(RotationPool(key: try embeddedKey(), entries: [])) }
         try template.validate(exercisesById: Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) }))
         try FixedCycleClusterProgramService.validatePersistentExercisePreferences(template: template, exerciseIDsByPreferenceKey: [:])
         return template
+    }
+}
+
+
+extension ClusterProgramDefinition {
+    static let embeddedPrefix = "openlift.program-definition.v1:"
+    var referencedExerciseIDs: Set<UUID> {
+        Set(exercises.values.flatMap(\.candidates).compactMap { if case .id(let id) = $0 { return id }; return nil })
+    }
+    var versionNumber: Int { Int(programVersionID.split(separator: ".").last?.dropFirst() ?? "") ?? 0 }
+    static func hasEmbeddedMarker(_ template: CycleTemplate) -> Bool {
+        template.rotationPools.contains { $0.key.hasPrefix(embeddedPrefix) }
+    }
+    static func embedded(in template: CycleTemplate) -> Self? {
+        let markers = template.rotationPools.filter { $0.key.hasPrefix(embeddedPrefix) }
+        guard markers.count == 1, markers[0].entries.isEmpty else { return nil }
+        return decodeMarker(markers[0].key)
+    }
+    static func decodeMarker(_ key: String) -> Self? {
+        guard key.hasPrefix(embeddedPrefix), key.utf8.count <= 350000,
+              let data = Data(base64Encoded: String(key.dropFirst(embeddedPrefix.count))),
+              data.count <= 262144, let value = try? JSONDecoder().decode(Self.self, from: data),
+              (try? value.validateImportedShape()) != nil else { return nil }
+        return value
+    }
+    func embeddedKey() throws -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return Self.embeddedPrefix + (try encoder.encode(self)).base64EncodedString()
+    }
+    func validateImportedShape() throws {
+        try validate()
+        guard (9...999999).contains(versionNumber),
+              programVersionID == "openlift.clustered-hypertrophy.v\(versionNumber)",
+              identityKey == "openlift_clustered_hypertrophy_v\(versionNumber)",
+              Set(clusters.map(\.id)) == Set(FixedCycleClusterProgramService.Cluster.allCases.map(\.rawValue)),
+              clusters.allSatisfy({ $0.steps.count <= 100 && $0.steps.allSatisfy { $0.slots.count <= 12 && $0.slots.allSatisfy { $0.defaultSetCount <= 20 && $0.progression.exerciseAliases.count <= 100 } } }),
+              exercises.values.allSatisfy({ ref in ref.candidates.count == 1 && { if case .id = ref.candidates[0] { return true }; return false }() })
+        else { throw ProgramImportService.Failure.invalid("Unsupported program structure, exercise reference, or progression alias.") }
+    }
+}
+
+extension ClusterProgramDefinition.Progression {
+    private enum CodingKeys: String, CodingKey { case key, appendExerciseID, exerciseAliases }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        key = try values.decode(String.self, forKey: .key)
+        appendExerciseID = try values.decodeIfPresent(Bool.self, forKey: .appendExerciseID) ?? false
+        if let stringAliases = try? values.decode([String: String].self, forKey: .exerciseAliases) {
+            var aliases: [UUID: String] = [:]
+            for (text, value) in stringAliases {
+                guard let id = UUID(uuidString: text), aliases[id] == nil else {
+                    throw DecodingError.dataCorruptedError(forKey: .exerciseAliases, in: values, debugDescription: "Invalid or duplicate exercise alias UUID.")
+                }
+                aliases[id] = value
+            }
+            exerciseAliases = aliases
+        } else {
+            // Read chunk-2's Swift UUID-key dictionary representation as well.
+            exerciseAliases = try values.decodeIfPresent([UUID: String].self, forKey: .exerciseAliases) ?? [:]
+        }
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(key, forKey: .key)
+        try values.encode(appendExerciseID, forKey: .appendExerciseID)
+        try values.encode(Dictionary(uniqueKeysWithValues: exerciseAliases.map { ($0.key.uuidString.lowercased(), $0.value) }), forKey: .exerciseAliases)
     }
 }

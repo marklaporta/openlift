@@ -13,14 +13,16 @@ extension FixedCycleClusterProgramService {
         (UUID(uuidString: "3122AC62-0E70-467F-AFA8-B890D6B334D1")!, "Chest-Supported Dumbbell Row")
     ]
 
-    static func rotationLength(_ cluster: Cluster, version: String) -> Int {
+    static func rotationLength(_ cluster: Cluster, version: String, definition: ClusterProgramDefinition? = nil) -> Int {
+        if let definition, definition.programVersionID == version, let cluster = definition.cluster(cluster.rawValue) { return cluster.steps.count }
         if version == BundledClusterPrograms.v8.programVersionID,
            let definition = BundledClusterPrograms.v8.cluster(cluster.rawValue) { return definition.steps.count }
         return version == balancedVersionID ? (cluster == .cluster1 ? 4 : (cluster == .cluster2 ? 24 : 6))
             : (version == chestBackVersionID && cluster == .cluster1 ? 4 : cluster.rotationLength)
     }
 
-    static func templatePosition(_ cluster: Cluster, step: Int, version: String) -> Int {
+    static func templatePosition(_ cluster: Cluster, step: Int, version: String, definition: ClusterProgramDefinition? = nil) -> Int {
+        if let definition, definition.programVersionID == version, let selected = definition.step(clusterID: cluster.rawValue, counter: step) { return selected.templatePosition }
         let effective = step % rotationLength(cluster, version: version)
         if version == BundledClusterPrograms.v8.programVersionID,
            let selected = BundledClusterPrograms.v8.step(clusterID: cluster.rawValue, counter: step) { return selected.templatePosition }

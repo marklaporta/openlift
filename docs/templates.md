@@ -396,3 +396,9 @@ efforts retain their literal row counts. The current v8 phone template can
 therefore differ from these canonical fallback defaults without being invalid.
 Import/preview/activation of arbitrary new definitions is a separate future
 feature. Legacy published-cycle import remains unchanged.
+
+## Imported clustered revisions
+
+Versioned JSON revisions can now be exported, previewed, and explicitly applied
+from Cycle → Program Updates. See [program update authoring and activation](program-updates.md)
+for the format, supported bounds, draft protection, and recovery behavior.

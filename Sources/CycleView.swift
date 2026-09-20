@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import Combine
+import UniformTypeIdentifiers
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -295,6 +296,11 @@ struct CycleView: View {
                     Text("Active Cycle")
                 }
 
+                Section("Program Updates") {
+                    NavigationLink("Import or Export Program Revision") { ProgramRevisionImportView() }
+                        .accessibilityIdentifier("cycle.programUpdates")
+                }
+
                 Section("Templates") {
                     if templates.isEmpty {
                         Text("No templates yet")
@@ -338,6 +344,7 @@ struct CycleView: View {
                                     pendingMutation = .activate(templateId: template.id, name: template.name)
                                 }
                                 .buttonStyle(.borderedProminent)
+                                .disabled(ClusterProgramDefinition.hasEmbeddedMarker(template))
                             }
                         }
                         .padding(.vertical, 4)
@@ -663,6 +670,9 @@ struct CycleView: View {
 
     private func activate(template: CycleTemplate) {
         do {
+            guard !ClusterProgramDefinition.hasEmbeddedMarker(template) else {
+                throw ProgramImportService.Failure.invalid("Imported programs can only be activated through a validated Program Update.")
+            }
             if FixedCycleClusterProgramService.isReservedTemplateName(template.name),
                !FixedCycleClusterProgramService.isProgramTemplate(template) {
                 throw BootstrapDataService.ClusteredProgramRolloutError.existingTemplateConflict
@@ -744,6 +754,10 @@ struct CycleView: View {
     private func deleteTemplates(at offsets: IndexSet) {
         let requested = offsets.compactMap { templates.indices.contains($0) ? templates[$0] : nil }
         guard !requested.isEmpty else { return }
+        guard !requested.contains(where: { ClusterProgramDefinition.hasEmbeddedMarker($0) }) else {
+            errorMessage = "Imported program versions are retained for historical export and recovery."
+            return
+        }
         if requested.contains(where: { $0.id == activeTemplate?.id }) {
             errorMessage = "Cannot delete the active template. Activate another template first."
             return
@@ -1548,4 +1562,101 @@ private struct TemplateDraftSlot: Identifiable {
 
 #Preview {
     CycleView()
+}
+
+
+private struct ProgramRevisionDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    var data: Data
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws { data = configuration.file.regularFileContents ?? Data() }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
+}
+
+struct ProgramRevisionImportView: View {
+    @Environment(\.modelContext) private var context
+    @Query private var catalog: [Exercise]
+    @State private var importing = false
+    @State private var exporting = false
+    @State private var document = ProgramRevisionDocument(data: Data())
+    @State private var preview: ProgramImportService.Preview?
+    @State private var error: String?
+    @State private var success = false
+
+    var body: some View {
+        List {
+            Section {
+                Text("Program updates change future workouts only. Completed history and setup notes stay intact.")
+                Button("Import Revision File") { importing = true }
+                    .accessibilityIdentifier("program.import")
+                Button("Export Revision Starter") {
+                    do {
+                        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                        document = ProgramRevisionDocument(data: try encoder.encode(ProgramImportService.revisionStarter(context: context)))
+                        exporting = true
+                    } catch { self.error = error.localizedDescription }
+                }
+                .accessibilityIdentifier("program.export")
+                Text("The starter captures your current choices and counters for editing. Export again if you complete another cluster before applying it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let preview {
+                Section("Review: " + preview.package.definition.templateName) {
+                    ForEach(Array(preview.upcoming.enumerated()), id: \.offset) { _, text in Text(text) }
+                    ForEach(Array(preview.changes.enumerated()), id: \.offset) { _, text in Text(text) }
+                }
+                Section {
+                    Text("Applying creates and verifies a fresh backup, then switches the program in one local save.")
+                        .font(.caption)
+                    if preview.blockedByDraft {
+                        Text("Finish your current workout first. Your draft will not be deleted.")
+                            .accessibilityIdentifier("program.draftBlocked")
+                    }
+                    Button("Back Up and Apply Revision") {
+                        do {
+                            _ = try ProgramImportService.apply(preview, context: context)
+                            success = true; self.preview = nil
+                        } catch { self.error = error.localizedDescription }
+                    }
+                    .disabled(preview.blockedByDraft)
+                    .accessibilityIdentifier("program.apply")
+                }
+                Section("Proposed Rotation") {
+                    ForEach(preview.package.definition.clusters, id: \.id) { cluster in
+                        ForEach(cluster.steps, id: \.templatePosition) { step in
+                            VStack(alignment: .leading) {
+                                Text(step.label).font(.headline)
+                                ForEach(Array(step.slots.enumerated()), id: \.offset) { _, slot in
+                                    Text(slotSummary(slot, definition: preview.package.definition))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if success { Label("Program update applied. History preserved.", systemImage: "checkmark.circle.fill").accessibilityIdentifier("program.success") }
+        }
+        .navigationTitle("Program Updates")
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+            do {
+                let url = try result.get()
+                let scope = url.startAccessingSecurityScopedResource()
+                defer { if scope { url.stopAccessingSecurityScopedResource() } }
+                let values = try url.resourceValues(forKeys: [.fileSizeKey])
+                guard (values.fileSize ?? Int.max) <= 262144 else { throw ProgramImportService.Failure.invalid("Program file exceeds 256 KB.") }
+                let package = try ProgramImportService.decode(Data(contentsOf: url))
+                preview = try ProgramImportService.preview(package, context: context); success = false
+            } catch { preview = nil; self.error = error.localizedDescription }
+        }
+        .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "OpenLift-program-revision") { result in
+            if case .failure(let error) = result { self.error = error.localizedDescription }
+        }
+        .alert("Program Update", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK") { error = nil }
+        } message: { Text(error ?? "") }
+    }
+    private func slotSummary(_ slot: ClusterProgramDefinition.Slot, definition: ClusterProgramDefinition) -> String {
+        let exercise = definition.exercises[slot.exercise]?.resolve(in: catalog)
+        return "\(exercise?.name ?? slot.exercise) · \(slot.defaultSetCount) starting sets" + ((exercise?.notes.isEmpty == false) ? "\n\(exercise!.notes)" : "")
+    }
 }
