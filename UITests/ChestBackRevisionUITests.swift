@@ -2,7 +2,7 @@ import XCTest
 
 final class ChestBackRevisionUITests: OpenLiftUITestCase {
     private func launchChestBackFixture() -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = legacyAdministrationApp()
         app.launchArguments = ["OPENLIFT_UI_TESTING", "OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION"]
         app.launchEnvironment["OPENLIFT_SIDE_DELT_UI_ID"] = UUID().uuidString
         app.launchEnvironment["OPENLIFT_CHEST_BACK_UI"] = "1"
@@ -52,7 +52,7 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
     }
 
     func testCSDBRowConsolidationButtonAndColdLaunch() throws {
-        let app = XCUIApplication()
+        let app = legacyAdministrationApp()
         app.launchArguments = ["OPENLIFT_UI_TESTING", "OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION"]
         app.launchEnvironment["OPENLIFT_SIDE_DELT_UI_ID"] = UUID().uuidString
         app.launchEnvironment["OPENLIFT_CHEST_BACK_UI"] = "1"
@@ -110,7 +110,7 @@ final class ChestBackRevisionUITests: OpenLiftUITestCase {
     }
 
     func testRowPairingButtonAndColdLaunch() throws {
-        let app = XCUIApplication()
+        let app = legacyAdministrationApp()
         app.launchArguments = ["OPENLIFT_UI_TESTING", "OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION"]
         app.launchEnvironment["OPENLIFT_SIDE_DELT_UI_ID"] = UUID().uuidString
         app.launchEnvironment["OPENLIFT_CHEST_BACK_UI"] = "1"

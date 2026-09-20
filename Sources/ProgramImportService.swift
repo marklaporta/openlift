@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-/// A revision file is inert until the user applies its freshly generated preview.
+/// A revision file is inert until its freshly generated preview is explicitly applied.
 struct ProgramRevisionPackage: Codable, Equatable {
     struct Carry: Codable, Equatable {
         let targetDay: Int
@@ -175,7 +175,8 @@ enum ProgramImportService {
     @MainActor
     static func apply(_ preview: Preview, context: ModelContext, backupDirectory: URL? = nil,
                       snapshot: (URL, URL) throws -> Void = StoreBackupService.snapshot,
-                      save: (ModelContext) throws -> Void = { try $0.save() }) throws -> Result {
+                      save: (ModelContext) throws -> Void = { try $0.save() },
+                      beforeSave: (CycleTemplate, URL) throws -> Void = { _, _ in }) throws -> Result {
         guard !context.hasChanges else { throw Failure.invalid("Save pending edits before applying a revision.") }
         let templates = try context.fetch(FetchDescriptor<CycleTemplate>())
         let cycles = try context.fetch(FetchDescriptor<ActiveCycleInstance>()).filter { cycle in
@@ -208,6 +209,7 @@ enum ProgramImportService {
             }
             cycle.templateId = template.id
             rollout?.modeRawValue = "\(template.id.uuidString)|\(cycle.id.uuidString)"
+            try beforeSave(template, backup)
             try save(context)
             UserDefaults.standard.set(template.id.uuidString, forKey: "openlift.lastActivatedTemplateId")
             UserDefaults.standard.set(template.name, forKey: "openlift.lastActivatedTemplateName")

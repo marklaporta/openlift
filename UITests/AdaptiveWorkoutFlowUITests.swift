@@ -6,7 +6,7 @@ import XCTest
 // independent flows across classes instead of replaying this workflow's phases.
 final class AdaptiveWorkoutFlowUITests: OpenLiftUITestCase {
     func testAdaptiveWorkoutReadinessPreviewFreezeLockAndComplete() throws {
-        let app = launchApp(["OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW"])
+        let app = launchLegacyAdministrationApp(["OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW"])
 
         XCTAssertTrue(app.tabBars.buttons["Cycle"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Cycle"].tap()

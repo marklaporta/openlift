@@ -380,6 +380,9 @@ struct OpenLiftApp: App {
                 print("OPENLIFT_EXERCISE_SETUP_NOTES_FAILED \(error.localizedDescription)")
             }
         }
+        if startup.issue == nil {
+            try? ProgramAgentBridge.restoreCommittedSelectionCache(context: ModelContext(startup.container))
+        }
         return startup
     }()
 

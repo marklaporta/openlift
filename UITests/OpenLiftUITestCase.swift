@@ -22,6 +22,21 @@ class OpenLiftUITestCase: XCTestCase {
         return app
     }
 
+    // Historical migration/profile UI remains covered only in an explicit
+    // isolated test host; it is not a production navigation destination.
+    func legacyAdministrationApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["OPENLIFT_LEGACY_ADMIN_UI"] = "1"
+        return app
+    }
+
+    func launchLegacyAdministrationApp(_ extraArguments: [String] = []) -> XCUIApplication {
+        let app = legacyAdministrationApp()
+        app.launchArguments += ["OPENLIFT_UI_TESTING"] + extraArguments
+        app.launch()
+        return app
+    }
+
     // Fixed Cycle gates the workout list behind a dated readiness observation. The
     // form opens pre-filled with the all-clear defaults, so submitting once is enough
     // to reach the exercise sections.

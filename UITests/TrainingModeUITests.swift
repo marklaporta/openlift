@@ -2,7 +2,7 @@ import XCTest
 
 final class TrainingModeUITests: OpenLiftUITestCase {
     func testTrainingModeSwitchPreservesRotationDraft() throws {
-        let app = launchApp()
+        let app = launchLegacyAdministrationApp()
 
         app.tabBars.buttons["Workout"].tap()
         // Submitting readiness once clears the gate for this draft and date, so the
@@ -40,7 +40,7 @@ final class TrainingModeUITests: OpenLiftUITestCase {
     }
 
     func testCycleTemplateMutationsRequireConfirmation() throws {
-        let app = launchApp()
+        let app = launchLegacyAdministrationApp()
 
         app.tabBars.buttons["Cycle"].tap()
         dismissExpectedICloudCycleAlertIfPresent(in: app)

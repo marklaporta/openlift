@@ -295,9 +295,13 @@ final class ProgramImportTests: XCTestCase {
         let before = try databaseRows(at: url).filter { !bookkeeping.contains($0.key) }
         let store = try container(at: url); let context = ModelContext(store); context.autosaveEnabled = false
         let package = try ProgramImportService.revisionStarter(context: context)
-        let preview = try ProgramImportService.preview(package, context: context)
-        XCTAssertTrue(preview.blockedByDraft)
-        XCTAssertThrowsError(try ProgramImportService.apply(preview, context: context, backupDirectory: root))
+        let bridge = root.appendingPathComponent("bridge")
+        let now = Date().timeIntervalSince1970
+        let blockedPreview = try bridgeRequest(.init(id: UUID(), action: "preview", expiresAt: now + 600, revision: JSONEncoder().encode(package)), root: bridge, context: context)
+        XCTAssertEqual(blockedPreview.blockedByDraft, true)
+        let blockedRequest = ProgramAgentBridge.Request(id: UUID(), action: "apply", expiresAt: now + 600,
+            previewID: blockedPreview.previewID, approvalToken: blockedPreview.approvalToken, revisionSHA256: blockedPreview.revisionSHA256)
+        XCTAssertEqual(try bridgeRequest(blockedRequest, root: bridge, context: context).status, "rejected")
         XCTAssertEqual(try databaseRows(at: url).filter { !bookkeeping.contains($0.key) }, before)
         let sessions = try context.fetch(FetchDescriptor<Session>())
         XCTAssertEqual(sessions.filter { $0.status == .completed }.count, 74)
@@ -310,9 +314,12 @@ final class ProgramImportTests: XCTestCase {
         }
         try context.save()
         let activationBaseline = try databaseRows(at: url)
-        let ready = try ProgramImportService.preview(package, context: context)
-        XCTAssertTrue(try ProgramImportService.apply(ready, context: context, backupDirectory: root).didApply)
-        XCTAssertFalse(try ProgramImportService.apply(ready, context: context, backupDirectory: root).didApply)
+        XCTAssertEqual(try XCTUnwrap(ProgramAgentBridge.process(id: blockedRequest.id, context: context, root: bridge)).status, "rejected")
+        let ready = try bridgeRequest(.init(id: UUID(), action: "preview", expiresAt: now + 600, revision: JSONEncoder().encode(package)), root: bridge, context: context)
+        let apply = ProgramAgentBridge.Request(id: UUID(), action: "apply", expiresAt: now + 600,
+            previewID: ready.previewID, approvalToken: ready.approvalToken, revisionSHA256: ready.revisionSHA256)
+        XCTAssertEqual(try bridgeRequest(apply, root: bridge, context: context).status, "applied")
+        XCTAssertEqual(try XCTUnwrap(ProgramAgentBridge.process(id: apply.id, context: context, root: bridge)).status, "applied")
         let permitted: Set<String> = ["ZCYCLETEMPLATE", "ZCYCLEDAY", "ZCYCLESLOT", "ZROTATIONPOOL", "ZCLUSTERROTATIONSTATE", "ZACTIVECYCLEINSTANCE", "ZTRAININGPREFERENCE"]
         let after = try databaseRows(at: url)
         for (table, rows) in activationBaseline where !bookkeeping.contains(table) && !permitted.contains(table) {
@@ -371,5 +378,146 @@ final class ProgramImportTests: XCTestCase {
             result[name] = try rows("SELECT \(columns.joined(separator: ",")) FROM \"\(quoted)\"").map { $0.joined(separator: "|") }.sorted()
         }
         return result
+    }
+}
+
+extension ProgramImportTests {
+    @MainActor
+    private func bridgeRequest(_ request: ProgramAgentBridge.Request, root: URL, context: ModelContext,
+                               now: Double = Date().timeIntervalSince1970) throws -> ProgramAgentBridge.Receipt {
+        try ProgramAgentBridge.write(request, to: ProgramAgentBridge.path("inbox", request.id, root: root))
+        return try XCTUnwrap(ProgramAgentBridge.process(id: request.id, context: context, root: root, now: now))
+    }
+
+    @MainActor
+    func testAgentBridgePreviewApplyReceiptReplayAndCrashRecovery() throws {
+        let (root, _, context) = try fixture()
+        let bridge = root.appendingPathComponent("bridge")
+        let now = Date().timeIntervalSince1970
+        let starter = try bridgeRequest(.init(id: UUID(), action: "starter", expiresAt: now + 600), root: bridge, context: context)
+        let revision = try JSONEncoder().encode(XCTUnwrap(starter.starter))
+        let previewRequest = ProgramAgentBridge.Request(id: UUID(), action: "preview", expiresAt: now + 600, revision: revision)
+        let preview = try bridgeRequest(previewRequest, root: bridge, context: context)
+        XCTAssertEqual(preview.status, "previewed")
+        XCTAssertEqual(preview.revisionSHA256, ProgramAgentBridge.hash(revision))
+        let apply = ProgramAgentBridge.Request(id: UUID(), action: "apply", expiresAt: now + 600,
+            previewID: preview.previewID, approvalToken: preview.approvalToken, revisionSHA256: preview.revisionSHA256)
+        try ProgramAgentBridge.write(apply, to: ProgramAgentBridge.path("inbox", apply.id, root: bridge))
+        let oldSelection = UserDefaults.standard.string(forKey: "openlift.lastActivatedTemplateId")
+        // Persist the transaction, then interrupt before ProgramImportService
+        // can update its UserDefaults selection cache or response file.
+        XCTAssertThrowsError(try ProgramAgentBridge.process(id: apply.id, context: context, root: bridge, save: { context in
+            try context.save()
+            throw CocoaError(.fileWriteUnknown)
+        }))
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "openlift.lastActivatedTemplateId"), oldSelection)
+        let reopened = try container(at: root.appendingPathComponent("default.store"))
+        let fresh = ModelContext(reopened)
+        try ProgramAgentBridge.restoreCommittedSelectionCache(context: fresh)
+        let receipt = try XCTUnwrap(ProgramAgentBridge.process(id: apply.id, context: fresh, root: bridge))
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "openlift.lastActivatedTemplateId"), receipt.appliedTemplateID?.uuidString)
+        XCTAssertEqual(receipt.status, "applied")
+        XCTAssertTrue(StoreBackupService.isValidSnapshot(at: URL(fileURLWithPath: try XCTUnwrap(receipt.backupPath))))
+        let count = try fresh.fetchCount(FetchDescriptor<CycleTemplate>())
+        let repeated = try XCTUnwrap(ProgramAgentBridge.process(id: apply.id, context: fresh, root: bridge, now: now + 9000))
+        XCTAssertEqual(repeated.backupPath, receipt.backupPath)
+        XCTAssertEqual(try fresh.fetchCount(FetchDescriptor<CycleTemplate>()), count)
+        var collision = apply; collision.approvalToken = "changed"
+        try ProgramAgentBridge.write(collision, to: ProgramAgentBridge.path("inbox", apply.id, root: bridge))
+        XCTAssertThrowsError(try ProgramAgentBridge.process(id: apply.id, context: fresh, root: bridge))
+    }
+
+    @MainActor
+    func testAgentBridgeDraftStaleApprovalAndTerminalRejection() throws {
+        let (root, _, context) = try fixture()
+        let bridge = root.appendingPathComponent("bridge")
+        let now = Date().timeIntervalSince1970
+        let revision = try JSONEncoder().encode(ProgramImportService.revisionStarter(context: context))
+        let preview = try bridgeRequest(.init(id: UUID(), action: "preview", expiresAt: now + 600, revision: revision), root: bridge, context: context)
+        let draft = Session(cycleInstanceId: UUID(), cycleDayIndex: 0)
+        context.insert(draft); try context.save()
+        let apply = ProgramAgentBridge.Request(id: UUID(), action: "apply", expiresAt: now + 600,
+            previewID: preview.previewID, approvalToken: preview.approvalToken, revisionSHA256: preview.revisionSHA256)
+        let blocked = try bridgeRequest(apply, root: bridge, context: context)
+        XCTAssertEqual(blocked.status, "rejected")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Session>()).first?.id, draft.id)
+        context.delete(draft); try context.save()
+        XCTAssertEqual(try XCTUnwrap(ProgramAgentBridge.process(id: apply.id, context: context, root: bridge)).status, "rejected")
+        XCTAssertEqual(try ProgramImportService.revisionStarter(context: context).sourceProgramVersionID, Program.syncedArmsVersionID)
+        var wrong = apply
+        wrong = .init(id: UUID(), action: "apply", expiresAt: now + 600, previewID: preview.previewID, approvalToken: "bad", revisionSHA256: preview.revisionSHA256)
+        XCTAssertEqual(try bridgeRequest(wrong, root: bridge, context: context).status, "rejected")
+        let wrongDigest = ProgramAgentBridge.Request(id: UUID(), action: "apply", expiresAt: now + 600,
+            previewID: preview.previewID, approvalToken: preview.approvalToken, revisionSHA256: "wrong")
+        XCTAssertEqual(try bridgeRequest(wrongDigest, root: bridge, context: context).status, "rejected")
+        let expired = ProgramAgentBridge.Request(id: UUID(), action: "apply", expiresAt: now - 1,
+            previewID: preview.previewID, approvalToken: preview.approvalToken, revisionSHA256: preview.revisionSHA256)
+        XCTAssertEqual(try bridgeRequest(expired, root: bridge, context: context).status, "expired")
+        let active = try XCTUnwrap(context.fetch(FetchDescriptor<ClusterRotationState>()).first { $0.programVersionID == Program.syncedArmsVersionID })
+        active.positionIndex += 1; try context.save()
+        let stale = ProgramAgentBridge.Request(id: UUID(), action: "apply", expiresAt: now + 600,
+            previewID: preview.previewID, approvalToken: preview.approvalToken, revisionSHA256: preview.revisionSHA256)
+        XCTAssertEqual(try bridgeRequest(stale, root: bridge, context: context).status, "rejected")
+    }
+
+    @MainActor
+    func testAgentBridgeRejectsMalformedPendingAndFailedSaveWithoutMutation() throws {
+        let (root, _, context) = try fixture()
+        let bridge = root.appendingPathComponent("bridge")
+        let now = Date().timeIntervalSince1970
+        let initial = try ProgramImportService.revisionStarter(context: context)
+        let preview = try bridgeRequest(.init(id: UUID(), action: "preview", expiresAt: now + 600, revision: JSONEncoder().encode(initial)), root: bridge, context: context)
+        let bad = try bridgeRequest(.init(id: UUID(), action: "preview", expiresAt: now + 600, revision: Data("{}".utf8)), root: bridge, context: context)
+        XCTAssertEqual(bad.status, "rejected")
+        let marker = TrainingPreference(key: "scratch-pending", modeRawValue: "pending")
+        context.insert(marker)
+        XCTAssertEqual(try bridgeRequest(.init(id: UUID(), action: "status", expiresAt: now + 600), root: bridge, context: context).status, "rejected")
+        context.rollback()
+        let apply = ProgramAgentBridge.Request(id: UUID(), action: "apply", expiresAt: now + 600,
+            previewID: preview.previewID, approvalToken: preview.approvalToken, revisionSHA256: preview.revisionSHA256)
+        try ProgramAgentBridge.write(apply, to: ProgramAgentBridge.path("inbox", apply.id, root: bridge))
+        var failedBackupRequest = apply
+        failedBackupRequest = .init(id: UUID(), action: "apply", expiresAt: now + 600,
+            previewID: preview.previewID, approvalToken: preview.approvalToken, revisionSHA256: preview.revisionSHA256)
+        try ProgramAgentBridge.write(failedBackupRequest, to: ProgramAgentBridge.path("inbox", failedBackupRequest.id, root: bridge))
+        let backupFailed = try XCTUnwrap(ProgramAgentBridge.process(id: failedBackupRequest.id, context: context, root: bridge,
+            snapshot: { _, _ in throw CocoaError(.fileWriteUnknown) }))
+        XCTAssertEqual(backupFailed.status, "rejected")
+        XCTAssertEqual(try ProgramImportService.revisionStarter(context: context), initial)
+        let failed = try XCTUnwrap(ProgramAgentBridge.process(id: apply.id, context: context, root: bridge, save: { _ in throw CocoaError(.fileWriteUnknown) }))
+        XCTAssertEqual(failed.status, "rejected")
+        XCTAssertFalse(context.hasChanges)
+        XCTAssertEqual(try ProgramImportService.revisionStarter(context: context), initial)
+        XCTAssertFalse(try context.fetch(FetchDescriptor<TrainingPreference>()).contains { $0.key.hasPrefix(ProgramAgentBridge.markerPrefix) })
+        let interrupted = ProgramAgentBridge.Request(id: UUID(), action: "apply", expiresAt: now + 600,
+            previewID: preview.previewID, approvalToken: preview.approvalToken, revisionSHA256: preview.revisionSHA256)
+        let interruptedURL = ProgramAgentBridge.path("inbox", interrupted.id, root: bridge)
+        try ProgramAgentBridge.write(interrupted, to: interruptedURL)
+        let intent = ProgramAgentBridge.Receipt(requestID: interrupted.id,
+            requestSHA256: ProgramAgentBridge.hash(try Data(contentsOf: interruptedURL)), status: "interrupted", message: "intent")
+        try ProgramAgentBridge.write(intent, to: ProgramAgentBridge.path("receipts", interrupted.id, root: bridge))
+        XCTAssertEqual(try XCTUnwrap(ProgramAgentBridge.process(id: interrupted.id, context: context, root: bridge)).status, "rejected")
+        XCTAssertEqual(try ProgramImportService.revisionStarter(context: context), initial)
+        XCTAssertNil(try ProgramAgentBridge.process(id: UUID(), context: context, root: bridge))
+        for value in ["openlift-agent://request/../test", "openlift-agent://request/" + UUID().uuidString.lowercased() + "?apply=1", "openlift-agent://apply/" + UUID().uuidString.lowercased()] {
+            XCTAssertNil(ProgramAgentBridge.requestID(from: try XCTUnwrap(URL(string: value))))
+        }
+    }
+}
+
+
+extension ProgramImportTests {
+    @MainActor
+    func testPrepareIsolatedBridgeTransportFixture() throws {
+        let (_, _, context) = try fixture()
+        let cycle = try XCTUnwrap(context.fetch(FetchDescriptor<ActiveCycleInstance>()).first)
+        let template = try XCTUnwrap(context.fetch(FetchDescriptor<CycleTemplate>()).first { $0.id == cycle.templateId })
+        context.insert(Session(cycleInstanceId: cycle.id, cycleDayIndex: 0, cycleNameSnapshot: template.name, dayLabelSnapshot: "Transport fixture", createdAt: .now, finishedAt: .now, status: .completed, exportStatus: .success))
+        try context.save()
+        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OpenLiftAgentTransportFixture-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try StoreBackupService.snapshot(storeAt: context.container.configurations.first!.url, into: directory.appendingPathComponent("default.store"))
+        print("AGENT_TRANSPORT_FIXTURE=" + directory.path)
     }
 }

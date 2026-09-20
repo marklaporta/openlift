@@ -3,12 +3,12 @@ import SwiftData
 
 struct RootTabView: View {
     private enum Tab: Hashable {
-        case log, workout, history, cycle
+        case log, workout, history, legacyTestAdministration
     }
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
-    @State private var selectedTab: Tab = AppRuntime.isUITesting && ProcessInfo.processInfo.environment["OPENLIFT_PROGRAM_IMPORT_UI"] == "1" ? .cycle : .workout
+    @State private var selectedTab: Tab = .workout
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -29,15 +29,19 @@ struct RootTabView: View {
                     Label("History", systemImage: "clock.arrow.circlepath")
                 }
                 .tag(Tab.history)
-
-            CycleView()
-                .tabItem {
-                    Label("Cycle", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .tag(Tab.cycle)
-
+            #if DEBUG
+            if AppRuntime.isUITesting && ProcessInfo.processInfo.environment["OPENLIFT_LEGACY_ADMIN_UI"] == "1" {
+                CycleView()
+                    .tabItem { Label("Cycle", systemImage: "arrow.triangle.2.circlepath") }
+                    .tag(Tab.legacyTestAdministration)
+            }
+            #endif
+        }
+        .onOpenURL { url in
+            ProgramAgentBridge.handle(url, context: modelContext)
         }
         .task {
+            ProgramAgentBridge.prepareDirectories()
             _ = try? BootstrapDataService.ensureExerciseCatalog(modelContext: modelContext)
             _ = try? AdaptiveProgramService.normalizeLegacyDemoLabels(modelContext: modelContext)
             _ = try? AdaptiveProgramService.ensureWorkoutSizePreferences(modelContext: modelContext)

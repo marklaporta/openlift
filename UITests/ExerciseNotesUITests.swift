@@ -2,7 +2,7 @@ import XCTest
 
 final class ExerciseNotesUITests: OpenLiftUITestCase {
     func testFixedNoteSaveReopenCancelAndClearSharedWithAdHocLogging() throws {
-        let app = launchApp()
+        let app = launchLegacyAdministrationApp()
         submitFixedReadiness(in: app)
         let note = app.buttons["exercise.notes.Flat DB Press"]
         scrollToElement(note, in: app)
@@ -51,7 +51,7 @@ final class ExerciseNotesUITests: OpenLiftUITestCase {
     }
 
     func testAdaptiveExerciseNoteCanBeSavedDuringExecution() throws {
-        let app = launchApp(["OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW"])
+        let app = launchLegacyAdministrationApp(["OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW"])
         app.tabBars.buttons["Cycle"].tap()
         dismissExpectedICloudCycleAlertIfPresent(in: app)
         confirmTrainingMode("Adaptive Floating", in: app)

@@ -2,7 +2,7 @@ import XCTest
 
 final class SyncedArmsUITests: OpenLiftUITestCase {
     func testSyncedArmsButtonBlocksDraftAndPersistsCold() throws {
-        let app = XCUIApplication()
+        let app = legacyAdministrationApp()
         app.launchArguments = ["OPENLIFT_UI_TESTING", "OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION"]
         app.launchEnvironment["OPENLIFT_SIDE_DELT_UI_ID"] = UUID().uuidString
         app.launchEnvironment["OPENLIFT_CHEST_BACK_UI"] = "1"
@@ -49,7 +49,7 @@ final class SyncedArmsUITests: OpenLiftUITestCase {
         XCTAssertTrue(persisted.exists)
     }
     func testHammerBlankRowsAndOverheadPerSideNote() throws {
-        let app = XCUIApplication()
+        let app = legacyAdministrationApp()
         app.launchArguments = ["OPENLIFT_UI_TESTING", "OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION"]
         app.launchEnvironment["OPENLIFT_SIDE_DELT_UI_ID"] = UUID().uuidString
         for key in ["OPENLIFT_CHEST_BACK_UI", "OPENLIFT_ROW_PAIRING_UI", "OPENLIFT_BALANCED_UI", "OPENLIFT_QUAD_PHASE_UI", "OPENLIFT_SYNCED_ARMS_UI", "OPENLIFT_SYNCED_ARMS_ROWS_UI"] { app.launchEnvironment[key] = "1" }
