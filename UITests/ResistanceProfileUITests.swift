@@ -9,12 +9,24 @@ final class ResistanceProfileUITests: OpenLiftUITestCase {
         XCTAssertTrue(app.staticTexts["Upper A · Draft session"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["fixed.resistanceProfile.Flat DB Press"].exists)
         let profile = app.buttons["fixed.resistanceProfile.Cable Crossover Lateral Raise"]
+        func openProfile() {
+            if app.keyboards.firstMatch.exists { app.buttons["Done"].firstMatch.tap() }
+            scrollToElement(profile, in: app, toward: .top)
+            // XCTest can report a row hidden by navigation chrome as hittable
+            // after keyboard-induced scrolling.
+            for _ in 0..<4 {
+                if profile.frame.minY > app.navigationBars.firstMatch.frame.maxY { break }
+                app.swipeDown()
+            }
+            profile.tap()
+            XCTAssertTrue(app.navigationBars["Cable Resistance"].waitForExistence(timeout: 3))
+        }
         scrollToElement(profile, in: app)
         let weight = app.textFields["fixed.weight.Cable Crossover Lateral Raise.1"]
         scrollToElement(weight, in: app)
         weight.tap()
         weight.typeText("130")
-        profile.tap()
+        openProfile()
         app.buttons["VOLTRA"].tap()
         let chainUnit = app.segmentedControls["voltraChainUnit"]
         XCTAssertTrue(chainUnit.waitForExistence(timeout: 5))
@@ -31,13 +43,13 @@ final class ResistanceProfileUITests: OpenLiftUITestCase {
         XCTAssertTrue(app.staticTexts["voltraEccentricEquivalent.130.0"].label.contains("≈26.9%"))
         // Reopen the saved sheet to capture both equivalent rows without the keypad.
         app.buttons["Save"].tap()
-        profile.tap()
+        openProfile()
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "VOLTRA whole-number pounds with live equivalents"; shot.lifetime = .keepAlways; add(shot)
         app.buttons["Save"].tap()
         XCTAssertTrue(profile.waitForExistence(timeout: 5))
         XCTAssertTrue(profile.label.contains("35 lb"))
-        profile.tap()
+        openProfile()
         XCTAssertTrue(chainUnit.buttons["lb"].isSelected)
         XCTAssertEqual(app.textFields["voltraChainAmount"].value as? String, "35")
         app.segmentedControls["voltraEccentricUnit"].buttons["%"].tap()
@@ -53,7 +65,7 @@ final class ResistanceProfileUITests: OpenLiftUITestCase {
         weight.tap()
         let currentWeight = weight.value as? String ?? ""
         weight.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: currentWeight.count) + "130")
-        profile.tap()
+        openProfile()
         XCTAssertTrue(app.staticTexts["voltraEccentricEquivalent.130.0"].label.contains("=39 lb"))
         let mixedShot = XCTAttachment(screenshot: app.screenshot())
         mixedShot.name = "VOLTRA mixed units with reciprocal equivalents"

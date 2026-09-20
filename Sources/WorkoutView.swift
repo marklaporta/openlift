@@ -997,6 +997,7 @@ struct WorkoutView: View {
                 rotationWorkoutContent
             }
         }
+        .modifier(InputResponsivenessProbe())
         .sheet(item: $swapContext) { context in
             let currentExercise = exercises.first(where: { $0.id == context.currentExerciseId })
             ExerciseSwapSheet(
@@ -2081,7 +2082,7 @@ struct WorkoutView: View {
                     exerciseId: resolved.exerciseId,
                     setIndex: setIndex,
                     weight: prefills.weight,
-                    reps: prefills.reps,
+                    reps: 0,
                     isLocked: false,
                     loadExerciseName: exercises.first(where: { $0.id == resolved.exerciseId })?.name
                 )
@@ -2111,7 +2112,7 @@ struct WorkoutView: View {
                 exerciseId: exerciseId,
                 setIndex: newIndex,
                 weight: prefills.weight,
-                reps: prefills.reps,
+                reps: 0,
                 loadExerciseName: exercises.first(where: { $0.id == exerciseId })?.name
             )
             try newEntry.validate()
@@ -2243,7 +2244,7 @@ struct WorkoutView: View {
                         exerciseId: exercise.id,
                         setIndex: setIndex,
                         weight: values.weight,
-                        reps: values.reps,
+                        reps: 0,
                         loadExerciseName: exercise.name
                     )
                 )
@@ -2533,7 +2534,7 @@ struct WorkoutView: View {
                 exerciseId: exercise.id,
                 setIndex: setIndex,
                 weight: values.weight,
-                reps: values.reps,
+                reps: 0,
                 loadExerciseName: exercise.name
             )
             try entry.validate()
@@ -2848,7 +2849,7 @@ struct WorkoutView: View {
                             exerciseId: slot.exerciseId,
                             setIndex: index,
                             weight: value.weight,
-                            reps: value.reps,
+                            reps: 0,
                             loadExerciseName: exercises.first(where: { $0.id == slot.exerciseId })?.name
                         )
                     )
@@ -2907,7 +2908,7 @@ struct WorkoutView: View {
                         exerciseId: exercise.id,
                         setIndex: index,
                         weight: value.weight,
-                        reps: value.reps,
+                        reps: 0,
                         loadExerciseName: exercise.name
                     )
                 )
@@ -3428,12 +3429,7 @@ private struct ExerciseSection: View {
         "\(sessionId.uuidString)|\(String(describing: slot.persistentModelID))"
     }
 
-    private enum RowField: Hashable {
-        case weight(UUID), reps(UUID)
-    }
-    @FocusState private var focusedField: RowField?
-    @State private var bufferedEntries: [Int: WorkoutEntryEditing.EntryState] = [:]
-    @State private var pendingCommitTask: Task<Void, Never>?
+    @State private var textBuffer = WorkoutTextBuffer()
     @State private var registeredBufferKey: String?
 
     var body: some View {
@@ -3442,7 +3438,7 @@ private struct ExerciseSection: View {
                 ExerciseNotesControl(exercise: exercise)
             }
             if let prefillSource {
-                Label(prefillSource, systemImage: "arrow.uturn.backward.circle")
+                Label("Previous: \(prefillSource)", systemImage: "arrow.uturn.backward.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -3454,7 +3450,7 @@ private struct ExerciseSection: View {
                     occurrenceId: nil,
                     profile: resistanceProfile,
                     profiles: resistanceProfiles,
-                    baseWeights: entries.map { bufferedEntries[$0.setIndex]?.weight ?? $0.weight },
+                    baseWeights: entries.map(\.weight),
                     onError: onError
                 )
                 .accessibilityIdentifier("fixed.resistanceProfile.\(exercise.name)")
@@ -3467,13 +3463,11 @@ private struct ExerciseSection: View {
 
                     if GripperLoadPresentation.applies(exerciseId: exercise?.id, name: exercise?.name) {
                         Text("Model").font(.caption2).foregroundStyle(.secondary)
-                        GripperModelPicker(value: Binding(get: { bufferedEntries[entry.setIndex]?.weight ?? entry.weight },
+                        GripperModelPicker(value: Binding(get: { entry.weight },
                             set: { value in
                                 guard !entry.isLocked else { return }
-                                var states = currentBufferedStates()
-                                WorkoutEntryEditing.applyWeightEdit(to: &states, setIndex: entry.setIndex, newWeight: value)
-                                bufferedEntries = Dictionary(states.map { ($0.setIndex, $0) }, uniquingKeysWith: { _, latest in latest })
-                                scheduleBufferedCommit()
+                                textBuffer.set(String(value), for: .init(entryID: entry.id, kind: .weight))
+                                _ = commitBufferedEntries()
                             }))
                             .disabled(!isExecutionEnabled || entry.isLocked)
                             .accessibilityIdentifier("fixed.model.\(exercise?.name ?? "unknown").\(entry.setIndex)")
@@ -3481,114 +3475,19 @@ private struct ExerciseSection: View {
                         Text(usesAssistanceLoad ? "A" : "W")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        TextField(
-                            usesAssistanceLoad ? "Assist" : "Weight",
-                            value: Binding<Double?>(
-                                get: {
-                                    WorkoutEntryEditing.displayWeight(
-                                        bufferedEntries[entry.setIndex]?.weight ?? entry.weight
-                                    )
-                                },
-                                set: { newWeight in
-                                    guard !entry.isLocked else { return }
-                                    var states = currentBufferedStates()
-                                    WorkoutEntryEditing.applyWeightEdit(
-                                        to: &states,
-                                        setIndex: entry.setIndex,
-                                        newWeight: newWeight
-                                    )
-
-                                    bufferedEntries = Dictionary(
-                                        states.map { ($0.setIndex, $0) },
-                                        uniquingKeysWith: { _, latest in latest }
-                                    )
-                                    scheduleBufferedCommit()
-                                }
-                            ),
-                            format: WeightFormatting.style
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(.decimalPad)
-                        .frame(width: 82)
-                        .accessibilityIdentifier(
-                            "fixed.weight.\(exercise?.name ?? "unknown").\(entry.setIndex)"
-                        )
-                        .disabled(entry.isLocked)
-                        .disabled(!isExecutionEnabled || entry.isLocked)
-                        .opacity(entry.isLocked ? 1 : 0.55)
-                        .focused($focusedField, equals: .weight(entry.id))
+                        numericField(entry, kind: .weight)
+                            .frame(width: 82, height: 36)
 
                     }
 
                     Text("R")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    TextField(
-                        "Reps",
-                        value: Binding<Int?>(
-                            get: {
-                                WorkoutEntryEditing.displayReps(
-                                    bufferedEntries[entry.setIndex]?.reps ?? entry.reps
-                                )
-                            },
-                            set: { newReps in
-                                guard !entry.isLocked else { return }
-                                var states = currentBufferedStates()
-                                WorkoutEntryEditing.applyRepsEdit(
-                                    to: &states,
-                                    setIndex: entry.setIndex,
-                                    newReps: newReps
-                                )
-
-                                bufferedEntries = Dictionary(
-                                    states.map { ($0.setIndex, $0) },
-                                    uniquingKeysWith: { _, latest in latest }
-                                )
-                                scheduleBufferedCommit()
-                            }
-                        ),
-                        format: .number
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .keyboardType(.numberPad)
-                    .frame(width: 56)
-                    .accessibilityIdentifier(
-                        "fixed.reps.\(exercise?.name ?? "unknown").\(entry.setIndex)"
-                    )
-                    .disabled(!isExecutionEnabled || entry.isLocked)
-                    .opacity(entry.isLocked ? 1 : 0.55)
-                    .focused($focusedField, equals: .reps(entry.id))
+                    numericField(entry, kind: .reps)
+                        .frame(width: 56, height: 36)
 
                     Button {
-                        focusedField = nil
-                        guard commitBufferedEntries() else { return }
-                        if !entry.isLocked && entry.weight == 0 && entry.reps == 0 {
-                            return
-                        }
-                        if !entry.isLocked, exercise?.equipment.supportsResistanceProfile == true {
-                            do {
-                                try ResistanceProfileService.freezeBeforeLock(
-                                    profileId: resistanceProfile?.id,
-                                    modelContext: modelContext
-                                )
-                            } catch {
-                                onError(error.localizedDescription)
-                                return
-                            }
-                        }
-                        WorkoutEntryEditing.setLocked(
-                            !entry.isLocked,
-                            entry: entry
-                        )
-                        do {
-                            try modelContext.save()
-                            synchronizeBuffersFromModels()
-                            onEntryUpdated()
-                        } catch {
-                            modelContext.rollback()
-                            synchronizeBuffersFromModels()
-                            onError(error.localizedDescription)
-                        }
+                        _ = toggleComplete(entry)
                     } label: {
                         Image(systemName: entry.isLocked ? "checkmark.square.fill" : "square")
                             .foregroundStyle(entry.isLocked ? .green : .secondary)
@@ -3597,12 +3496,10 @@ private struct ExerciseSection: View {
                     .accessibilityIdentifier(
                         "fixed.lock.\(exercise?.name ?? "unknown").\(entry.setIndex)"
                     )
-                    .disabled(
-                        !isExecutionEnabled
-                            || (!entry.isLocked
-                                && (bufferedEntries[entry.setIndex]?.weight ?? entry.weight) == 0
-                                && (bufferedEntries[entry.setIndex]?.reps ?? entry.reps) == 0)
-                    )
+                    .accessibilityLabel(entry.isLocked ? "Edit set \(entry.setIndex)" : "Complete set \(entry.setIndex)")
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+                    .disabled(!isExecutionEnabled)
                 }
             }
         } header: {
@@ -3681,18 +3578,10 @@ private struct ExerciseSection: View {
             }
         }
         .onAppear {
-            synchronizeBuffersFromModels()
             registerBufferFlusher()
         }
         .onChange(of: entries.map(\.id)) { _, _ in
-            guard pendingCommitTask == nil else { return }
-            synchronizeBuffersFromModels()
             registerBufferFlusher()
-        }
-        .onChange(of: focusedField) { oldValue, newValue in
-            if oldValue != nil && oldValue != newValue {
-                _ = commitBufferedEntries()
-            }
         }
         .onDisappear {
             _ = commitBufferedEntries()
@@ -3707,69 +3596,60 @@ private struct ExerciseSection: View {
         }
     }
 
-    private func currentBufferedStates() -> [WorkoutEntryEditing.EntryState] {
-        entries.map { entry in
-            bufferedEntries[entry.setIndex] ?? WorkoutEntryEditing.EntryState(entry: entry)
-        }
+    private func numericField(_ entry: SetEntry, kind: WorkoutTextBuffer.Kind) -> some View {
+        WorkoutNumericField(
+            key: .init(entryID: entry.id, kind: kind), buffer: textBuffer,
+            value: kind == .weight
+                ? (entry.weight == 0 ? "" : entry.weight.formatted(WeightFormatting.style))
+                : (entry.reps == 0 ? "" : String(entry.reps)),
+            placeholder: kind == .weight ? (usesAssistanceLoad ? "Assist" : "Weight") : "Reps",
+            identifier: "fixed.\(kind == .weight ? "weight" : "reps").\(exercise?.name ?? "unknown").\(entry.setIndex)",
+            isEnabled: isExecutionEnabled && !entry.isLocked,
+            onChange: { textBuffer.scheduleCommit { _ = commitBufferedEntries(reportErrors: false) } },
+            onCommit: { commitBufferedEntries() },
+            onComplete: { entry.isLocked || toggleComplete(entry) }
+        )
     }
 
     private func registerBufferFlusher() {
         if let registeredBufferKey, registeredBufferKey != bufferRegistrationKey {
             bufferCoordinator.unregister(key: registeredBufferKey)
         }
-        bufferCoordinator.register(key: bufferRegistrationKey) {
-            commitBufferedEntries()
-        }
+        bufferCoordinator.register(key: bufferRegistrationKey) { commitBufferedEntries() }
         registeredBufferKey = bufferRegistrationKey
     }
 
-    private func synchronizeBuffersFromModels() {
-        bufferedEntries = Dictionary(
-            entries.map {
-                let state = WorkoutEntryEditing.EntryState(entry: $0)
-                return (state.setIndex, state)
-            },
-            uniquingKeysWith: { _, latest in latest }
-        )
-        pendingCommitTask = nil
-    }
-
-    private func scheduleBufferedCommit() {
-        pendingCommitTask?.cancel()
-        pendingCommitTask = Task { @MainActor in
-            do {
-                try await Task.sleep(for: .milliseconds(200))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            _ = commitBufferedEntries()
+    @discardableResult
+    private func toggleComplete(_ entry: SetEntry) -> Bool {
+        guard isExecutionEnabled else { onError(FixedCycleWorkoutError.readinessRequired.localizedDescription); return false }
+        guard commitBufferedEntries() else { return false }
+        do {
+            let requiresProfile = exercise?.equipment.supportsResistanceProfile == true
+            let profile = requiresProfile ? try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+                .first { $0.id == resistanceProfile?.id } : nil
+            try WorkoutInputPersistence.toggleComplete(entry, profile: profile,
+                requiresProfile: requiresProfile, context: modelContext)
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            onEntryUpdated()
+            return true
+        } catch {
+            onError(error.localizedDescription)
+            return false
         }
     }
 
     @discardableResult
-    private func commitBufferedEntries() -> Bool {
-        pendingCommitTask?.cancel()
-        pendingCommitTask = nil
-        var changed = false
-        for entry in entries {
-            guard let state = bufferedEntries[entry.setIndex], !entry.isLocked else { continue }
-            if entry.weight != state.weight || entry.reps != state.reps {
-                entry.weight = state.weight
-                entry.reps = state.reps
-                changed = true
-            }
-        }
-        guard changed else { return true }
+    private func commitBufferedEntries(reportErrors: Bool = true) -> Bool {
+        textBuffer.cancelCommit()
+        guard !textBuffer.edits.isEmpty else { return true }
         do {
-            try modelContext.save()
-            synchronizeBuffersFromModels()
-            onEntryUpdated()
+            let changed = try WorkoutInputPersistence.commit(textBuffer, entries: entries, context: modelContext)
+            if changed { onEntryUpdated() }
             return true
         } catch {
-            modelContext.rollback()
-            synchronizeBuffersFromModels()
-            onError(error.localizedDescription)
+            // Raw text survives rollback and can be corrected/retried, rather than
+            // displaying the old stored value as though the attempted edit saved.
+            if reportErrors { onError(error.localizedDescription) }
             return false
         }
     }

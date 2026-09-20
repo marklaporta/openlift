@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D20260920000000000000003 /* WorkoutNumericField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20260920000000000000004 /* WorkoutNumericField.swift */; };
+		D20260920000000000000001 /* InputResponsivenessProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20260920000000000000002 /* InputResponsivenessProbe.swift */; };
 		C95000000000000000000001 /* ProgramImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C96000000000000000000001; };
 		C93000000000000000000002 /* BundledClusterPrograms.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94000000000000000000002 /* BundledClusterPrograms.swift */; };
 		C93000000000000000000001 /* ClusterProgramDefinition.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94000000000000000000001 /* ClusterProgramDefinition.swift */; };
@@ -66,6 +68,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D20260920000000000000004 /* WorkoutNumericField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutNumericField.swift; sourceTree = "<group>"; };
+		D20260920000000000000002 /* InputResponsivenessProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputResponsivenessProbe.swift; sourceTree = "<group>"; };
 		C96000000000000000000001 /* ProgramImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramImportService.swift; sourceTree = "<group>"; };
 		C94000000000000000000002 /* BundledClusterPrograms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundledClusterPrograms.swift; sourceTree = "<group>"; };
 		C94000000000000000000001 /* ClusterProgramDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClusterProgramDefinition.swift; sourceTree = "<group>"; };
@@ -204,6 +208,8 @@
 				F20000000000000000000005 /* TrainingModeService.swift */,
 				F20000000000000000000042 /* StoreBackupService.swift */,
 				C0C100000000000000000002 /* GripperLoadPresentation.swift */,
+				D20260920000000000000002 /* InputResponsivenessProbe.swift */,
+				D20260920000000000000004 /* WorkoutNumericField.swift */,
 				9275815CF668B77423798D35 /* WorkoutView.swift */,
 			);
 			path = Sources;
@@ -374,6 +380,8 @@
 				F10000000000000000000005 /* TrainingModeService.swift in Sources */,
 				F10000000000000000000042 /* StoreBackupService.swift in Sources */,
 				C0C100000000000000000001 /* GripperLoadPresentation.swift in Sources */,
+				D20260920000000000000001 /* InputResponsivenessProbe.swift in Sources */,
+				D20260920000000000000003 /* WorkoutNumericField.swift in Sources */,
 				978168F33A22E2B56E3A59B8 /* WorkoutView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
