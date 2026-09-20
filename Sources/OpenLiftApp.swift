@@ -116,6 +116,17 @@ struct OpenLiftApp: App {
                     }
                 }
             }
+            if ProcessInfo.processInfo.environment["OPENLIFT_PROGRAM_IMPORT_UI"] == "1", !hasSideDeltFixture {
+                let context = ModelContext(container)
+                do {
+                    _ = try BootstrapDataService.prepareSyncedArmsRevision(modelContext: context, backupConfirmed: true)
+                    for state in try context.fetch(FetchDescriptor<ClusterRotationState>()) { state.positionIndex = 0 }
+                    try context.save()
+                    let package = try ProgramImportService.revisionStarter(context: context)
+                    let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    try JSONEncoder().encode(package).write(to: directory.appendingPathComponent("OpenLift-Test-Revision.json"), options: .atomic)
+                } catch { fatalError("Program import UI fixture failed: \(error)") }
+            }
             return OpenLiftContainerStartup(
                 container: container,
                 issue: nil

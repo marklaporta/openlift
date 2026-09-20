@@ -452,3 +452,9 @@ modifier changes, retain useful tenths without trailing `.0`, and mark rounding
 with `≈`. Zero/missing/nonfinite bases produce no fabricated conversion. Selected
 units and stored amounts remain authoritative; this is UI-only with no schema or
 training-history rewrite.
+
+Imported clustered definitions are stored immutably with their templates in
+namespaced rotation-pool metadata, without a schema change or process-global
+registry. Runtime selections carry the definition explicitly. Program updates
+use read-only preview followed by fresh-backup-protected atomic activation;
+exports retain the definition and catalog evidence. See [program updates](program-updates.md).

@@ -8,7 +8,7 @@ struct RootTabView: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
-    @State private var selectedTab: Tab = .workout
+    @State private var selectedTab: Tab = AppRuntime.isUITesting && ProcessInfo.processInfo.environment["OPENLIFT_PROGRAM_IMPORT_UI"] == "1" ? .cycle : .workout
 
     var body: some View {
         TabView(selection: $selectedTab) {

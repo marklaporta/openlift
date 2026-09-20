@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C95000000000000000000001 /* ProgramImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C96000000000000000000001; };
 		C93000000000000000000002 /* BundledClusterPrograms.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94000000000000000000002 /* BundledClusterPrograms.swift */; };
 		C93000000000000000000001 /* ClusterProgramDefinition.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94000000000000000000001 /* ClusterProgramDefinition.swift */; };
 		C0C100000000000000000001 /* GripperLoadPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C100000000000000000002 /* GripperLoadPresentation.swift */; };
@@ -65,6 +66,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C96000000000000000000001 /* ProgramImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramImportService.swift; sourceTree = "<group>"; };
 		C94000000000000000000002 /* BundledClusterPrograms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundledClusterPrograms.swift; sourceTree = "<group>"; };
 		C94000000000000000000001 /* ClusterProgramDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClusterProgramDefinition.swift; sourceTree = "<group>"; };
 		C0C100000000000000000002 /* GripperLoadPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GripperLoadPresentation.swift; sourceTree = "<group>"; };
@@ -169,6 +171,7 @@
 				C92000000000000000000001 /* WorkoutCompletionService.swift */,
 				C94000000000000000000002 /* BundledClusterPrograms.swift */,
 				C94000000000000000000001 /* ClusterProgramDefinition.swift */,
+				C96000000000000000000001 /* ProgramImportService.swift */,
 				F2000000000000000000000E /* AdaptiveWorkoutView.swift */,
 				5BFA6838778B4C1F8BD337E6 /* AppRuntime.swift */,
 				F6973607E1B44FC016352114 /* Assets.xcassets */,
@@ -341,6 +344,7 @@
 				C91000000000000000000001 /* WorkoutCompletionService.swift in Sources */,
 				C93000000000000000000002 /* BundledClusterPrograms.swift in Sources */,
 				C93000000000000000000001 /* ClusterProgramDefinition.swift in Sources */,
+				C95000000000000000000001 /* ProgramImportService.swift in Sources */,
 				F1000000000000000000000E /* AdaptiveWorkoutView.swift in Sources */,
 				02DA37FA2EF34418B76A2695 /* AppRuntime.swift in Sources */,
 				8B52A251828F8378E3602B5B /* BootstrapDataService.swift in Sources */,

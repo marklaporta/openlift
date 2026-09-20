@@ -1409,7 +1409,7 @@ struct WorkoutView: View {
                 occurrences: clusterOccurrences
             )
             let displayedStep = completed.map {
-                $0.positionIndex % FixedCycleClusterProgramService.rotationLength(selection.cluster, version: selection.programVersionID)
+                $0.positionIndex % FixedCycleClusterProgramService.rotationLength(selection.cluster, version: selection.programVersionID, definition: selection.definition)
             } ?? selection.effectiveStep
             let ids = Set(completed?.exerciseSnapshots.map(\.exerciseId)
                 ?? FixedCycleClusterProgramService.resolvedSlots(
@@ -1479,19 +1479,18 @@ struct WorkoutView: View {
                                 slotPosition: slot.position,
                                 overrides: clusterExerciseOverrides
                             ) != nil
-                        if [FixedCycleClusterProgramService.chestBackVersionID, FixedCycleClusterProgramService.balancedVersionID, FixedCycleClusterProgramService.syncedArmsVersionID].contains(selection.programVersionID),
-                           resolved.exerciseId == FixedCycleClusterProgramService.singleArmPulldownID {
+                        if resolved.exerciseId == FixedCycleClusterProgramService.singleArmPulldownID {
                             Text("Seated side-on. Each row = one set on each side; log load and reps per side, not the combined total.")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("workout.singleArmPulldownLoggingNote")
                         }
-                        if key == FixedCycleClusterProgramService.sideDeltProgressionKey || ([FixedCycleClusterProgramService.balancedVersionID, FixedCycleClusterProgramService.syncedArmsVersionID].contains(selection.programVersionID) && resolved.exerciseId == FixedCycleClusterProgramService.sideDeltExerciseID) {
+                        if key == FixedCycleClusterProgramService.sideDeltProgressionKey || resolved.exerciseId == FixedCycleClusterProgramService.sideDeltExerciseID {
                             Text("Each row = one set on each side. Log the single dumbbell's weight and reps per side, not the left + right total.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .accessibilityIdentifier("workout.sideDeltLoggingNote")
                         }
-                        if selection.programVersionID == FixedCycleClusterProgramService.syncedArmsVersionID && resolved.exerciseId == FixedCycleClusterProgramService.singleArmOverheadID {
+                        if resolved.exerciseId == FixedCycleClusterProgramService.singleArmOverheadID {
                             Text("Each row = one set on each side. Log cable load and reps per side, not the combined total.")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("workout.singleArmOverheadLoggingNote")

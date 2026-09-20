@@ -675,6 +675,15 @@ enum SessionExportService {
         let created_at: String
     }
 
+    struct ProgramCatalogEntry: Codable, Equatable, Sendable {
+        let id: UUID
+        let name: String
+        let notes: String
+        let muscle: String
+        let type: String
+        let equipment: String
+    }
+
     struct FixedCycleMetadata: Codable, Equatable, Sendable {
         let schema_version: Int
         let template_id: String
@@ -691,6 +700,8 @@ enum SessionExportService {
         let cluster_rotation_states: [ClusterRotationStatePayload]?
         let cluster_exercise_preferences: [ClusterExercisePreferencePayload]?
         let cluster_exercise_overrides: [ClusterExerciseOverridePayload]?
+        let program_definition: String?
+        let program_catalog: [ProgramCatalogEntry]?
 
         init(
             schema_version: Int,
@@ -707,7 +718,9 @@ enum SessionExportService {
             cluster_occurrences: [ClusterOccurrencePayload]?,
             cluster_rotation_states: [ClusterRotationStatePayload]?,
             cluster_exercise_preferences: [ClusterExercisePreferencePayload]? = nil,
-            cluster_exercise_overrides: [ClusterExerciseOverridePayload]? = nil
+            cluster_exercise_overrides: [ClusterExerciseOverridePayload]? = nil,
+            program_definition: String? = nil,
+            program_catalog: [ProgramCatalogEntry]? = nil
         ) {
             self.schema_version = schema_version
             self.template_id = template_id
@@ -724,6 +737,8 @@ enum SessionExportService {
             self.cluster_rotation_states = cluster_rotation_states
             self.cluster_exercise_preferences = cluster_exercise_preferences
             self.cluster_exercise_overrides = cluster_exercise_overrides
+            self.program_definition = program_definition
+            self.program_catalog = program_catalog
         }
     }
 
@@ -875,7 +890,7 @@ enum SessionExportService {
         // V7 captures effective carried selections, including untouched future
         // slots. Recovery must not reconstruct them from older defaults.
         var exportedClusterPreferences = clusterExercisePreferences
-        if [FixedCycleClusterProgramService.balancedVersionID, FixedCycleClusterProgramService.syncedArmsVersionID].contains(FixedCycleClusterProgramService.versionID(for: template)) {
+        if [FixedCycleClusterProgramService.balancedVersionID, FixedCycleClusterProgramService.syncedArmsVersionID].contains(FixedCycleClusterProgramService.versionID(for: template)) || ClusterProgramDefinition.embedded(in: template) != nil {
             let version = FixedCycleClusterProgramService.versionID(for: template)
             for day in template.days { for slot in day.slots {
                 let key = ClusterExercisePreference.key(programVersionID: version, templateDayPosition: day.position, slotPosition: slot.position)
@@ -1147,7 +1162,14 @@ enum SessionExportService {
                         equipment: exercise.equipment.rawValue,
                         created_at: iso.string(from: $0.createdAt)
                     )
-                } : nil
+                } : nil,
+            program_definition: ClusterProgramDefinition.embedded(in: template).flatMap { try? $0.embeddedKey() },
+            program_catalog: ClusterProgramDefinition.embedded(in: template).map { definition in
+                let referenced = Set(definition.exercises.values.compactMap { $0.resolve(in: exercises)?.id })
+                return exercises.filter { referenced.contains($0.id) }.sorted { $0.id.uuidString < $1.id.uuidString }.map {
+                    ProgramCatalogEntry(id: $0.id, name: $0.name, notes: $0.notes, muscle: $0.primaryMuscle.rawValue, type: $0.type.rawValue, equipment: $0.equipment.rawValue)
+                }
+            }
         )
     }
 
@@ -1181,7 +1203,7 @@ enum SessionExportService {
                 $0.clusterID < $1.clusterID
             }).first else { return nil }
             let templateID = frozenOccurrence.templateId
-            let frozenTemplate = CycleTemplate(
+            let frozenTemplate = templates.first { $0.id == templateID } ?? CycleTemplate(
                 id: templateID,
                 name: FixedCycleClusterProgramService.templateName,
                 days: []
@@ -1277,6 +1299,18 @@ enum SessionExportService {
         return try writeCompletedExport(snapshot, requireICloudMirror: requireICloudMirror, environment: environment)
     }
 
+    static func validateImportedDefinitionEvidence(_ metadata: FixedCycleMetadata?) throws {
+        guard let metadata, (metadata.program_version ?? 0) >= 9 else { return }
+        guard metadata.program_identifier == FixedCycleClusterProgramService.programIdentifier,
+              let marker = metadata.program_definition, let catalog = metadata.program_catalog,
+              !catalog.isEmpty else { throw ProgramImportService.Failure.invalid("Imported program recovery evidence is missing; export remains pending.") }
+        guard let definition = ClusterProgramDefinition.decodeMarker(marker), definition.versionNumber == metadata.program_version,
+              Set(catalog.map(\.id)).count == catalog.count,
+              definition.referencedExerciseIDs.isSubset(of: Set(catalog.map(\.id))) else {
+            throw ProgramImportService.Failure.invalid("Imported program recovery evidence is invalid; export remains pending.")
+        }
+    }
+
     @discardableResult
     static func prepareExport(
         session: Session,
@@ -1287,6 +1321,7 @@ enum SessionExportService {
         fixedCycleMetadata: FixedCycleMetadata? = nil,
         resistanceProfiles: [ExerciseResistanceProfile] = []
     ) throws -> CompletedExportSnapshot {
+        try validateImportedDefinitionEvidence(fixedCycleMetadata)
         let loggedEntries = exportableSetEntries(
             setEntries,
             fixedCycleMetadata: fixedCycleMetadata
@@ -1639,6 +1674,7 @@ enum SessionExportService {
     }
 
     static func exportDraftSnapshot(snapshot: DraftSnapshot) throws {
+        try validateImportedDefinitionEvidence(snapshot.fixedCycleMetadata)
         let exerciseById = Dictionary(uniqueKeysWithValues: snapshot.exercises.map { ($0.id, $0) })
         let grouped = Dictionary(grouping: snapshot.entries, by: \.exerciseId)
 
