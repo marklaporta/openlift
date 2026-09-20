@@ -808,6 +808,7 @@ extension SideDeltRevisionTests {
         let context = ModelContext(store)
         let catalog = try context.fetch(FetchDescriptor<Exercise>())
         let canonical = try XCTUnwrap(catalog.first { $0.id == CSDBRowIdentity.canonicalID })
+        let originalName = canonical.name
         let before = try databaseRows(at: url)
         XCTAssertEqual(catalog.count, 77)
         canonical.notes += "pending"
@@ -819,7 +820,7 @@ extension SideDeltRevisionTests {
         context.delete(draft); try context.save()
         XCTAssertThrowsError(try BootstrapDataService.consolidateCSDBRow(modelContext: context, backupDirectory: root,
             snapshot: { _, _ in throw NSError(domain: "test-backup", code: 1) }))
-        XCTAssertEqual(canonical.name, "CS DB Row")
+        XCTAssertEqual(canonical.name, originalName)
         let result = try BootstrapDataService.consolidateCSDBRow(modelContext: context, backupDirectory: root)
         XCTAssertTrue(result.didApply)
         XCTAssertTrue(StoreBackupService.isValidSnapshot(at: try XCTUnwrap(result.backupURL)))

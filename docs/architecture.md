@@ -180,7 +180,7 @@ The Workout tab owns:
 - draft-session creation
 - set entry editing
 - history-prefill behavior
-- workout completion
+- invoking local workout completion commands
 - draft export snapshots
 - malformed-entry repair logic
 
@@ -217,9 +217,29 @@ Key Fixed Cycle behavior:
 - when a persistent removal follows completed draft work, a V9 occurrence
   snapshot retains the pre-edit membership so those sets remain visible and
   exportable while the future template immediately omits the removed item
-- finishing requires at least one locked working set with reps, converts the
-  draft to a completed session, exports it, and advances exactly once without
-  creating another same-day draft
+- finishing requires at least one locked working set with reps and atomically
+  saves completed status, frozen exercise evidence, the next pointer, and pending
+  export status without creating another same-day draft
+
+`WorkoutCompletionService` owns Fixed Cycle finish and cluster completion.
+Adaptive completion remains in `AdaptiveWorkoutService`. A failed local save
+rolls back row mutations and explicitly restores pre-command scalar values on
+registered SwiftData objects, keeping both storage and the visible draft/rotation
+state unchanged. Repeated completion
+is a no-op. Ad hoc logging also saves locally before scheduling delivery.
+
+Completed `Session`/`AdaptiveWorkoutSession` rows with a nonsuccessful
+`exportStatus` are the durable export queue; no new model/schema is required.
+After commit, an app-owned task prepares immutable export data and sends it to
+a serial file-writer actor. It updates export diagnostics in a separate model
+context afterward. Each acknowledgment is committed before the next await and
+requires the freshly persisted payload to match the delivered one; corrections
+made during delivery stay pending for another pass. Delivery failure or process
+interruption leaves the completed
+workout intact and retryable; retries never advance rotations. Launch,
+foreground activation, and background refresh use this same asynchronous path.
+A successful completed export may remove the obsolete draft file; finishing
+never depends on network/file delivery completing.
 
 For the versioned clustered program, all three current clusters are shown in one
 draft. `Complete Cluster` is the intentional whole-cluster action and may be

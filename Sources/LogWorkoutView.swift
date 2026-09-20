@@ -374,9 +374,6 @@ struct LogWorkoutView: View {
             try session.validate()
             modelContext.insert(session)
 
-            var insertedEntries: [SetEntry] = []
-            var insertedFeedback: [AdHocExerciseFeedback] = []
-            var insertedProfiles: [ExerciseResistanceProfile] = []
             for exerciseInput in cleanedExercises {
                 if exercises.first(where: { $0.id == exerciseInput.exerciseId })?
                     .equipment.supportsResistanceProfile == true {
@@ -398,7 +395,6 @@ struct LogWorkoutView: View {
                         updatedAt: date
                     )
                     modelContext.insert(profile)
-                    insertedProfiles.append(profile)
                 }
                 for (index, set) in exerciseInput.sets.enumerated() {
                     let entry = SetEntry(
@@ -412,7 +408,6 @@ struct LogWorkoutView: View {
                     )
                     try entry.validate()
                     modelContext.insert(entry)
-                    insertedEntries.append(entry)
                 }
                 if let rating = exerciseInput.feedback {
                     let feedback = AdHocExerciseFeedback(
@@ -422,31 +417,17 @@ struct LogWorkoutView: View {
                         createdAt: date
                     )
                     modelContext.insert(feedback)
-                    insertedFeedback.append(feedback)
                 }
             }
 
-            do {
-                _ = try SessionExportService.exportAndTrack(
-                    session: session,
-                    cycleName: cycleName,
-                    exercises: exercises,
-                    setEntries: insertedEntries,
-                    requireICloudMirror: true,
-                    adHocFeedback: insertedFeedback,
-                    resistanceProfiles: insertedProfiles,
-                    modelContext: modelContext
-                )
-            } catch {
-                session.exportStatus = .failed
-                errorMessage = error.localizedDescription
-            }
-
             try modelContext.save()
+            SessionExportService.deliverPendingInBackground(modelContainer: modelContext.container)
             savedMessage = "Saved to History."
             exerciseDrafts = []
             addExercise()
         } catch {
+            modelContext.processPendingChanges()
+            modelContext.rollback()
             errorMessage = error.localizedDescription
         }
     }

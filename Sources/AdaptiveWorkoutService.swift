@@ -1248,22 +1248,39 @@ enum AdaptiveWorkoutService {
         adaptiveSessions: [AdaptiveWorkoutSession],
         setEntries: [AdaptiveSetEntry],
         modelContext: ModelContext,
-        now: Date = .now
+        now: Date = .now,
+        save: (ModelContext) throws -> Void = { try $0.save() }
     ) throws {
         guard let session = adaptiveSessions.first(where: { $0.generatedPlanId == plan.id }) else {
             throw AdaptiveWorkoutServiceError.adaptiveSessionNotFound
         }
+        guard session.status == .draft else { return }
         let sessionEntries = setEntries.filter { $0.adaptiveSessionId == session.id }
         guard sessionEntries.contains(where: { $0.isLocked && $0.reps > 0 }) else {
             throw AdaptiveWorkoutServiceError.noLockedSets
         }
-        for entry in sessionEntries where !entry.isLocked || entry.reps <= 0 {
-            modelContext.delete(entry)
+        let priorFinishedAt = session.finishedAt
+        let priorExportStatus = session.exportStatus
+        let priorPlanStatus = plan.status
+        do {
+            for entry in sessionEntries where !entry.isLocked || entry.reps <= 0 {
+                modelContext.delete(entry)
+            }
+            session.status = .completed
+            session.finishedAt = now
+            session.exportStatus = .pending
+            plan.status = .completed
+            try save(modelContext)
+        } catch {
+            modelContext.processPendingChanges()
+            modelContext.rollback()
+            session.status = .draft
+            session.finishedAt = priorFinishedAt
+            session.exportStatus = priorExportStatus
+            plan.status = priorPlanStatus
+
+            throw error
         }
-        session.status = .completed
-        session.finishedAt = now
-        plan.status = .completed
-        try modelContext.save()
     }
 
     private static func statusRank(_ status: AdaptivePlanStatus) -> Int {

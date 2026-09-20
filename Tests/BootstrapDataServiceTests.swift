@@ -371,7 +371,7 @@ final class BootstrapDataServiceTests: XCTestCase {
 
     @MainActor
     func testPendingCompletedExportRetriesToVerifiedSuccessWithoutDuplicateWrite() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV5.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let exercise = Exercise(name: "Retry Row", primaryMuscle: .back, type: .compound, equipment: .cable)
@@ -928,7 +928,7 @@ final class BootstrapDataServiceTests: XCTestCase {
     }
 
     func testWorkoutExportReconciliationCompletesPartialAdHocImportAndIsIdempotent() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let catalog = try BootstrapDataService.ensureExerciseCatalog(modelContext: context)
@@ -1018,7 +1018,7 @@ final class BootstrapDataServiceTests: XCTestCase {
     }
 
     func testAdaptiveRolloutImportsWorkoutAndStartsReviewedAdaptiveProgramOnWorkoutDate() throws {
-        let schema = Schema(versionedSchema: OpenLiftSchemaV4.self)
+        let schema = Schema(versionedSchema: OpenLiftSchemaV16.self)
         let container = OpenLiftModelContainerFactory.makeInMemory(schema: schema)
         let context = ModelContext(container)
         let cycle = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 2)
@@ -1794,7 +1794,7 @@ final class OpenLiftStateResolverTests: XCTestCase {
         ]
 
         let results = HistoryExerciseSearchService.results(
-            query: "dumbbell press",
+            query: "incline db press",
             sessions: [fixed],
             setEntries: fixedRows,
             adaptiveSessions: [adaptive],
@@ -1804,11 +1804,10 @@ final class OpenLiftStateResolverTests: XCTestCase {
 
         XCTAssertEqual(results.map(\.date), [newerDate, olderDate])
         XCTAssertEqual(results.map(\.workoutName), ["Adaptive Floating", "Upper A"])
-        XCTAssertEqual(results[0].sets, [HistoryExerciseSet(weight: 75, reps: 8)])
-        XCTAssertEqual(
-            results[1].sets,
+        XCTAssertEqual(results.map(\.sets), [
+            [HistoryExerciseSet(weight: 75, reps: 8)],
             [HistoryExerciseSet(weight: 70, reps: 10), HistoryExerciseSet(weight: 70, reps: 9)]
-        )
+        ])
     }
 
     func testExerciseHistorySearchExcludesDraftUnlockedAndZeroRepRows() {

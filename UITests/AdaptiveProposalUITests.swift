@@ -71,7 +71,7 @@ final class AdaptiveProposalUITests: OpenLiftUITestCase {
         XCTAssertTrue(splitDose.exists)
         let priorPerformance = app.staticTexts["adaptive.previous.Flat DB Press"]
         scrollToElement(priorPerformance, in: app)
-        XCTAssertEqual(priorPerformance.label, "Previous: 60.0 x 9")
+        XCTAssertEqual(priorPerformance.label, "Previous: 60 × 9")
 
         let useWorkout = app.buttons["adaptive.useWorkout"]
         scrollToElement(useWorkout, in: app)
