@@ -130,10 +130,35 @@ future structural edits require a new program version. Normal startup and V13
 migration do not activate this program; the explicit rollout is documented in
 [`migration-safety.md`](migration-safety.md).
 
-The current program has a 3/6/6 structure: torso rotates A-C; legs rotate A-F
-while arms repeat A-C inside the same six-step cluster; shoulders repeat A-B in v1–v3 and A-C in v4
-while the calves/forearms lane rotates A-F. The app derives those shorter
-identities with modulo arithmetic but persists only one state per cluster.
+The current v8 program has three independently advancing clusters: four torso/arm
+steps, eight legs-only steps, and six accessory steps. Older v1–v7 definitions
+and their immutable occurrence identities remain readable.
+
+### Versioned program content
+
+[`ClusterProgramDefinition.swift`](../Sources/ClusterProgramDefinition.swift)
+defines a Codable value contract: program/version identity, ordered cluster
+steps and exact template positions, exercise references, fallback set counts,
+and progression rules. [`BundledClusterPrograms.swift`](../Sources/BundledClusterPrograms.swift)
+is the bundled v8 content. It is compiled typed data (no runtime file-loading
+or decoding dependency); JSON round-trip compatibility is tested for later
+program authoring/import work, which is not yet implemented.
+
+V8 rotation selection, structural validation, progression identities, and
+recovery construction use the generic interpreter. Recovery no longer builds
+v8 by reconstructing v1 through v7. Historical migration/activation procedures
+remain separate, including the explicit v7→v8 transition that preserves live
+choices. Merely loading this definition does not activate a revision or write
+the store.
+
+Existing SwiftData template exercise IDs and positive fallback counts remain
+authoritative; occurrence overrides still outrank persistent preferences and
+canonical slots. Progression rules evaluate the resolved exercise UUID, retain
+historical namespaces and row aliases, and leave the shared effort/profile
+lookup unchanged. A prior qualifying effort still supplies its literal row
+count. The definition's setup source is the resolved catalog exercise, not a
+copy of its notes: customized notes and deliberately empty notes survive.
+Completed snapshots are never rebuilt from this content.
 
 ## State Selection
 
