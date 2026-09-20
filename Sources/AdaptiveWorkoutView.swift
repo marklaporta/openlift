@@ -1151,28 +1151,7 @@ struct AdaptiveWorkoutView: View {
                 setEntries: adaptiveSetEntries,
                 modelContext: modelContext
             )
-            guard let session = adaptiveSessions.first(where: { $0.generatedPlanId == plan.id }),
-                  let readiness = readinessChecks.first(where: { $0.id == plan.readinessCheckId }) else {
-                throw AdaptiveWorkoutServiceError.adaptiveSessionNotFound
-            }
-            do {
-                _ = try AdaptiveExportService.exportAndTrack(
-                    plan: plan,
-                    session: session,
-                    readiness: readiness,
-                    setEntries: adaptiveSetEntries,
-                    exercises: exercises,
-                    overrides: overrides,
-                    feedback: complexFeedback,
-                    resistanceProfiles: resistanceProfiles,
-                    requireICloudMirror: !AppRuntime.isUITesting,
-                    modelContext: modelContext
-                )
-            } catch {
-                session.exportStatus = .failed
-                errorMessage = error.localizedDescription
-            }
-            try modelContext.save()
+            SessionExportService.deliverPendingInBackground(modelContainer: modelContext.container)
         } catch {
             errorMessage = error.localizedDescription
         }

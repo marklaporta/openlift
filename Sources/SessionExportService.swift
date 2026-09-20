@@ -7,6 +7,59 @@ enum SessionExportService {
     static let backgroundRefreshIdentifier = "com.mark.openlift.export-retry"
     private static let logger = Logger(subsystem: "com.mark.openlift", category: "iCloudExport")
 
+    struct CompletedExportSnapshot: Sendable {
+        let data: Data
+        let sessionId: UUID
+        let filename: String
+    }
+
+    static func writeCompletedExport(
+        _ snapshot: CompletedExportSnapshot,
+        requireICloudMirror: Bool,
+        environment: ExportEnvironment
+    ) throws -> ExportWriteOutcome {
+        environment.enqueueDirectExport(snapshot.data, snapshot.sessionId)
+        try replaceExistingWorkoutExportCopies(
+            data: snapshot.data, sessionId: snapshot.sessionId, environment: environment
+        )
+        let filename = existingLocalExportFilename(sessionId: snapshot.sessionId, environment: environment)
+            ?? snapshot.filename
+        let outcome = try writeExportData(
+            data: snapshot.data, relativeSubdirectory: "exports", filename: filename,
+            requireICloudMirror: requireICloudMirror, environment: environment
+        )
+        if outcome.status == .success {
+            deleteDraftSnapshot(sessionId: snapshot.sessionId, environment: environment)
+        }
+        return outcome
+    }
+
+    @MainActor private static var requestedDelivery: Set<ObjectIdentifier> = []
+    @MainActor private static var deliveryTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+
+    /// App-owned task survives view disappearance. The pending row survives task
+    /// cancellation/process death; launch, foreground and background refresh retry it.
+    @MainActor
+    static func deliverPendingInBackground(modelContainer: ModelContainer) {
+        _ = deliveryTask(modelContainer: modelContainer)
+    }
+
+    @MainActor
+    private static func deliveryTask(modelContainer: ModelContainer) -> Task<Void, Never> {
+        let key = ObjectIdentifier(modelContainer)
+        requestedDelivery.insert(key)
+        if let active = deliveryTasks[key] { return active }
+        let task = Task { @MainActor in
+            repeat {
+                requestedDelivery.remove(key)
+                await performBackgroundExportRetry(modelContainer: modelContainer)
+            } while requestedDelivery.contains(key)
+            deliveryTasks[key] = nil
+        }
+        deliveryTasks[key] = task
+        return task
+    }
+
     struct UbiquityMetadata: Equatable {
         let isUbiquitousItem: Bool?
         let isUploaded: Bool
@@ -176,6 +229,166 @@ enum SessionExportService {
             + readinessSuccessCount
     }
 
+    @MainActor
+    @discardableResult
+    static func retryPendingCompletedSessionExportsAsync(
+        modelContext: ModelContext,
+        environment: ExportEnvironment = .live()
+    ) async throws -> Int {
+        let presence = await CompletedWorkoutExportWriter.shared.exportPresence()
+        try reconcileUnverifiedLocalExports(modelContext: modelContext, presence: presence)
+        try modelContext.save()
+        let fixedIDs = try modelContext.fetch(FetchDescriptor<Session>())
+            .filter { $0.status == .completed && $0.exportStatus != .success }
+            .sorted { ($0.finishedAt ?? $0.createdAt) < ($1.finishedAt ?? $1.createdAt) }
+            .map(\.id)
+        let adaptiveIDs = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+            .filter { $0.status == .completed && $0.exportStatus != .success }
+            .map(\.id)
+        var successCount = 0
+        for (kind, ids) in [(ExportSessionKind.fixed, fixedIDs), (.adaptive, adaptiveIDs)] {
+            for id in ids {
+                if let outcome = try? await deliverCompletedSession(
+                    sessionId: id, kind: kind, modelContainer: modelContext.container,
+                    environment: environment
+                ), outcome.status == .success { successCount += 1 }
+            }
+        }
+        let readinessContext = ModelContext(modelContext.container)
+        successCount += try AdaptiveReadinessExportService.retryPendingExports(
+            modelContext: readinessContext, environment: environment
+        )
+        try readinessContext.save()
+        if (try? hasPendingCompletedSessionExports(modelContext: ModelContext(modelContext.container))) == true {
+            scheduleBackgroundExportRetry()
+        }
+        return successCount
+    }
+
+    @MainActor
+    private static func preparedCompletedSession(sessionId: UUID, modelContext: ModelContext) throws -> CompletedExportSnapshot {
+        let sessions = try modelContext.fetch(FetchDescriptor<Session>())
+        guard let session = sessions.first(where: {
+            $0.id == sessionId && $0.status == .completed
+        }) else { throw CompletedSessionRetryError.sessionMissing(sessionId) }
+        let activeCycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>())
+        let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let setEntries = try modelContext.fetch(FetchDescriptor<SetEntry>())
+        let adHocFeedback = try modelContext.fetch(FetchDescriptor<AdHocExerciseFeedback>())
+        let fixedReadiness = try modelContext.fetch(FetchDescriptor<FixedCycleReadinessObservation>())
+        let fixedOverrides = try modelContext.fetch(FetchDescriptor<FixedCycleOccurrenceOverride>())
+        let fixedSnapshots = try modelContext.fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
+        let clusterOccurrences = try modelContext.fetch(FetchDescriptor<ClusterOccurrenceRecord>())
+        let clusterRotationStates = try modelContext.fetch(FetchDescriptor<ClusterRotationState>())
+        let clusterExercisePreferences = try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>())
+        let clusterExerciseOverrides = try modelContext.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>())
+        let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        let cycleName = exportCycleName(
+            for: session,
+            activeCycles: activeCycles,
+            templates: templates
+        )
+        let fixedMetadata = resolvedFixedCycleMetadata(
+            session: session,
+            activeCycles: activeCycles,
+            templates: templates,
+            exercises: exercises,
+            setEntries: setEntries,
+            readiness: fixedReadiness,
+            overrides: fixedOverrides,
+            snapshots: fixedSnapshots,
+            clusterOccurrences: clusterOccurrences,
+            clusterRotationStates: clusterRotationStates,
+            clusterExercisePreferences: clusterExercisePreferences,
+            clusterExerciseOverrides: clusterExerciseOverrides
+        )
+        return try prepareExport(
+            session: session,
+            cycleName: cycleName,
+            exercises: exercises,
+            setEntries: setEntries.filter {
+                $0.sessionId == session.id && $0.reps > 0 && $0.isLocked
+            },
+            adHocFeedback: adHocFeedback.filter { $0.sessionId == session.id },
+            fixedCycleMetadata: fixedMetadata,
+            resistanceProfiles: resistanceProfiles
+        )
+    }
+
+    @MainActor
+    private static func preparedCompletedSession(
+        sessionId: UUID, kind: ExportSessionKind, modelContext: ModelContext
+    ) throws -> CompletedExportSnapshot {
+        if kind == .adaptive {
+            return try AdaptiveExportService.preparedCompletedSession(sessionId: sessionId, modelContext: modelContext)
+        }
+        return try preparedCompletedSession(sessionId: sessionId, modelContext: modelContext)
+    }
+
+    /// Model snapshots are freshly read for each delivery. No context with cached
+    /// session/profile state is held across the file-writer suspension.
+    @MainActor
+    @discardableResult
+    static func deliverCompletedSession(
+        sessionId: UUID, kind: ExportSessionKind, modelContainer: ModelContainer,
+        environment: ExportEnvironment = .live()
+    ) async throws -> ExportWriteOutcome {
+        do {
+            let snapshot = try preparedCompletedSession(
+                sessionId: sessionId, kind: kind, modelContext: ModelContext(modelContainer)
+            )
+            let written = try await CompletedWorkoutExportWriter.shared.write(
+                snapshot, requireICloudMirror: !AppRuntime.isUITesting, environment: environment
+            )
+            let acknowledgment = ModelContext(modelContainer)
+            let latest = try preparedCompletedSession(sessionId: sessionId, kind: kind, modelContext: acknowledgment)
+            let changed = latest.data != snapshot.data
+            let outcome = changed ? ExportWriteOutcome(
+                status: .pending, filename: written.filename, containerIdentifier: written.containerIdentifier,
+                ubiquityContainerURL: written.ubiquityContainerURL, iCloudDestinationURL: written.iCloudDestinationURL,
+                localMirrorURL: written.localMirrorURL, detail: "Workout changed during export; updated export pending."
+            ) : written
+            try setCompletedExportStatus(outcome.status, sessionId: sessionId, kind: kind, modelContext: acknowledgment)
+            try record(outcome, sessionId: sessionId, sessionKind: kind, modelContext: acknowledgment)
+            // Commit before another await: a later correction must not be overwritten
+            // by a stale success acknowledgment at the end of a multi-session batch.
+            try acknowledgment.save()
+            if changed {
+                let key = ObjectIdentifier(modelContainer)
+                if deliveryTasks[key] != nil { requestedDelivery.insert(key) }
+            }
+            if outcome.status != .success { scheduleBackgroundExportRetry() }
+            return outcome
+        } catch {
+            let failureContext = ModelContext(modelContainer)
+            // A deleted session is not resurrected, and cannot gain an orphan diagnostic.
+            if (try? setCompletedExportStatus(.failed, sessionId: sessionId, kind: kind, modelContext: failureContext)) != nil {
+                try? recordFailure(error, sessionId: sessionId, sessionKind: kind, modelContext: failureContext)
+                try? failureContext.save()
+            }
+            scheduleBackgroundExportRetry()
+            throw error
+        }
+    }
+
+    @MainActor
+    private static func setCompletedExportStatus(
+        _ status: ExportStatus, sessionId: UUID, kind: ExportSessionKind, modelContext: ModelContext
+    ) throws {
+        if kind == .adaptive {
+            guard let session = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>()).first(where: {
+                $0.id == sessionId && $0.status == .completed
+            }) else { throw CompletedSessionRetryError.sessionMissing(sessionId) }
+            session.exportStatus = status
+        } else {
+            guard let session = try modelContext.fetch(FetchDescriptor<Session>()).first(where: {
+                $0.id == sessionId && $0.status == .completed
+            }) else { throw CompletedSessionRetryError.sessionMissing(sessionId) }
+            session.exportStatus = status
+        }
+    }
+
     /// Retries exactly one completed fixed-cycle or ad-hoc session. Historical
     /// repairs use this so unrelated pending exports and diagnostics stay put.
     @MainActor
@@ -249,13 +462,18 @@ enum SessionExportService {
 
     @MainActor
     static func runBackgroundExportRetry(modelContainer: ModelContainer) async {
+        await deliveryTask(modelContainer: modelContainer).value
+    }
+
+    @MainActor
+    private static func performBackgroundExportRetry(modelContainer: ModelContainer) async {
         let modelContext = ModelContext(modelContainer)
         do {
-            _ = try retryPendingCompletedSessionExports(modelContext: modelContext)
+            _ = try await retryPendingCompletedSessionExportsAsync(modelContext: modelContext)
         } catch {
             logger.error("Background export retry failed: \(error.localizedDescription, privacy: .public)")
         }
-        if (try? hasPendingCompletedSessionExports(modelContext: modelContext)) == true {
+        if (try? hasPendingCompletedSessionExports(modelContext: ModelContext(modelContainer))) == true {
             scheduleBackgroundExportRetry()
         }
         if let configuration = DirectExportService.Configuration.resolve(),
@@ -1051,6 +1269,24 @@ enum SessionExportService {
         resistanceProfiles: [ExerciseResistanceProfile] = [],
         environment: ExportEnvironment = .live()
     ) throws -> ExportWriteOutcome {
+        let snapshot = try prepareExport(
+            session: session, cycleName: cycleName, exercises: exercises,
+            setEntries: setEntries, adHocFeedback: adHocFeedback,
+            fixedCycleMetadata: fixedCycleMetadata, resistanceProfiles: resistanceProfiles
+        )
+        return try writeCompletedExport(snapshot, requireICloudMirror: requireICloudMirror, environment: environment)
+    }
+
+    @discardableResult
+    static func prepareExport(
+        session: Session,
+        cycleName: String,
+        exercises: [Exercise],
+        setEntries: [SetEntry],
+        adHocFeedback: [AdHocExerciseFeedback] = [],
+        fixedCycleMetadata: FixedCycleMetadata? = nil,
+        resistanceProfiles: [ExerciseResistanceProfile] = []
+    ) throws -> CompletedExportSnapshot {
         let loggedEntries = exportableSetEntries(
             setEntries,
             fixedCycleMetadata: fixedCycleMetadata
@@ -1132,20 +1368,9 @@ enum SessionExportService {
         )
 
         let data = try JSONEncoder.pretty.encode(payload)
-        environment.enqueueDirectExport(data, session.id)
-        try replaceExistingWorkoutExportCopies(
-            data: data,
-            sessionId: session.id,
-            environment: environment
-        )
-        let filename = existingLocalExportFilename(sessionId: session.id, environment: environment)
-            ?? "workout-\(filenameDateFormatter.string(from: session.finishedAt ?? .now))-\(session.id.uuidString).json"
-        return try writeExportData(
-            data: data,
-            relativeSubdirectory: "exports",
-            filename: filename,
-            requireICloudMirror: requireICloudMirror,
-            environment: environment
+        return CompletedExportSnapshot(
+            data: data, sessionId: session.id,
+            filename: "workout-\(filenameDateFormatter.string(from: session.finishedAt ?? .now))-\(session.id.uuidString).json"
         )
     }
 
@@ -1243,6 +1468,8 @@ enum SessionExportService {
         }
     }
 
+
+
     @MainActor
     static func record(
         _ outcome: ExportWriteOutcome,
@@ -1336,10 +1563,13 @@ enum SessionExportService {
     }
 
     @MainActor
-    private static func reconcileUnverifiedLocalExports(modelContext: ModelContext) throws {
+    private static func reconcileUnverifiedLocalExports(
+        modelContext: ModelContext,
+        presence suppliedPresence: (local: Set<UUID>, iCloud: Set<UUID>?)? = nil
+    ) throws {
         let diagnostics = try modelContext.fetch(FetchDescriptor<ExportDiagnostic>())
         let diagnosed = Set(diagnostics.filter { $0.sessionKind == .fixed }.map(\.sessionId))
-        let presence = exportPresenceBySessionID()
+        let presence = suppliedPresence ?? exportPresenceBySessionID()
         guard let iCloudPresence = presence.iCloud else { return }
         for session in try modelContext.fetch(FetchDescriptor<Session>())
         where session.status == .completed
@@ -1351,7 +1581,7 @@ enum SessionExportService {
         }
     }
 
-    private static func exportPresenceBySessionID() -> (local: Set<UUID>, iCloud: Set<UUID>?) {
+    fileprivate static func exportPresenceBySessionID() -> (local: Set<UUID>, iCloud: Set<UUID>?) {
         func sessionIDs(in directory: URL?) -> Set<UUID>? {
             guard let directory,
                   let files = try? FileManager.default.contentsOfDirectory(
@@ -2178,6 +2408,27 @@ enum AdaptiveExportService {
         requireICloudMirror: Bool = false,
         environment: SessionExportService.ExportEnvironment = .live()
     ) throws -> SessionExportService.ExportWriteOutcome {
+        let snapshot = try prepareExport(
+            plan: plan, session: session, readiness: readiness, setEntries: setEntries,
+            exercises: exercises, overrides: overrides, feedback: feedback,
+            resistanceProfiles: resistanceProfiles
+        )
+        return try SessionExportService.writeCompletedExport(
+            snapshot, requireICloudMirror: requireICloudMirror, environment: environment
+        )
+    }
+
+    @discardableResult
+    static func prepareExport(
+        plan: GeneratedWorkoutPlan,
+        session: AdaptiveWorkoutSession,
+        readiness: DailyReadinessCheck,
+        setEntries: [AdaptiveSetEntry],
+        exercises: [Exercise],
+        overrides: [AdaptiveOverrideEvent],
+        feedback: [ComplexFeedback],
+        resistanceProfiles: [ExerciseResistanceProfile] = []
+    ) throws -> SessionExportService.CompletedExportSnapshot {
         let payload = makePayload(
             plan: plan,
             session: session,
@@ -2189,19 +2440,9 @@ enum AdaptiveExportService {
             resistanceProfiles: resistanceProfiles
         )
         let data = try encode(payload)
-        environment.enqueueDirectExport(data, session.id)
-        try SessionExportService.replaceExistingWorkoutExportCopies(
-            data: data,
-            sessionId: session.id,
-            environment: environment
-        )
         let stamp = exportFilenameDateFormatter.string(from: session.finishedAt ?? .now)
-        return try SessionExportService.writeExportData(
-            data: data,
-            relativeSubdirectory: "exports",
-            filename: "workout-\(stamp)-\(session.id.uuidString).json",
-            requireICloudMirror: requireICloudMirror,
-            environment: environment
+        return SessionExportService.CompletedExportSnapshot(
+            data: data, sessionId: session.id, filename: "workout-\(stamp)-\(session.id.uuidString).json"
         )
     }
 
@@ -2255,6 +2496,8 @@ enum AdaptiveExportService {
         }
     }
 
+
+
     @MainActor
     static func retryPendingExports(
         modelContext: ModelContext,
@@ -2295,6 +2538,36 @@ enum AdaptiveExportService {
             }
         }
         return sessions.filter { $0.exportStatus == .success }.count
+    }
+
+    @MainActor
+    fileprivate static func preparedCompletedSession(
+        sessionId: UUID, modelContext: ModelContext
+    ) throws -> SessionExportService.CompletedExportSnapshot {
+        let sessions = try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())
+        guard let session = sessions.first(where: {
+            $0.id == sessionId && $0.status == .completed
+        }) else {
+            throw CompletedSessionRetryError.sessionMissing(sessionId)
+        }
+        let plans = try modelContext.fetch(FetchDescriptor<GeneratedWorkoutPlan>())
+        guard let plan = plans.first(where: { $0.id == session.generatedPlanId }) else {
+            throw CompletedSessionRetryError.planMissing(session.generatedPlanId)
+        }
+        let checks = try modelContext.fetch(FetchDescriptor<DailyReadinessCheck>())
+        guard let readiness = checks.first(where: { $0.id == plan.readinessCheckId }) else {
+            throw CompletedSessionRetryError.readinessMissing(plan.readinessCheckId)
+        }
+        let entries = try modelContext.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let overrides = try modelContext.fetch(FetchDescriptor<AdaptiveOverrideEvent>())
+        let feedback = try modelContext.fetch(FetchDescriptor<ComplexFeedback>())
+        let resistanceProfiles = try modelContext.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+        return try prepareExport(
+            plan: plan, session: session, readiness: readiness,
+            setEntries: entries, exercises: exercises, overrides: overrides,
+            feedback: feedback, resistanceProfiles: resistanceProfiles
+        )
     }
 
     /// Retries exactly one completed Adaptive session. Explicit live-data
@@ -2405,6 +2678,7 @@ enum AdaptiveExportService {
             if !recovered { modelContext.rollback() }
             return recovered
         } catch {
+            modelContext.processPendingChanges()
             modelContext.rollback()
             throw error
         }
@@ -2630,4 +2904,23 @@ private extension JSONEncoder {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return encoder
     }()
+}
+
+/// Serial file writer; only immutable value payloads leave the model actor.
+private actor CompletedWorkoutExportWriter {
+    static let shared = CompletedWorkoutExportWriter()
+
+    func exportPresence() -> (local: Set<UUID>, iCloud: Set<UUID>?) {
+        SessionExportService.exportPresenceBySessionID()
+    }
+
+    func write(
+        _ snapshot: SessionExportService.CompletedExportSnapshot,
+        requireICloudMirror: Bool,
+        environment: SessionExportService.ExportEnvironment
+    ) throws -> SessionExportService.ExportWriteOutcome {
+        try SessionExportService.writeCompletedExport(
+            snapshot, requireICloudMirror: requireICloudMirror, environment: environment
+        )
+    }
 }

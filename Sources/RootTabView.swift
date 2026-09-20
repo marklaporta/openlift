@@ -73,14 +73,7 @@ struct RootTabView: View {
     }
 
     private func retryPendingExports() {
-        do {
-            _ = try SessionExportService.retryPendingCompletedSessionExports(modelContext: modelContext)
-            if try SessionExportService.hasPendingCompletedSessionExports(modelContext: modelContext) {
-                SessionExportService.scheduleBackgroundExportRetry()
-            }
-        } catch {
-            SessionExportService.scheduleBackgroundExportRetry()
-        }
+        SessionExportService.deliverPendingInBackground(modelContainer: modelContext.container)
         DirectExportService.retryPendingInBackground()
         StoreBackupService.mirrorStoreIfNeeded(modelContext: modelContext)
     }

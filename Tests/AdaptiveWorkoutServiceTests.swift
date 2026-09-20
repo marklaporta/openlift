@@ -1037,6 +1037,68 @@ final class AdaptiveWorkoutServiceTests: XCTestCase {
         }
     }
 
+    func testAdaptiveCompletionSaveFailurePreservesDraftAndRepeatedFinishIsIdempotent() async throws {
+        enum Failure: Error { case save }
+        let (context, _) = makeContext()
+        let (program, exercise) = makeProgram()
+        let check = try AdaptiveWorkoutService.makeReadinessCheck(
+            program: program, inputs: readyInputs, localDateKey: "2026-07-20",
+            timeZoneIdentifier: "America/Los_Angeles", revision: 1
+        )
+        let plan = try makeProposal(program: program, exercise: exercise, check: check)
+        context.insert(check)
+        context.insert(plan)
+        let session = try AdaptiveWorkoutService.freeze(plan: plan, modelContext: context)
+        let entries = try context.fetch(FetchDescriptor<AdaptiveSetEntry>())
+        let first = try XCTUnwrap(entries.first)
+        first.weight = 60
+        first.reps = 9
+        first.isLocked = true
+        try context.save()
+        let originalStatus = plan.status
+        let originalIDs = Set(entries.map(\.id))
+        XCTAssertThrowsError(try AdaptiveWorkoutService.complete(
+            plan: plan, adaptiveSessions: [session], setEntries: entries,
+            modelContext: context, save: { _ in throw Failure.save }
+        ))
+        XCTAssertEqual(session.status, .draft)
+        XCTAssertNil(session.finishedAt)
+        XCTAssertEqual(plan.status, originalStatus)
+        XCTAssertEqual(Set(try context.fetch(FetchDescriptor<AdaptiveSetEntry>()).map(\.id)), originalIDs)
+        XCTAssertEqual(first.reps, 9)
+        let finishedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        try AdaptiveWorkoutService.complete(
+            plan: plan, adaptiveSessions: [session], setEntries: entries,
+            modelContext: context, now: finishedAt
+        )
+        try AdaptiveWorkoutService.complete(
+            plan: plan, adaptiveSessions: [session], setEntries: entries,
+            modelContext: context, now: finishedAt.addingTimeInterval(60),
+            save: { _ in XCTFail("Repeated Adaptive completion must not save") }
+        )
+        let readback = ModelContext(context.container)
+        let saved = try XCTUnwrap(readback.fetch(FetchDescriptor<AdaptiveWorkoutSession>()).first)
+        XCTAssertEqual(saved.status, .completed)
+        XCTAssertEqual(saved.exportStatus, .pending)
+        XCTAssertEqual(saved.finishedAt, finishedAt)
+        XCTAssertEqual(try readback.fetch(FetchDescriptor<AdaptiveSetEntry>()).map(\.id), [first.id])
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let environment = SessionExportService.ExportEnvironment(
+            containerIdentifier: nil, iCloudContainerURL: directory, localDocumentsURL: directory,
+            coordinatedWrite: { data, url in try data.write(to: url, options: .atomic) },
+            ubiquityMetadata: { _ in .init(isUbiquitousItem: true, isUploaded: true, isUploading: false, uploadingErrorDescription: nil) }
+        )
+        let outcome = try await SessionExportService.deliverCompletedSession(
+            sessionId: session.id, kind: .adaptive, modelContainer: context.container, environment: environment
+        )
+        XCTAssertEqual(outcome.status, .success)
+        let exported = try XCTUnwrap(AdaptiveExportService.decode(Data(contentsOf: XCTUnwrap(outcome.localMirrorURL))))
+        XCTAssertEqual(exported.session_id, session.id.uuidString)
+        let exportedReadback = ModelContext(context.container)
+        XCTAssertEqual(try exportedReadback.fetch(FetchDescriptor<AdaptiveWorkoutSession>()).first?.exportStatus, .success)
+    }
+
     func testAdaptiveCompletionDoesNotChangeRotationPointerOrIndices() throws {
         let (context, _) = makeContext()
         let rotation = ActiveCycleInstance(templateId: UUID(), currentDayIndex: 3)

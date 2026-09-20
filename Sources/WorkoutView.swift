@@ -1960,42 +1960,11 @@ struct WorkoutView: View {
                 throw FixedCycleWorkoutError.readinessRequired
             }
             guard entryBufferCoordinator.flushAll() else { return }
-            guard FixedCycleClusterProgramService.occurrence(
-                sessionID: session.id,
-                cluster: selection.cluster,
-                occurrences: clusterOccurrences
-            ) == nil else { return }
-            let occurrence = try FixedCycleClusterProgramService.makeOccurrence(
-                session: session,
-                selection: selection,
-                exercises: exercises,
-                entries: setEntries,
-                resistanceProfiles: resistanceProfiles,
-                preferences: clusterExercisePreferences,
-                overrides: clusterExerciseOverrides
+            try WorkoutCompletionService.completeCluster(
+                selection, session: session, modelContext: modelContext
             )
-            let clusterExerciseIDs = Set(FixedCycleClusterProgramService.resolvedSlots(
-                selection: selection,
-                sessionId: session.id,
-                preferences: clusterExercisePreferences,
-                overrides: clusterExerciseOverrides
-            ).map(\.exerciseId))
-            for entry in setEntries where
-                entry.sessionId == session.id
-                    && clusterExerciseIDs.contains(entry.exerciseId)
-                    && (!entry.isLocked || entry.reps <= 0) {
-                modelContext.delete(entry)
-            }
-            modelContext.insert(occurrence)
-            _ = try FixedCycleClusterProgramService.advanceCompletedCluster(
-                selection: selection,
-                occurrence: occurrence,
-                states: clusterRotationStates
-            )
-            try modelContext.save()
             scheduleDraftExport()
         } catch {
-            modelContext.rollback()
             errorMessage = error.localizedDescription
         }
     }
@@ -2007,188 +1976,13 @@ struct WorkoutView: View {
                 throw FixedCycleWorkoutError.readinessRequired
             }
             guard entryBufferCoordinator.flushAll() else { return }
-            let isClustered = FixedCycleClusterProgramService.isProgramTemplate(template)
-            guard FixedCycleWorkoutService.canIntentionallyComplete(
-                sessionId: session.id,
-                entries: setEntries,
-                isClusteredProgram: isClustered,
-                hasCompletedCluster: clusterOccurrences.contains(where: { $0.sessionId == session.id })
-            ) else {
-                throw FixedCycleWorkoutError.qualifyingSetRequired
-            }
-            let currentClusterSelections: [FixedCycleClusterProgramService.Selection]
-            if isClustered {
-                currentClusterSelections = try FixedCycleClusterProgramService.selections(
-                    template: template,
-                    cycleInstanceId: cycle.id,
-                    states: clusterRotationStates
-                )
-                try FixedCycleWorkoutService.validateClusteredFinish(
-                    sessionId: session.id,
-                    entries: setEntries,
-                    selections: currentClusterSelections,
-                    occurrences: clusterOccurrences,
-                    preferences: clusterExercisePreferences,
-                    clusterOverrides: clusterExerciseOverrides
-                )
-            } else {
-                currentClusterSelections = []
-            }
+            try WorkoutCompletionService.finishFixed(
+                session: session, cycle: cycle, template: template, modelContext: modelContext
+            )
             draftExportGeneration += 1
             draftExportTask?.cancel()
             draftExportTask = nil
-            let dayIndex = session.cycleDayIndex
-
-            // Keep only confirmed logged sets in completed sessions/history/export.
-            let sessionEntries = setEntries.filter { $0.sessionId == session.id }
-            let retainedSessionEntries: [SetEntry]
-            if isClustered {
-                let completedClusterIDs = Set(clusterOccurrences.compactMap { occurrence in
-                    occurrence.sessionId == session.id ? occurrence.clusterID : nil
-                })
-                let uncompletedExerciseIDs = Set(
-                    currentClusterSelections
-                    .filter { !completedClusterIDs.contains($0.cluster.rawValue) }
-                    .flatMap {
-                        FixedCycleClusterProgramService.resolvedSlots(
-                            selection: $0,
-                            sessionId: session.id,
-                            preferences: clusterExercisePreferences,
-                            overrides: clusterExerciseOverrides
-                        ).map(\.exerciseId)
-                    }
-                )
-                retainedSessionEntries = FixedCycleWorkoutService.retainedCompletedClusterEntries(
-                    sessionId: session.id,
-                    entries: sessionEntries,
-                    occurrences: clusterOccurrences,
-                    uncompletedClusterExerciseIds: uncompletedExerciseIDs
-                )
-            } else {
-                retainedSessionEntries = sessionEntries.filter {
-                    $0.reps > 0 && $0.isLocked
-                }
-            }
-            let retainedEntryIDs = Set(retainedSessionEntries.map(\.id))
-            for entry in sessionEntries where !retainedEntryIDs.contains(entry.id) {
-                modelContext.delete(entry)
-            }
-            for override in slotOverrides where override.sessionId == session.id {
-                modelContext.delete(override)
-            }
-
-            session.status = .completed
-            session.finishedAt = .now
-            if !isClustered {
-                session.cycleNameSnapshot = template.name
-            }
-            let orderedDays = CycleOrdering.sortedDays(template.days)
-            if isClustered {
-                let completedNames = FixedCycleClusterProgramService.Cluster.allCases.compactMap { cluster in
-                    clusterOccurrences.contains {
-                        $0.sessionId == session.id && $0.clusterID == cluster.rawValue
-                    } ? cluster.displayName : nil
-                }
-                session.dayLabelSnapshot = completedNames.joined(separator: " + ")
-            } else if dayIndex >= 0, dayIndex < orderedDays.count {
-                session.dayLabelSnapshot = orderedDays[dayIndex].label
-            }
-            let persistedFixedSnapshots = try modelContext
-                .fetch(FetchDescriptor<FixedCycleExerciseSnapshot>())
-            let fixedMetadata: SessionExportService.FixedCycleMetadata?
-            if isClustered,
-               let frozenOccurrence = clusterOccurrences
-                .filter({ $0.sessionId == session.id })
-                .sorted(by: { $0.clusterID < $1.clusterID })
-                .first {
-                fixedMetadata = SessionExportService.fixedCycleMetadata(
-                    session: session,
-                    template: template,
-                    day: CycleDay(
-                        label: frozenOccurrence.dayLabel,
-                        slots: [],
-                        position: frozenOccurrence.templateDayPosition
-                    ),
-                    exercises: exercises,
-                    setEntries: retainedSessionEntries,
-                    readiness: fixedReadiness,
-                    overrides: fixedOverrides,
-                    snapshots: persistedFixedSnapshots,
-                    clusterOccurrences: clusterOccurrences,
-                    clusterRotationStates: clusterRotationStates,
-                    clusterExercisePreferences: clusterExercisePreferences,
-                    clusterExerciseOverrides: clusterExerciseOverrides
-                )
-            } else if dayIndex >= 0 && dayIndex < orderedDays.count {
-                fixedMetadata = SessionExportService.fixedCycleMetadata(
-                    session: session,
-                    template: template,
-                    day: orderedDays[dayIndex],
-                    exercises: exercises,
-                    setEntries: retainedSessionEntries,
-                    readiness: fixedReadiness,
-                    overrides: fixedOverrides,
-                    snapshots: persistedFixedSnapshots,
-                    clusterOccurrences: [],
-                    clusterRotationStates: clusterRotationStates,
-                    clusterExercisePreferences: clusterExercisePreferences,
-                    clusterExerciseOverrides: clusterExerciseOverrides
-                )
-            } else {
-                fixedMetadata = nil
-            }
-            for item in fixedMetadata?.ordered_exercises ?? [] {
-                guard let exerciseId = UUID(uuidString: item.exercise_id),
-                      let muscle = MuscleGroup(rawValue: item.muscle) else {
-                    continue
-                }
-                if let existing = persistedFixedSnapshots.first(where: {
-                    $0.sessionId == session.id
-                        && $0.position == item.position
-                        && $0.exerciseId == exerciseId
-                }) {
-                    existing.statusRawValue = item.status
-                    existing.skipReason = item.skip_reason
-                } else {
-                    modelContext.insert(
-                        FixedCycleExerciseSnapshot(
-                            sessionId: session.id,
-                            position: item.position,
-                            exerciseId: exerciseId,
-                            exerciseName: item.exercise_name,
-                            muscle: muscle,
-                            statusRawValue: item.status,
-                            skipReason: item.skip_reason
-                        )
-                    )
-                }
-            }
-
-            do {
-                let exportOutcome = try SessionExportService.exportAndTrack(
-                    session: session,
-                    cycleName: template.name,
-                    exercises: exercises,
-                    setEntries: retainedSessionEntries,
-                    requireICloudMirror: !AppRuntime.isUITesting,
-                    fixedCycleMetadata: fixedMetadata,
-                    resistanceProfiles: resistanceProfiles,
-                    modelContext: modelContext
-                )
-                if exportOutcome.status == .success {
-                    SessionExportService.deleteDraftSnapshot(sessionId: session.id)
-                }
-            } catch {
-                session.exportStatus = .failed
-                errorMessage = error.localizedDescription
-            }
-
-            if !isClustered {
-                cycle.currentDayIndex = (dayIndex + 1) % max(template.days.count, 1)
-            }
-            try cycle.validate(template: template)
-
-            try modelContext.save()
+            SessionExportService.deliverPendingInBackground(modelContainer: modelContext.container)
         } catch {
             if let error = error as? FixedCycleWorkoutError,
                case .uncompletedClusterWork(let clusters) = error {

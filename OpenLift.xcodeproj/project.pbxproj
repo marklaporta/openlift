@@ -41,6 +41,7 @@
 		F10000000000000000000008 /* AdaptiveProgramEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000008 /* AdaptiveProgramEditorView.swift */; };
 		F1000000000000000000000A /* AdaptivePlanningServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000A /* AdaptivePlanningServices.swift */; };
 		F1000000000000000000000C /* AdaptiveWorkoutService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000C /* AdaptiveWorkoutService.swift */; };
+		C91000000000000000000001 /* WorkoutCompletionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92000000000000000000001 /* WorkoutCompletionService.swift */; };
 		F1000000000000000000000E /* AdaptiveWorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000E /* AdaptiveWorkoutView.swift */; };
 /* End PBXBuildFile section */
 
@@ -106,6 +107,7 @@
 		F20000000000000000000008 /* AdaptiveProgramEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveProgramEditorView.swift; sourceTree = "<group>"; };
 		F2000000000000000000000A /* AdaptivePlanningServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptivePlanningServices.swift; sourceTree = "<group>"; };
 		F2000000000000000000000C /* AdaptiveWorkoutService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveWorkoutService.swift; sourceTree = "<group>"; };
+		C92000000000000000000001 /* WorkoutCompletionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutCompletionService.swift; sourceTree = "<group>"; };
 		F2000000000000000000000E /* AdaptiveWorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveWorkoutView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -160,6 +162,7 @@
 				F2000000000000000000000A /* AdaptivePlanningServices.swift */,
 				F20000000000000000000007 /* AdaptiveProgramService.swift */,
 				F2000000000000000000000C /* AdaptiveWorkoutService.swift */,
+				C92000000000000000000001 /* WorkoutCompletionService.swift */,
 				F2000000000000000000000E /* AdaptiveWorkoutView.swift */,
 				5BFA6838778B4C1F8BD337E6 /* AppRuntime.swift */,
 				F6973607E1B44FC016352114 /* Assets.xcassets */,
@@ -329,6 +332,7 @@
 				F1000000000000000000000A /* AdaptivePlanningServices.swift in Sources */,
 				F10000000000000000000007 /* AdaptiveProgramService.swift in Sources */,
 				F1000000000000000000000C /* AdaptiveWorkoutService.swift in Sources */,
+				C91000000000000000000001 /* WorkoutCompletionService.swift in Sources */,
 				F1000000000000000000000E /* AdaptiveWorkoutView.swift in Sources */,
 				02DA37FA2EF34418B76A2695 /* AppRuntime.swift in Sources */,
 				8B52A251828F8378E3602B5B /* BootstrapDataService.swift in Sources */,

@@ -220,7 +220,10 @@ final class AdaptiveProgramServiceTests: XCTestCase {
     }
 
     func testFirstVolumeActivationSeedsAllRecentWorkoutKindsAndIsIdempotent() throws {
-        let (context, _) = makeContext()
+        let container = OpenLiftModelContainerFactory.makeInMemory(
+            schema: Schema(versionedSchema: OpenLiftSchemaV16.self)
+        )
+        let context = ModelContext(container)
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let exercise = Exercise(
             name: "Seed Chest Press",
