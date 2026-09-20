@@ -337,3 +337,23 @@ comparability survive revision and subsequent manual count changes.
 
 V7 exports include every effective future selection, so export-only recovery
 preserves carried substitutions even before those slots have been performed.
+
+### September 19, 2026 quad phase correction (v7)
+
+`Cycle → Shift Quad Rotation` counts the completed leg extension as the previous
+quad exposure. `OPENLIFT_APPLY_QUAD_PHASE_2026_09_19` invokes the same guarded
+handler. Installation and normal startup do not activate it.
+
+Only the twelve Cluster 2 quad-slot preferences change. From raw counter 26,
+legs are Stiff-Leg Deadlift → Belt Squat → Reverse Hyper → Bulgarian Split Squat
+→ Leg Curl → Safety Bar Squat → Back Extension → Leg Extension, repeating over
+the unchanged 24-exposure leg/arm period. Existing movement UUIDs and v7
+movement progression keys retain previous loads, reps, and literal set counts.
+The already-correct day-5 leg-extension preference is retained unchanged.
+
+Activation rejects pending edits and either workout draft, requires the active
+v7 template, creates and integrity-checks a unique SQLite snapshot in
+`Documents/OpenLift/revision-backups`, then saves only preferences and its
+one-time marker synchronously. Raw counters, template slots, posterior-chain
+and arm selections, other clusters, completed history and profiles are untouched.
+Reactivation is a no-op, including after subsequent user preference changes.

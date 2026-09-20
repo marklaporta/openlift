@@ -202,3 +202,76 @@ extension BootstrapDataService {
               states.allSatisfy({ $0.positionIndex >= 0 }) else { throw ClusterRevisionError.invalidState }
     }
 }
+
+extension BootstrapDataService {
+    static let quadPhaseRevisionMarker = "clustered-quad-phase-2026-09-19"
+
+    /// September 19's leg extension counts as the preceding quad exposure.
+    /// Only future exact-slot preferences change; v7 movement keys already follow UUIDs.
+    @MainActor
+    static func applyQuadPhaseWithFreshBackup(modelContext: ModelContext, backupDirectory: URL? = nil,
+        snapshot: (URL, URL) throws -> Void = StoreBackupService.snapshot) throws -> ClusterSquatSwapResult {
+        typealias Program = FixedCycleClusterProgramService
+        guard !modelContext.hasChanges else { throw ClusterRevisionError.pendingChanges }
+        if try modelContext.fetch(FetchDescriptor<TrainingPreference>()).contains(where: { $0.key == quadPhaseRevisionMarker }) {
+            return ClusterSquatSwapResult(didApply: false, backupURL: nil)
+        }
+        guard !(try modelContext.fetch(FetchDescriptor<Session>())).contains(where: { $0.status == .draft }),
+              !(try modelContext.fetch(FetchDescriptor<AdaptiveWorkoutSession>())).contains(where: { $0.status == .draft }) else { throw ClusterRevisionError.draftHasWork }
+        let templates = try modelContext.fetch(FetchDescriptor<CycleTemplate>())
+        let cycles = try modelContext.fetch(FetchDescriptor<ActiveCycleInstance>()).filter { cycle in
+            templates.contains { $0.id == cycle.templateId && Program.isProgramTemplate($0) }
+        }
+        guard cycles.count == 1, let cycle = cycles.first,
+              let template = templates.first(where: { $0.id == cycle.templateId }),
+              Program.isBalancedTemplate(template) else { throw ClusterRevisionError.invalidState }
+        let states = try modelContext.fetch(FetchDescriptor<ClusterRotationState>()).filter {
+            $0.cycleInstanceId == cycle.id && $0.templateId == template.id && $0.programVersionID == Program.balancedVersionID
+        }
+        try validateBalancedStates(states)
+        let exercises = try modelContext.fetch(FetchDescriptor<Exercise>())
+        let quadNames = ["Leg Extension", "Belt Squat", "Bulgarian Split Squat", "Safety Bar Squat"]
+        let targets = try quadNames.map { name -> UUID in
+            guard let exercise = CompactExerciseName.resolve(name, in: exercises) else { throw Program.ProgramError.requiredExerciseMissing(name) }
+            return exercise.id
+        }
+        let preferences = try modelContext.fetch(FetchDescriptor<ClusterExercisePreference>())
+        guard Set(preferences.map(\.key)).count == preferences.count else { throw ClusterRevisionError.invalidState }
+        var ids = Program.persistentExerciseIDsByKey(preferences: preferences, programVersionID: Program.balancedVersionID)
+        var changes: [(String, Int, UUID)] = []
+        for step in stride(from: 1, to: 24, by: 2) {
+            let position = Program.templatePosition(.cluster2, step: step, version: Program.balancedVersionID)
+            let key = ClusterExercisePreference.key(programVersionID: Program.balancedVersionID, templateDayPosition: position, slotPosition: 0)
+            guard let slot = template.days.first(where: { $0.position == position })?.slots.first(where: { $0.position == 0 }),
+                  slot.muscle == .quads, targets.contains(ids[key] ?? slot.exerciseId) else { throw ClusterRevisionError.invalidState }
+            let target = targets[(step / 2) % 4]
+            ids[key] = target
+            changes.append((key, position, target))
+        }
+        try Program.validatePersistentExercisePreferences(template: template, exerciseIDsByPreferenceKey: ids)
+        guard let storeURL = modelContext.container.configurations.first?.url,
+              FileManager.default.fileExists(atPath: storeURL.path) else { throw SeatedShrugBackupError.persistentStoreRequired }
+        let directory = try backupDirectory ?? FileManager.default.url(for: .documentDirectory,
+            in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("OpenLift/revision-backups")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let backup = directory.appendingPathComponent("before-quad-phase-\(UUID().uuidString).sqlite")
+        do {
+            try snapshot(storeURL, backup)
+            guard StoreBackupService.isValidSnapshot(at: backup) else { throw SeatedShrugBackupError.verificationFailed }
+        } catch { try? FileManager.default.removeItem(at: backup); throw error }
+        do {
+            for (key, position, target) in changes {
+                if let existing = preferences.first(where: { $0.key == key }) {
+                    if existing.exerciseId != target { existing.exerciseId = target; existing.updatedAt = .now }
+                } else {
+                    modelContext.insert(ClusterExercisePreference(programVersionID: Program.balancedVersionID,
+                        templateDayPosition: position, slotPosition: 0, exerciseId: target))
+                }
+            }
+            modelContext.insert(TrainingPreference(key: quadPhaseRevisionMarker,
+                modeRawValue: "\(template.id.uuidString)|\(cycle.id.uuidString)"))
+            try modelContext.save()
+            return ClusterSquatSwapResult(didApply: true, backupURL: backup)
+        } catch { modelContext.rollback(); throw error }
+    }
+}

@@ -74,6 +74,20 @@ struct OpenLiftApp: App {
                             try? modelContext.save()
                             if ProcessInfo.processInfo.environment["OPENLIFT_BALANCED_UI"] == "1" {
                                 _ = try? BootstrapDataService.applyChestBackRowPairingWithFreshBackup(modelContext: modelContext)
+                                if ProcessInfo.processInfo.environment["OPENLIFT_QUAD_PHASE_UI"] == "1" {
+                                    _ = try? BootstrapDataService.ensureExerciseCatalog(modelContext: modelContext)
+                                    _ = try? BootstrapDataService.prepareBalancedRevision(modelContext: modelContext, backupConfirmed: true)
+                                    let current = (try? modelContext.fetch(FetchDescriptor<ClusterRotationState>())) ?? []
+                                    for state in current where state.programVersionID == FixedCycleClusterProgramService.balancedVersionID {
+                                        state.positionIndex = state.clusterID == "cluster-3" ? 25 : 26
+                                    }
+                                    let catalog = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
+                                    if let leg = CompactExerciseName.resolve("Leg Extension", in: catalog) {
+                                        modelContext.insert(ClusterExercisePreference(programVersionID: FixedCycleClusterProgramService.balancedVersionID,
+                                            templateDayPosition: 5, slotPosition: 0, exerciseId: leg.id))
+                                    }
+                                    try? modelContext.save()
+                                }
                             }
                         }
                     }
@@ -186,6 +200,12 @@ struct OpenLiftApp: App {
                 let result = try BootstrapDataService.applyBalancedRevisionWithFreshBackup(modelContext: ModelContext(startup.container))
                 print("OPENLIFT_BALANCED_REVISION applied=\(result.revision.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
             } catch { print("OPENLIFT_BALANCED_REVISION_FAILED \(error.localizedDescription)") }
+        }
+        if startup.issue == nil, ProcessInfo.processInfo.arguments.contains("OPENLIFT_APPLY_QUAD_PHASE_2026_09_19") {
+            do {
+                let result = try BootstrapDataService.applyQuadPhaseWithFreshBackup(modelContext: ModelContext(startup.container))
+                print("OPENLIFT_QUAD_PHASE applied=\(result.didApply) backup=\(result.backupURL?.lastPathComponent ?? "none")")
+            } catch { print("OPENLIFT_QUAD_PHASE_FAILED \(error.localizedDescription)") }
         }
         if startup.issue == nil, AppRuntime.shouldSwapChestBackRows {
             do {
