@@ -18,7 +18,7 @@ enum AdaptiveWorkoutServiceError: LocalizedError, Equatable {
         case .incompleteReadiness(let muscle):
             return "Complete all readiness answers for \(muscle.displayName)."
         case .profileNotReviewed:
-            return "Review and approve the active Adaptive profile in Cycle before using it for a real workout."
+            return "The active Adaptive profile has not been approved for real workouts."
         case .plannerConflict(let conflict):
             return "Cannot build a safe plan for \(conflict.muscle.displayName): \(conflict.code)."
         case .planNotProposed:

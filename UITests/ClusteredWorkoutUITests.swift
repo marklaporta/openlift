@@ -2,7 +2,7 @@ import XCTest
 
 final class ClusteredWorkoutUITests: OpenLiftUITestCase {
     func testCycleTabSwapsSquatsOnlyAfterFinishingWorkout() throws {
-        let app = launchApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SHRUG_ACTIVATION",
+        let app = launchLegacyAdministrationApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SHRUG_ACTIVATION",
                              "OPENLIFT_ADD_CLUSTERED_SHRUGS_2026_09_08"])
         app.tabBars.buttons["Cycle"].tap()
         let apply = app.buttons["cycle.swapSquats"]
@@ -31,7 +31,7 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
     }
 
     func testCycleTabAddsAlternatingShrugsOnlyAfterCurrentWorkoutIsFinished() throws {
-        let app = launchApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SHRUG_ACTIVATION"])
+        let app = launchLegacyAdministrationApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SHRUG_ACTIVATION"])
         app.tabBars.buttons["Cycle"].tap()
         let apply = app.buttons["cycle.addAlternatingShrugs"]
         XCTAssertTrue(apply.waitForExistence(timeout: 5))
@@ -68,7 +68,7 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
     }
 
     func testAlternatingShrugRevisionStartsBlankAndAdvancesOnlyCompletedThirdCluster() throws {
-        let app = launchApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_ADD_CLUSTERED_SHRUGS_2026_09_08"])
+        let app = launchLegacyAdministrationApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_ADD_CLUSTERED_SHRUGS_2026_09_08"])
         submitFixedReadiness(in: app)
         let target = app.staticTexts["workout.shrugRepTarget"]
         scrollToElement(target, in: app)
@@ -181,7 +181,7 @@ final class ClusteredWorkoutUITests: OpenLiftUITestCase {
     }
 
     private func assertClusteredReplacementRowsAreEditable(scopeButton: String) -> XCUIApplication {
-        let app = launchApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT"])
+        let app = launchLegacyAdministrationApp(["OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT"])
 
         submitFixedReadiness(in: app)
 

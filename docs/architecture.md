@@ -458,3 +458,7 @@ namespaced rotation-pool metadata, without a schema change or process-global
 registry. Runtime selections carry the definition explicitly. Program updates
 use read-only preview followed by fresh-backup-protected atomic activation;
 exports retain the definition and catalog evidence. See [program updates](program-updates.md).
+
+## Agent-managed program administration
+
+The primary tabs are Log, Workout and History. Program revisions use the paired-host private-container bridge, not a Cycle tab or manual import menu; see [program updates](program-updates.md) for the exact authority, preview/receipt and transport contract. Legacy administration views remain internal code, not a supported navigation destination.

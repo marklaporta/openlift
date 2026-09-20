@@ -2,7 +2,7 @@ import XCTest
 
 final class SideDeltRevisionUITests: OpenLiftUITestCase {
     private func launchSideDeltFixture(rows: Bool = false, order: Bool = false) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = legacyAdministrationApp()
         app.launchArguments = ["OPENLIFT_UI_TESTING", "OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT",
             "OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION"]
         app.launchEnvironment["OPENLIFT_SIDE_DELT_UI_ID"] = UUID().uuidString

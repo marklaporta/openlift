@@ -2,7 +2,7 @@ import XCTest
 
 final class GripperModelUITests: OpenLiftUITestCase {
     func testSelectGripperModelsAndSaveHistory() {
-        let app = launchApp()
+        let app = launchLegacyAdministrationApp()
         app.tabBars.buttons["Log"].tap()
         let exercisePicker = app.buttons["log.exercisePicker"].firstMatch
         XCTAssertTrue(exercisePicker.waitForExistence(timeout: 5))
@@ -32,7 +32,7 @@ final class GripperModelUITests: OpenLiftUITestCase {
         XCTAssertTrue(app.staticTexts["Model 1 x 6"].waitForExistence(timeout: 5))
     }
     func testGripperStorageMigrationButtonDraftGuardAndColdLaunch() throws {
-        let app = XCUIApplication()
+        let app = legacyAdministrationApp()
         app.launchArguments = ["OPENLIFT_UI_TESTING", "OPENLIFT_PREPARE_CLUSTERED_PROGRAM_ROLLOUT", "OPENLIFT_UI_TESTING_SIDE_DELT_ACTIVATION"]
         app.launchEnvironment["OPENLIFT_SIDE_DELT_UI_ID"] = UUID().uuidString
         app.launchEnvironment["OPENLIFT_CHEST_BACK_UI"] = "1"

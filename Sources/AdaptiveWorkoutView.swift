@@ -80,7 +80,7 @@ struct AdaptiveWorkoutView: View {
                         ContentUnavailableView {
                             Label("No Adaptive Profile", systemImage: "slider.horizontal.3")
                         } description: {
-                            Text("Create and review an Adaptive profile in Cycle before generating a workout.")
+                            Text("An approved Adaptive profile is required before generating a workout.")
                         }
                     }
                 }
@@ -179,7 +179,7 @@ struct AdaptiveWorkoutView: View {
             ContentUnavailableView {
                 Label("Profile Review Required", systemImage: "exclamationmark.triangle")
             } description: {
-                Text("Review and approve this profile in Cycle before generating a workout.")
+                Text("This Adaptive profile has not been approved for workout generation.")
             }
         }
     }

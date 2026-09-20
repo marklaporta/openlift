@@ -2,7 +2,7 @@ import XCTest
 
 final class AdaptiveProposalUITests: OpenLiftUITestCase {
     func testAdaptiveCycleSurfaceOpensProfileEditorAndLoadsExplicitStarter() throws {
-        let app = launchApp()
+        let app = launchLegacyAdministrationApp()
 
         XCTAssertTrue(app.tabBars.buttons["Log"].waitForExistence(timeout: 5))
         app.tabBars.buttons["History"].tap()
@@ -43,7 +43,7 @@ final class AdaptiveProposalUITests: OpenLiftUITestCase {
     }
 
     func testAdaptiveProposalUsesHistoryForSelectionAndPrefill() throws {
-        let app = launchApp([
+        let app = launchLegacyAdministrationApp([
             "OPENLIFT_UI_TESTING_ADAPTIVE_WORKFLOW",
             "OPENLIFT_UI_TESTING_ADAPTIVE_HISTORY"
         ])
