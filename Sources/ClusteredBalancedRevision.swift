@@ -278,54 +278,24 @@ extension BootstrapDataService {
 
 // MARK: Explicit synchronized arm revision (v8)
 extension FixedCycleClusterProgramService {
-    static let syncedArmsVersionID = "\(programIdentifier).v8"
-    static let syncedArmsTemplateName = "Clustered Hypertrophy v8"
-    static let syncedArmsIdentityKey = "openlift_clustered_hypertrophy_v8"
+    static let syncedArmsVersionID = BundledClusterPrograms.v8.programVersionID
+    static let syncedArmsTemplateName = BundledClusterPrograms.v8.templateName
+    static let syncedArmsIdentityKey = BundledClusterPrograms.v8.identityKey
     static let hammerCurlID = UUID(uuidString: "A8D6049B-0E33-43C8-91A9-6A4A689F2218")!
     static let singleArmOverheadID = UUID(uuidString: "17BC2F9D-F0A2-4604-AA41-33ADD79ED16B")!
 
     static func isSyncedArmsTemplate(_ template: CycleTemplate) -> Bool {
-        guard template.rotationPools.contains(where: { $0.key == syncedArmsIdentityKey && $0.entries.isEmpty }),
-              template.days.count == 18, Set(template.days.map(\.position)) == Set(0..<18) else { return false }
-        return Cluster.allCases.allSatisfy { cluster in
-            (0..<rotationLength(cluster, version: syncedArmsVersionID)).allSatisfy { step in
-                guard let day = template.days.first(where: { $0.position == templatePosition(cluster, step: step, version: syncedArmsVersionID) }) else { return false }
-                let roles: [MuscleGroup] = cluster == .cluster1 ? [.chest, .back, .triceps, .biceps]
-                    : cluster == .cluster2 ? [step % 2 == 0 ? .hamstrings : .quads]
-                    : step % 2 == 0 ? [.sideDelts, .calves, .traps] : [.sideDelts, .forearms]
-                let slots = CycleOrdering.sortedSlots(day.slots)
-                return day.label == "\(cluster.displayName) · \(variantLabel(step))" && slots.count == roles.count
-                    && slots.enumerated().allSatisfy { $0.element.position == $0.offset && $0.element.muscle == roles[$0.offset] && $0.element.defaultSetCount > 0 }
-            }
-        }
+        BundledClusterPrograms.v8.matches(template)
     }
 
     static func syncedArmsProgressionKey(selection: Selection, slotPosition: Int, exerciseId: UUID) -> String? {
         guard selection.programVersionID == syncedArmsVersionID else { return nil }
-        switch selection.cluster {
-        case .cluster1:
-            if slotPosition >= 2 {
-                if selection.effectiveStep < 3 {
-                    return progressionKey(cluster: .cluster2, effectiveStep: selection.effectiveStep, slotPosition: slotPosition - 1)
-                }
-                return "\(syncedArmsVersionID).movement.\(slotPosition == 2 ? "triceps" : "biceps").\(exerciseId.uuidString.lowercased())"
-            }
-            if slotPosition == 1 && [1, 3].contains(selection.effectiveStep) {
-                if exerciseId == CSDBRowIdentity.canonicalID { return chestBackProgressionKey(step: 3, slotPosition: 1) }
-                if exerciseId == pairedCableRowID { return chestBackProgressionKey(step: 1, slotPosition: 1) }
-            }
-            return chestBackProgressionKey(step: selection.effectiveStep, slotPosition: slotPosition)
-        case .cluster2: return balancedMovementKey(role: "legs", exerciseId: exerciseId)
-        case .cluster3:
-            if slotPosition == 0 { return balancedMovementKey(role: "shoulders", exerciseId: exerciseId) }
-            if slotPosition == 2 { return shrugProgressionKey }
-            return selection.effectiveStep % 2 == 0 ? balancedMovementKey(role: "calves", exerciseId: exerciseId)
-                : progressionKey(cluster: .cluster3, effectiveStep: selection.effectiveStep, slotPosition: slotPosition)
-        }
+        return BundledClusterPrograms.v8.progressionKey(clusterID: selection.cluster.rawValue,
+            step: selection.effectiveStep, slot: slotPosition, exerciseID: exerciseId)
     }
 
     static func makeSyncedArmsRecoveryTemplate(exercises: [Exercise]) throws -> CycleTemplate {
-        try makeSyncedArmsTemplate(exercises: exercises, preserving: makeBalancedRecoveryTemplate(exercises: exercises), preferences: [], cycleId: UUID())
+        try BundledClusterPrograms.v8.makeRecoveryTemplate(exercises: exercises)
     }
 
     static func makeSyncedArmsTemplate(exercises: [Exercise], preserving old: CycleTemplate,

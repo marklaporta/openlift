@@ -255,6 +255,191 @@ final class SyncedArmsTests: XCTestCase {
     }
 
     @MainActor
+    func testDeclarativeDefinitionMatchesFrozenRecoveryAndOldEngine() throws {
+        let (root, store, context) = try fixture(); _ = store
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try BootstrapDataService.prepareSyncedArmsRevision(modelContext: context, backupConfirmed: true)
+        let catalog = try context.fetch(FetchDescriptor<Exercise>())
+        let definition = BundledClusterPrograms.v8
+        try definition.validate()
+        XCTAssertEqual(try JSONDecoder().decode(ClusterProgramDefinition.self, from: JSONEncoder().encode(definition)), definition)
+        let template = try Program.makeSyncedArmsRecoveryTemplate(exercises: catalog)
+        let interpreted = try definition.makeRecoveryTemplate(exercises: catalog)
+        XCTAssertTrue(definition.matches(template))
+        XCTAssertTrue(Program.isSyncedArmsTemplate(interpreted))
+        let cycleID = UUID()
+        let states = Program.makeRotationStates(cycleInstanceId: cycleID, templateId: template.id, programVersionID: Program.syncedArmsVersionID)
+        let probeIDs = [UUID(), Program.pairedCableRowID, CSDBRowIdentity.canonicalID]
+        for cluster in Program.Cluster.allCases {
+            for step in 0..<Program.rotationLength(cluster, version: Program.syncedArmsVersionID) {
+                states.first { $0.clusterID == cluster.rawValue }!.positionIndex = step
+                let selection = try Program.selection(cluster: cluster, template: template, cycleInstanceId: cycleID, states: states)
+                XCTAssertEqual(definition.step(clusterID: cluster.rawValue, counter: step)?.templatePosition, selection.day.position)
+                let expected = programDefinitionGolden.filter { $0.day == selection.day.position }
+                let slots = Program.resolvedSlots(selection: selection, sessionId: UUID(), preferences: [], overrides: [])
+                XCTAssertEqual(slots.count, expected.count)
+                for (index, slot) in slots.enumerated() {
+                    let exercise = try XCTUnwrap(catalog.first { $0.id == slot.exerciseId })
+                    XCTAssertEqual(exercise.name, expected[index].exercise)
+                    XCTAssertEqual(slot.slot.defaultSetCount, expected[index].sets)
+                    XCTAssertEqual(slot.slot.muscle.rawValue, expected[index].muscle)
+                    XCTAssertEqual(slot.progressionKey, expected[index].key.replacingOccurrences(of: "{exerciseID}", with: slot.exerciseId.uuidString.lowercased()))
+                    let newSlot = try XCTUnwrap(interpreted.days.first { $0.position == selection.day.position }?.slots.first { $0.position == index })
+                    XCTAssertEqual(newSlot.exerciseId, slot.exerciseId)
+                    XCTAssertEqual(newSlot.defaultSetCount, slot.slot.defaultSetCount)
+                    for id in probeIDs + [slot.exerciseId] {
+                        XCTAssertEqual(definition.progressionKey(clusterID: cluster.rawValue, step: step, slot: index, exerciseID: id),
+                            legacyV8Key(cluster: cluster, step: step, slot: index, exerciseID: id))
+                    }
+                }
+            }
+        }
+        // Catalog-relative recovery must still work without the optional paired cable-row UUID.
+        let withoutPaired = catalog.filter { $0.id != Program.pairedCableRowID }
+        let oldFallback = try Program.makeSyncedArmsTemplate(exercises: withoutPaired, preserving: Program.makeBalancedRecoveryTemplate(exercises: withoutPaired), preferences: [], cycleId: UUID())
+        let newFallback = try definition.makeRecoveryTemplate(exercises: withoutPaired)
+        for day in oldFallback.days {
+            let other = try XCTUnwrap(newFallback.days.first { $0.position == day.position })
+            XCTAssertEqual(CycleOrdering.sortedSlots(day.slots).map(\.exerciseId), CycleOrdering.sortedSlots(other.slots).map(\.exerciseId))
+        }
+    }
+
+    // Independent ffc07ec oracle. Keep this in tests when production branches are removed.
+    private func legacyV8Key(cluster: Program.Cluster, step: Int, slot: Int, exerciseID: UUID) -> String {
+        let prefix = "openlift.clustered-hypertrophy."
+        func v1(_ c: String, _ role: String, _ phase: Int) -> String {
+            prefix + "v1." + c + "." + role + "." + String(UnicodeScalar(97 + phase)!)
+        }
+        switch cluster {
+        case .cluster1:
+            if slot >= 2 {
+                if step < 3 { return v1("cluster-2", slot == 2 ? "triceps" : "biceps", step) }
+                return prefix + "v8.movement." + (slot == 2 ? "triceps." : "biceps.") + exerciseID.uuidString.lowercased()
+            }
+            if slot == 0 { return v1("cluster-1", "chest", [1, 2, 0, 2][step]) }
+            if [1, 3].contains(step) {
+                if exerciseID == CSDBRowIdentity.canonicalID { return prefix + "v6.cluster-1.back.dumbbell-row" }
+                if exerciseID == Program.pairedCableRowID { return v1("cluster-1", "back", 2) }
+            }
+            return [v1("cluster-1", "back", 0), v1("cluster-1", "back", 2), prefix + "v6.cluster-1.back.single-arm-pulldown", prefix + "v6.cluster-1.back.dumbbell-row"][step]
+        case .cluster2: return prefix + "v7.movement.legs." + exerciseID.uuidString.lowercased()
+        case .cluster3:
+            if slot == 0 { return prefix + "v7.movement.shoulders." + exerciseID.uuidString.lowercased() }
+            if slot == 2 { return prefix + "v3.cluster-3.traps.seated-dumbbell-shrug" }
+            return step % 2 == 0 ? prefix + "v7.movement.calves." + exerciseID.uuidString.lowercased() : v1("cluster-3", "calves-forearms", step)
+        }
+    }
+
+    @MainActor
+    func testDefinitionPreservesOverridesIndependentCountersAndMalformedTemplateRejection() throws {
+        let (root, store, context) = try fixture(); _ = store
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try BootstrapDataService.prepareSyncedArmsRevision(modelContext: context, backupConfirmed: true)
+        let (template, cycle) = try active(context)
+        let states = Program.makeRotationStates(cycleInstanceId: cycle.id, templateId: template.id, programVersionID: Program.syncedArmsVersionID)
+        // All independently reachable combinations, not just 24 lockstep days.
+        for torso in 0..<4 { for legs in 0..<8 { for accessory in 0..<6 {
+            for (state, counter) in zip(states, [torso, legs, accessory]) { state.positionIndex = counter }
+            let selections = try Program.selections(template: template, cycleInstanceId: cycle.id, states: states)
+            XCTAssertEqual(selections.map(\.day.position), [torso, 4 + legs, 12 + accessory])
+            let items = selections.flatMap { Program.resolvedSlots(selection: $0, sessionId: UUID(), preferences: [], overrides: []) }
+            XCTAssertEqual(Set(items.map(\.exerciseId)).count, items.count)
+        } } }
+        for counter in [-10, 0, 23, 24, 25, Int.max - 1] {
+            for state in states { state.positionIndex = counter }
+            for selection in try Program.selections(template: template, cycleInstanceId: cycle.id, states: states) {
+                let length = selection.cluster == .cluster1 ? 4 : selection.cluster == .cluster2 ? 8 : 6
+                XCTAssertEqual(selection.absoluteStep, max(0, counter))
+                XCTAssertEqual(selection.effectiveStep, max(0, counter) % length)
+            }
+        }
+        states[0].positionIndex = 1
+        let selection = try Program.selection(cluster: .cluster1, template: template, cycleInstanceId: cycle.id, states: states)
+        let sessionID = UUID()
+        let preference = ClusterExercisePreference(programVersionID: Program.syncedArmsVersionID, templateDayPosition: 1, slotPosition: 1, exerciseId: Program.pairedCableRowID)
+        let override = ClusterExerciseOccurrenceOverride(sessionId: sessionID, programVersionID: Program.syncedArmsVersionID,
+            templateDayPosition: 1, slotPosition: 1, exerciseId: CSDBRowIdentity.canonicalID)
+        let preferred = Program.resolvedSlots(selection: selection, sessionId: sessionID, preferences: [preference], overrides: [])
+        let overridden = Program.resolvedSlots(selection: selection, sessionId: sessionID, preferences: [preference], overrides: [override])
+        XCTAssertEqual(preferred[1].exerciseId, Program.pairedCableRowID)
+        XCTAssertEqual(overridden[1].exerciseId, CSDBRowIdentity.canonicalID)
+        XCTAssertEqual(preferred[1].progressionKey, legacyV8Key(cluster: .cluster1, step: 1, slot: 1, exerciseID: Program.pairedCableRowID))
+        XCTAssertEqual(overridden[1].progressionKey, legacyV8Key(cluster: .cluster1, step: 1, slot: 1, exerciseID: CSDBRowIdentity.canonicalID))
+        let first = selection.day.slots.first!
+        first.defaultSetCount = 7 // Stored fallback edits remain valid; declaration does not reset them.
+        XCTAssertTrue(Program.isSyncedArmsTemplate(template))
+        first.defaultSetCount = 0
+        XCTAssertFalse(Program.isSyncedArmsTemplate(template))
+        first.defaultSetCount = 7
+        selection.day.label = "Wrong label"
+        XCTAssertFalse(Program.isSyncedArmsTemplate(template))
+    }
+
+    @MainActor
+    func testCopiedV8StoreDefinitionPreservesAllRowsAndDraft() throws {
+        let supplied = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("OpenLiftCopiedProgramDataStore")
+        guard FileManager.default.fileExists(atPath: supplied.appendingPathComponent("default.store").path) else {
+            throw XCTSkip("Stage a verified v8 phone snapshot in OpenLiftCopiedProgramDataStore")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ProgramDataReal-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: supplied, to: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("default.store")
+        // VACUUM snapshots retain a WAL header without sidecars. Normalize only this scratch copy
+        // before the read-only baseline query; SwiftData may recreate WAL on opening it.
+        var scratchDB: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &scratchDB), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(scratchDB, "PRAGMA journal_mode=DELETE", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(scratchDB)
+        let bookkeeping: Set<String> = ["ACHANGE", "ATRANSACTION", "ATRANSACTIONSTRING", "Z_PRIMARYKEY"]
+        let before = try databaseRows(at: url).filter { !bookkeeping.contains($0.key) }
+        func verifyReadOnlyProjection() throws {
+            let store = try container(at: url)
+            let context = ModelContext(store)
+            context.autosaveEnabled = false
+            let (template, cycle) = try active(context)
+            XCTAssertEqual(Program.versionID(for: template), Program.syncedArmsVersionID)
+            let catalog = try context.fetch(FetchDescriptor<Exercise>())
+            let notes = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0.notes) })
+            let states = Program.makeRotationStates(cycleInstanceId: cycle.id, templateId: template.id, programVersionID: Program.syncedArmsVersionID)
+            let preferences = try context.fetch(FetchDescriptor<ClusterExercisePreference>())
+            let overrides = try context.fetch(FetchDescriptor<ClusterExerciseOccurrenceOverride>())
+            let draft = try XCTUnwrap(context.fetch(FetchDescriptor<Session>()).first { $0.status == .draft })
+            let profiles = try context.fetch(FetchDescriptor<ExerciseResistanceProfile>())
+            for cluster in Program.Cluster.allCases {
+                let length = cluster == .cluster1 ? 4 : cluster == .cluster2 ? 8 : 6
+                for step in 0..<length {
+                    states.first { $0.clusterID == cluster.rawValue }!.positionIndex = step
+                    let selection = try Program.selection(cluster: cluster, template: template, cycleInstanceId: cycle.id, states: states)
+                    for slot in Program.resolvedSlots(selection: selection, sessionId: draft.id, preferences: preferences, overrides: overrides) {
+                        let original = Program.ResolvedSlot(slot: slot.slot, exerciseId: slot.exerciseId,
+                            progressionKey: legacyV8Key(cluster: cluster, step: step, slot: slot.slot.position, exerciseID: slot.exerciseId))
+                        XCTAssertEqual(slot.progressionKey, original.progressionKey)
+                        let actualProfile = Program.initialResistanceProfile(forExerciseNamed: catalog.first { $0.id == slot.exerciseId }!.name,
+                            exerciseId: slot.exerciseId, existingProfiles: profiles)
+                        for requirement: ResistanceProfileLookupRequirement in [.notApplicable, .cable(actualProfile), .cable(.weightStack), .cable(nil)] {
+                            let newEffort = try effort(context, item: slot, requirement: requirement)
+                            let oldEffort = try effort(context, item: original, requirement: requirement)
+                            XCTAssertEqual(newEffort, oldEffort)
+                            XCTAssertEqual(FixedCycleWorkoutService.draftSetCount(defaultSetCount: slot.slot.defaultSetCount, effort: newEffort),
+                                FixedCycleWorkoutService.draftSetCount(defaultSetCount: original.slot.defaultSetCount, effort: oldEffort))
+                        }
+                    }
+                }
+            }
+            XCTAssertEqual(Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0.notes) }), notes)
+            XCTAssertFalse(context.hasChanges)
+            try context.save()
+            let sessions = try context.fetch(FetchDescriptor<Session>())
+            print("PROGRAM_DATA_STORE: completed=\(sessions.filter { $0.status == .completed }.count), drafts=\(sessions.filter { $0.status == .draft }.count), rows=\(try context.fetchCount(FetchDescriptor<SetEntry>()))")
+        }
+        try verifyReadOnlyProjection()
+        XCTAssertEqual(try databaseRows(at: url).filter { !bookkeeping.contains($0.key) }, before)
+        try verifyReadOnlyProjection() // Fresh container/context after prior objects have left scope.
+        XCTAssertEqual(try databaseRows(at: url).filter { !bookkeeping.contains($0.key) }, before)
+    }
+
+    @MainActor
     func testRestoredOverheadKeepsProfilesAndLaterLiteralRowReduction() throws {
         let (root, store, context) = try fixture(); _ = store
         defer { try? FileManager.default.removeItem(at: root) }

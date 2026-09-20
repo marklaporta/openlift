@@ -380,3 +380,19 @@ profiles, including its literal completed row count. Its two-row template fallba
 is not a cap. Seated hammer curls are a distinct new identity with two initial
 rows and blank load/reps/previous performance. Each SA overhead row means one set
 on each side; record load and reps per side. Hammer loads are per dumbbell.
+
+## Bundled program definitions (engine foundation)
+
+Current v8 structural content is a typed, Codable `ClusterProgramDefinition` in
+`Sources/BundledClusterPrograms.swift`. The interpreter owns its 4/8/6 step
+layout, structural validation, progression rules and canonical recovery
+fallbacks. Existing templates/overlays retain their stored choices and counts;
+this refactor does not replace or activate them. Setup instructions reference
+live catalog notes, while completed history retains its frozen snapshots.
+
+The bundled recovery defaults are not a prescription reset: exports restore
+all effective future choices and their fallback counts, and qualifying prior
+efforts retain their literal row counts. The current v8 phone template can
+therefore differ from these canonical fallback defaults without being invalid.
+Import/preview/activation of arbitrary new definitions is a separate future
+feature. Legacy published-cycle import remains unchanged.

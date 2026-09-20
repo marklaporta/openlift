@@ -14,14 +14,16 @@ extension FixedCycleClusterProgramService {
     ]
 
     static func rotationLength(_ cluster: Cluster, version: String) -> Int {
-        version == syncedArmsVersionID ? (cluster == .cluster1 ? 4 : (cluster == .cluster2 ? 8 : 6))
-            : version == balancedVersionID ? (cluster == .cluster1 ? 4 : (cluster == .cluster2 ? 24 : 6))
+        if version == BundledClusterPrograms.v8.programVersionID,
+           let definition = BundledClusterPrograms.v8.cluster(cluster.rawValue) { return definition.steps.count }
+        return version == balancedVersionID ? (cluster == .cluster1 ? 4 : (cluster == .cluster2 ? 24 : 6))
             : (version == chestBackVersionID && cluster == .cluster1 ? 4 : cluster.rotationLength)
     }
 
     static func templatePosition(_ cluster: Cluster, step: Int, version: String) -> Int {
         let effective = step % rotationLength(cluster, version: version)
-        if version == syncedArmsVersionID { return (cluster == .cluster1 ? 0 : (cluster == .cluster2 ? 4 : 12)) + effective }
+        if version == BundledClusterPrograms.v8.programVersionID,
+           let selected = BundledClusterPrograms.v8.step(clusterID: cluster.rawValue, counter: step) { return selected.templatePosition }
         if version == balancedVersionID { return (cluster == .cluster1 ? 0 : (cluster == .cluster2 ? 4 : 28)) + effective }
         // Keep other clusters' existing exact-slot addresses unchanged.
         return version == chestBackVersionID && cluster == .cluster1 && effective == 3
