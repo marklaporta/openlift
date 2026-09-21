@@ -7,7 +7,7 @@ Both Codex and Claude Code work well for:
 - editing SwiftUI and SwiftData code
 - running `xcodebuild` tests
 - inspecting simulator or device logs
-- generating or updating published workout template JSON
+- authoring and previewing supported versioned program revisions
 - debugging cycle progression, history hydration, and export logic
 
 They are most effective when used from a terminal with access to the repo and Xcode command line tools.
@@ -36,7 +36,9 @@ With the right local setup, an agent can:
 - build for simulator or device
 - inspect Xcode destinations
 - install and launch the app with `devicectl`
-- read and write published cycle files
+- export a program starter, preview a revision, and apply an explicitly approved
+  preview through [`scripts/program-agent.py`](../scripts/program-agent.py)
+- inspect legacy published cycle files
 - inspect exported workout JSON
 
 OpenClaw's headless System security session cannot use Keychain-backed automatic
@@ -44,11 +46,19 @@ code signing. In that environment, use the canonical workspace deployment
 scripts, whose signing inputs remain outside this repository. The repo-local
 `scripts/testflight-deploy.sh` is for an interactive Xcode/Aqua session.
 
+## Program Management
+
+Use [program updates](program-updates.md) for the paired-host command contract.
+It requires development app-container access and a launchable phone; iCloud or
+TestFlight access alone is insufficient. Discuss the exact preview before apply.
+A draft-blocked request never becomes a queued update. The bridge does not expose
+Adaptive profile/mode editing, legacy migrations, or backup restoration.
+
 ## Good Agent Task Types
 
 - "add a built-in starter template and tests"
 - "fix history hydration for mixed cycle histories"
-- "generate a 5-day upper/lower/arms published cycle JSON"
+- "preview a reordered clustered program while retaining progression identities"
 - "inspect why the current draft does not match the active cycle"
 - "install the latest device build and relaunch the app"
 
@@ -106,5 +116,6 @@ For ongoing development:
 2. keep personal Apple settings in `Config/Local.xcconfig`
 3. keep signing material, stores, exports, archives, and device-specific
    deployment configuration outside the repo
-4. use published JSON for template experimentation
+4. use versioned revision previews for clustered-program changes; keep legacy
+   published-template experiments separate
 5. touch real stored history only when necessary and with backups

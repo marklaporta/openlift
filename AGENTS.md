@@ -23,15 +23,18 @@ Key source files:
 
 | File | Responsibility |
 |---|---|
-| `OpenLiftApp.swift` | App entry, V15 container startup, explicit rollout/repair gates |
-| `OpenLiftSchema.swift` | Additive V1-V15 schemas and migration plan |
+| `OpenLiftApp.swift` | App entry, V16 container startup, explicit rollout/repair gates |
+| `OpenLiftSchema.swift` | Additive V1-V16 schemas and migration plan |
 | `Models.swift` | SwiftData models and supporting value types |
 | `BootstrapDataService.swift` | Catalog/template seeding, hydration, repairs, clustered program/rollout |
 | `WorkoutView.swift` | Fixed Cycle draft entry, clustered completion, prefill, finish/export |
 | `AdaptiveWorkoutView.swift` | Adaptive readiness, design, execution, and completion |
 | `AdaptivePlanningServices.swift` | Planning, repeat-last lookup, progression/profile isolation |
 | `HistoryView.swift` | Completed history, occurrence-backed display, export retry |
-| `CycleView.swift` | Mode/template selection, editing, activation, published import |
+| `CycleView.swift` | Legacy administration; DEBUG/UI-testing host only |
+| `ProgramAgentBridge.swift` | Private paired-host requests, previews, activation receipts |
+| `ProgramImportService.swift` | Versioned revision validation and backup-protected apply |
+| `WorkoutNumericField.swift` | Native raw-text entry and keyboard set completion |
 | `ResistanceProfileService.swift` | Per-occurrence cable/stack/VOLTRA profiles |
 | `SessionExportService.swift` | Completed/draft JSON, hydration metadata, fail-closed filtering |
 | `StoreBackupService.swift` | Local store backup snapshots |
@@ -53,8 +56,9 @@ template: durable `ClusterExercisePreference` rows and session-scoped
 `ClusterExerciseOccurrenceOverride` rows. Resolution is occurrence override,
 then exact program-version/day/slot preference, then canonical exercise.
 
-All three current clusters appear in one draft. Their rotation lengths are
-3/6/6. Completing a cluster advances only its own state; skipped rows do not
+All three current clusters appear in one draft. Bundled v8 rotation lengths are
+4/8/6; historical definitions retain their own lengths. Completing a cluster
+advances only its own state; skipped rows do not
 block advancement; no movement or internal lane advances independently.
 `Finish Workout` requires at least one completed cluster and retains/exports
 only locked positive-rep rows backed by performed occurrence snapshots.
@@ -64,10 +68,10 @@ September 2026 v2 revision retains literal replacement-lane counts, archives v1
 state, and maps surviving exercise identities across reordered positions.
 `prepareSeptember2026ClusterRevision` is backup-gated and must not become a
 normal-startup mutation. See `docs/templates.md` and `docs/migration-safety.md`.
-A qualifying previous
-performance for the same progression identity supplies its literal row count,
-weights, and reps, so a completed manual reduction carries forward. Cluster 2
-derives three-step arm identities inside its six-step leg rotation; Cluster 3
+A qualifying previous performance for the same progression identity supplies
+its literal row count and weights, so a completed manual reduction carries forward. New Fixed/clustered
+rows require actual reps; prior reps remain reference-only. Historical Cluster 2
+derived three-step arm identities inside its six-step leg rotation; Cluster 3
 derives a two-step shoulder identity in v1–v3 and a three-step identity in the
 explicit v4 side-delt revision, inside its unchanged six-step calves/forearms lane.
 Do not add sub-rotation state.
@@ -75,7 +79,8 @@ Do not add sub-rotation state.
 V15 adds optional absolute-pound chain/eccentric fields to occurrence profiles.
 V12–V14 retain a frozen copy of their shipped profile model. Percent and pound
 settings are distinct durable units and never silently converted on base-weight
-changes; see `docs/migration-safety.md`.
+changes. V16 adds semantic gripper identity without rewriting shipped schemas;
+see `docs/migration-safety.md`.
 
 ## Build And Test
 
@@ -147,6 +152,7 @@ Current documentation:
 - `docs/data-and-history.md`
 - `docs/migration-safety.md`
 - `docs/templates.md`
+- `docs/program-updates.md`
 - `docs/setup.md`
 - `docs/adaptive-floating.md`
 - `docs/ai-workflows.md`

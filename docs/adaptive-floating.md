@@ -60,7 +60,9 @@ logged on any day but never enters an automatic plan or resets the hamstring
 clock. The persisted lateral-delt raw value remains `sideDelts` so old stores
 continue to decode.
 
-Cycle contains the one Adaptive profile editor. A profile stores strict muscle
+The Adaptive profile editor remains in the legacy administration test host;
+neither shipped navigation nor the program bridge exposes profile/mode editing.
+Existing Adaptive mode execution remains supported. A profile stores strict muscle
 priorities, editable fallback doses, editable recovery cadence, optional
 exercise splits, enablement, and workout capacity. The initial capacity is five
 muscle groups, seven exercises, no more than two exercises per muscle, and
