@@ -42,15 +42,6 @@ catalog notes as recovery evidence. Hydration restores notes for missing UUIDs,
 not over existing catalog entries; exact restoration of existing edited or
 cleared notes requires a full-store backup. See [program recovery](program-updates.md#persistence-and-recovery).
 
-The September 8 setup-note import runs once on the reviewed existing catalog IDs
-only. It fills four blank notes, preserves nonblank notes verbatim, and saves an
-in-store `TrainingPreference` completion marker in the same transaction. Later
-edits or clears are never reseeded. A fresh verified full-store snapshot under
-`Documents/OpenLift/revision-backups/before-exercise-setup-notes-*.sqlite` is
-required before any mutation. Snapshot/save failure leaves the marker absent
-and retries on a later launch; other catalogs are unchanged. No program,
-rotation, session, set, or resistance-profile data is modified.
-
 ## Resistance units and recovery
 
 V15 adds optional `chainPounds` and `eccentricPounds` to occurrence profiles.
@@ -101,8 +92,7 @@ Legacy cable history must still match the current complete profile to prefill.
 New drafts copy the literal qualifying row count and weights, not performed
 reps, so manually reducing a non-leg lane from three rows to two carries forward after that lane is
 completed. With no qualifying effort, the template supplies its literal
-prescribed count (v1 defaults to three; the September v2 replacement lanes
-retain the replaced lane count).
+prescribed count.
 
 Legacy Rotation `Session` and `SetEntry` shapes remain unchanged for copied-store
 migration safety. Adaptive planning/execution provenance lives in parallel
@@ -124,29 +114,6 @@ Fixed Cycle metadata is schema v3, clustered Fixed Cycle metadata is schema v4,
 and Adaptive workout export is schema v4 in its separate payload family. Older
 payloads still decode, with an absent field remaining unknown. Hydration creates
 a profile only from a complete valid payload.
-
-The audit-first Sherwick migration stage wrote
-`OpenLift/audits/voltra-resistance-profile-audit.json` for the allowlisted
-session identities. It never selects by date (the Aug. 3 session was created
-July 29), expects exactly 24 cable occurrences, and records exact occurrence
-keys plus performed-set counts. The device report generated
-`2026-08-04T11:53:19Z` was reviewed and frozen in
-`HistoricalResistanceProfileMigration.reviewedManifest`: 17 occurrences use
-VOLTRA inverse chains 25% / eccentric 25%, and the two Aug. 3 occurrences use
-inverse chains 70% / eccentric 30%.
-
-On startup, OpenLift recomputes the audit from SwiftData and applies the repair
-only if schema version, expected count, all 24 occurrence identities, exercise
-names, performed-set counts, and intended profiles exactly match the frozen
-manifest. The August 4 Pull A Lat Pulldown occurrence was later user-verified
-as inverse chains 70% / eccentric 30%; startup accepts the exact originally
-reversed 30% / 70% value only for that occurrence, corrects it, and marks the
-session for a replacement export. A missing/extra candidate, duplicate key, or
-any other conflicting existing profile aborts before any insertion or change.
-Newly repaired completed sessions are
-marked export-pending and immediately enter the normal export retry path. If
-all 24 exact profiles already exist, startup reports `already_applied`, performs
-no writes, and does not dirty or re-export those sessions again.
 
 Completed workouts:
 
@@ -363,9 +330,6 @@ If an AI agent is asked to change real user data:
 - prefer fixing the specific session, set, or draft involved
 - explain whether the change affects draft state, completed history, exports, or all three
 
-This repo has already hit bugs where draft state, cycle state, and history diverged. Treat stored user data as a high-risk area.
-
-
 ## Unified history and recovery evidence
 
 History interleaves Fixed Cycle/ad-hoc, Adaptive, and recovery-export-only sessions
@@ -387,17 +351,7 @@ are requested for download and never blindly overwritten. Only integrity-checked
 have confirmed upload metadata. Pending/corrupt files cannot displace the last
 seven verified recovery points.
 
-### CS DB Row consolidation
-
-`Cycle → …` controls in this and the gripper migration section are historical,
-not shipped navigation. The program bridge does not expose these migrations.
-
-The explicit `Cycle → Consolidate CS DB Row` action (or launch argument
-`OPENLIFT_CONSOLIDATE_CS_DB_ROW_2026_09_17`) consolidates the user-confirmed
-Helms Row, Chest Supported Row, and Chest-Supported Dumbbell Row identities.
-It requires no workout drafts or pending edits and takes a fresh, verified,
-full-store SQLite snapshot before saving. Installation alone does not activate
-it. Repeated activation is a no-op.
+### CS DB Row identity
 
 The existing dumbbell-row UUID remains the one active selectable **CS DB Row**.
 The two older catalog rows stay inactive: completed set IDs, names in frozen
@@ -422,13 +376,6 @@ canonical equivalent: redirecting a known name-only export would duplicate its
 sets alongside the preserved historical identity. Catalog seeding and new-entry
 validation do not recreate selectable aliases.
 
-`OPENLIFT_REPAIR_CS_DB_ROW_RECOVERY_2026_09_18` is an explicit, idempotent repair
-for two verified duplicate set UUIDs introduced by the old recovery resolver.
-It validates their original rows and exact session/load/rep/index evidence,
-requires completed consolidation and no drafts/pending edits, and verifies a
-fresh full-store snapshot before deleting only those two duplicate UUIDs.
-It does not deduplicate equal-valued legitimate sets or rewrite exports.
-
 ## CoC gripper model storage (V16)
 
 Captain of Crush / CoC Gripper stores the model identity **G**, **T**, or **1**
@@ -437,12 +384,9 @@ Fixed Cycle, Adaptive, and ad hoc sets use this representation. `weight` is a
 computed compatibility adapter for the existing picker/prefill algorithms, not
 a persisted ordinal. Other exercises keep their original numeric loads.
 
-The explicit **Cycle → Store Gripper Models as G / T / 1** action converts
-historical ordinals `1 → G`, `2 → T`, `3 → "1"` after a verified full-store
-backup. It retains session/set identities, reps, timestamps and all unrelated
-program state. Unknown legacy values remain numeric and visibly unknown;
-they are never rounded, guessed, or erased. Drafts/pending edits block the
-operation, repeated activation is a no-op, and program/row revisions are separate.
+For untagged older data, ordinal `1` means G, `2` means T, and `3` means model
+"1". Unknown values remain numeric and visibly unknown; never round or guess
+a model from them.
 
 JSON sets use `gripper_model` plus `load_encoding: "coc_model_identity_v2"`
 and `weight: 0`. The semantic token `"1"` cannot be confused with legacy

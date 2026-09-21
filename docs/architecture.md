@@ -127,11 +127,10 @@ changes, while prefill/history remain filtered by the resolved exercise ID.
 Completed occurrences freeze the actual resolved exercise as evidence.
 
 Progression keys are versioned semantic identities, not template-day lookup
-heuristics. V2 maps surviving movements to their existing identities; changing
-position never transfers a different exercise's loads. Shorter internal rotations are derived from the cluster step, while
-future structural edits require a new program version. Normal startup and V13
-migration do not activate this program; the explicit rollout is documented in
-[`migration-safety.md`](migration-safety.md).
+heuristics. Changing position never transfers another exercise's loads. Internal
+rotations are derived from the cluster step; structural edits require a new
+program version. Normal startup and schema migration do not activate revisions;
+use the [program bridge](program-updates.md).
 
 The current v8 program has three independently advancing clusters: four torso/arm
 steps, eight legs-only steps, and six accessory steps. Older v1–v7 definitions
@@ -149,11 +148,8 @@ the [program bridge](program-updates.md); the legacy published-cycle format is
 not interchangeable with this contract.
 
 V8 rotation selection, structural validation, progression identities, and
-recovery construction use the generic interpreter. Recovery no longer builds
-v8 by reconstructing v1 through v7. Historical migration/activation procedures
-remain separate, including the explicit v7→v8 transition that preserves live
-choices. Merely loading this definition does not activate a revision or write
-the store.
+recovery construction use the generic interpreter. Merely loading this
+definition does not activate a revision or write the store.
 
 Existing SwiftData template exercise IDs and positive fallback counts remain
 authoritative; occurrence overrides still outrank persistent preferences and
@@ -166,7 +162,7 @@ Completed snapshots are never rebuilt from this content.
 
 ## State Selection
 
-The app used to spread active-cycle logic across views. That is now centralized in [`OpenLiftStateResolver.swift`](../Sources/OpenLiftStateResolver.swift).
+Active-cycle selection is centralized in [`OpenLiftStateResolver.swift`](../Sources/OpenLiftStateResolver.swift).
 
 It is responsible for:
 
@@ -285,12 +281,11 @@ the same fail-closed filter independently. The legacy whole-day pointer is not
 used, and a draft containing a completed cluster cannot be discarded or silently
 replaced. Partial-cluster advancement does not exist.
 
-V1 reserved slots default to three draft rows; the explicit v2 revision retains
-completed replacement-lane counts as its new default. If a comparable prior
-performance exists, new draft creation copies its literal row count and weights,
-while reps start blank; prior reps remain an inline reference. This is why
-manually completing two rows for a non-leg progression lane causes the next occurrence of that same lane to open with two rows; the
-template itself remains immutable.
+New drafts copy the qualifying prior effort's literal row count and weights,
+while actual reps start blank and prior reps remain an inline reference. Without
+a qualifying effort, the stored template supplies the fallback count. A manual
+reduction in completed rows can therefore carry forward without editing the
+template.
 
 `WorkoutView` remains the single user-facing Workout page. Its content mutates
 with the selected mode. While Adaptive is selected, Fixed Cycle's instance,
@@ -379,7 +374,8 @@ Templates can come from:
 2. legacy published JSON files in `OpenLift/cycles`
 3. built-in fallback starter template from [`BootstrapDataService.swift`](../Sources/BootstrapDataService.swift)
 
-Published JSON format is documented in [`docs/templates.md`](templates.md).
+Template selection and current program behavior are documented in
+[templates](templates.md); versioned JSON uses the [program-update contract](program-updates.md).
 
 ## Config And Secrets Boundary
 

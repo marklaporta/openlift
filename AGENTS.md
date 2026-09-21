@@ -63,18 +63,12 @@ block advancement; no movement or internal lane advances independently.
 `Finish Workout` requires at least one completed cluster and retains/exports
 only locked positive-rep rows backed by performed occurrence snapshots.
 
-The v1 reserved template defaults every slot to three rows; the explicit
-September 2026 v2 revision retains literal replacement-lane counts, archives v1
-state, and maps surviving exercise identities across reordered positions.
-`prepareSeptember2026ClusterRevision` is backup-gated and must not become a
-normal-startup mutation. See `docs/templates.md` and `docs/migration-safety.md`.
 A qualifying previous performance for the same progression identity supplies
-its literal row count and weights, so a completed manual reduction carries forward. New Fixed/clustered
-rows require actual reps; prior reps remain reference-only. Historical Cluster 2
-derived three-step arm identities inside its six-step leg rotation; Cluster 3
-derives a two-step shoulder identity in v1–v3 and a three-step identity in the
-explicit v4 side-delt revision, inside its unchanged six-step calves/forearms lane.
-Do not add sub-rotation state.
+its literal row count and weights; otherwise use the stored fallback count.
+New Fixed/clustered rows require actual reps, with prior reps reference-only.
+Sub-rotation positions are derived from whole-cluster steps; do not add mutable
+sub-rotation state. Current behavior and safe revision delivery are documented in
+`docs/templates.md` and `docs/program-updates.md`.
 
 V15 adds optional absolute-pound chain/eccentric fields to occurrence profiles.
 V12–V14 retain a frozen copy of their shipped profile model. Percent and pound
@@ -156,5 +150,3 @@ Current documentation:
 - `docs/setup.md`
 - `docs/adaptive-floating.md`
 - `docs/ai-workflows.md`
-
-`prd.md` is the historical v1 requirements baseline, not the live architecture.

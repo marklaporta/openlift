@@ -91,22 +91,6 @@ filters. First-build/first-boot costs still apply on a fresh checkout. Simulator
 are kept for reuse; exact IDs are in `.build/tests/simulator-1.json` through
 `simulator-3.json` (created as needed).
 
-### Measured checkpoint timing
-
-On an M4 with iPhone 17 / iOS 26.5 simulators (September 7, 2026), the same
-13 UI methods took **397.5s → 287.8s** using prepared simulators: about **28% less
-wall time**. The new runner's time includes its incremental build check. Aggregate
-UI method time fell **841.4s → 615.2s**; all assertions and screenshots remain.
-A warm all-unit checkpoint took **23.2s** (348 passed, two copied-store opt-in
-skips). All 363 methods are retained: 350 unit and 13 UI.
-
-These are measured runs, not a universal timing guarantee. First-boot migration,
-build caches and Xcode worker scheduling materially affect wall time; an initial
-fresh-clone baseline took 647.1s and is deliberately not the comparison above.
-The long adaptive end-to-end flow remains intact and still sets a useful lower
-bound. Copied personal-store gates and physical-device/cloud delivery are not
-part of these simulator measurements.
-
 ### Direct Xcode commands
 
 Simulator unit checkpoint (use a disposable simulator without staged personal stores):
@@ -141,9 +125,9 @@ use an in-memory model and a process-local temporary export directory, with no
 live iCloud or direct-export transport. The ad hoc save flow verifies the entered
 set in local History, not cloud upload or persistence across app launches.
 
-Copied-store migration and September content-revision tests remain opt-in;
-follow [migration safety](migration-safety.md) when schema/startup/recovery or
-that explicit rollout changes. Neither a skipped copied-store gate nor synthetic
+Copied-store migration and program-activation tests remain opt-in;
+follow [migration safety](migration-safety.md) when schema, startup, recovery,
+or activation behavior changes. Neither a skipped copied-store gate nor synthetic
 fixtures establish compatibility with every installed historical store.
 
 Device build:

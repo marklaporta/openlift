@@ -16,9 +16,6 @@ phone; TestFlight-only delivery is not supported. It previews exact revisions,
 blocks changes while a draft or pending edits exist, and backs up before an
 explicitly approved activation. Installing the app does not change the program.
 
-The [older interface mockups](docs/images/) are historical design illustrations,
-not screenshots of the current navigation or input behavior.
-
 This repository is set up for two audiences:
 
 - humans who want to build, run, and evolve the app
@@ -42,7 +39,6 @@ If you are new to the repo, read these in order:
 - [`Tests`](Tests): unit and regression tests
 - [`Resources`](Resources): reference notes used for exercise modeling
 - [`Config`](Config): tracked shared build config plus local-only override template
-- [`prd.md`](prd.md): product requirements baseline
 
 ## Local Config Model
 
@@ -99,7 +95,7 @@ If you are using Codex or Claude Code, treat this README as the index and then l
 - setup and Apple account / Xcode issues: [`docs/setup.md`](docs/setup.md)
 - architecture and code-path map: [`docs/architecture.md`](docs/architecture.md)
 - previewing and applying clustered revisions: [`docs/program-updates.md`](docs/program-updates.md)
-- template formats and historical program revisions: [`docs/templates.md`](docs/templates.md)
+- current templates and program behavior: [`docs/templates.md`](docs/templates.md)
 - history, exports, and real user data: [`docs/data-and-history.md`](docs/data-and-history.md)
 - schemas, backups, rollout, and real-store gates: [`docs/migration-safety.md`](docs/migration-safety.md)
 - CLI-driven development with Xcode, simulators, devices, and AI agents: [`docs/ai-workflows.md`](docs/ai-workflows.md)
