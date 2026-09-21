@@ -1,12 +1,18 @@
 # Templates
 
+For current clustered program authoring and activation, use the
+[paired-host program bridge](program-updates.md). Published cycles below are a
+legacy format. Historical `Cycle → …` paths describe retired administration UI;
+they are not available in the shipped three-tab app.
+
 ## How Templates Enter The App
 
-OpenLift can get workout templates from three places:
+OpenLift can get workout templates from:
 
 1. templates already stored in SwiftData
 2. published JSON files in `OpenLift/cycles`
 3. a built-in fallback starter template named `4D Upper/Lower`
+4. validated versioned revisions applied through the paired-host program bridge
 
 The built-in fallback is only used when there are no stored templates and no published cycles available.
 
@@ -30,10 +36,10 @@ Published templates are JSON files discovered from:
 
 - `iCloud Drive/OpenLift/cycles`
 
-The app can import them from the Cycle tab.
-
-There is no separate Import tab. After placing a cycle JSON in this folder,
-open Cycle, tap Refresh, then choose Import or Import + Activate.
+Bootstrap retains legacy published-cycle discovery. The former Cycle-tab
+Refresh/Import/Activate controls are not shipped. Merely placing a file here is
+not an explicit program update, and this JSON format is not accepted by the
+versioned program bridge.
 
 Minimal shape:
 
@@ -61,7 +67,7 @@ Notes:
 - `exerciseName` must resolve against the seeded exercise catalog
 - day labels matter because the app uses them in cycle progression and history display
 
-## Vibe-Coding A New Template
+## Legacy Published-Template Authoring
 
 Good workflow:
 
@@ -69,7 +75,8 @@ Good workflow:
 2. pick exercises from the seeded catalog already used by the app
 3. keep slots ordered the way you want them displayed
 4. validate on simulator
-5. import and activate in the app
+5. verify legacy import in the isolated test host; use the program bridge
+   contract instead for supported updates to an active clustered program
 
 When asking an AI agent to generate a template, give it:
 
@@ -85,9 +92,10 @@ Good prompt example:
 Create a published cycle JSON for a 4-day upper/lower hypertrophy split using only exercises already in OpenLift's seeded exercise catalog. Keep lower days strictly lower-body. Output valid JSON for OpenLift/cycles.
 ```
 
-## Editing Templates In The App
+## Legacy Template Administration
 
-The Cycle tab supports:
+The internal Cycle view, available only in the explicit DEBUG/UI-testing host,
+retains:
 
 - creating templates
 - cloning templates
@@ -97,15 +105,14 @@ The Cycle tab supports:
 
 Changing to a different active template requires confirmation.
 
-`Clustered Hypertrophy v1`–`v7` are internal versioned program templates rather
-than a general editable template. The Cycle tab disables editing and cloning it,
-and rejects a published import that tries to replace its reserved name. Its
-three cluster state rows and stable progression identities are created only by
-the explicit backup-gated rollout described in
-[`migration-safety.md`](migration-safety.md).
+Clustered templates are versioned program content rather than general editable
+templates. Legacy administration disables their editing and cloning and rejects
+published imports that try to replace reserved names. Initial activation follows
+the backup-gated rollouts in [migration safety](migration-safety.md); subsequent
+supported revisions use the [program bridge](program-updates.md).
 
-The reserved template has 15 structural days but the Workout tab never presents
-them as one global day rotation. It presents the current selection from all
+The original v1 reserved template has 15 structural days, but Workout never
+presents them as one global day rotation. It presents the current selection from all
 three clusters together. Each table column advances independently; rows are
 identity mappings, not synchronized whole-workout days:
 
@@ -394,11 +401,12 @@ The bundled recovery defaults are not a prescription reset: exports restore
 all effective future choices and their fallback counts, and qualifying prior
 efforts retain their literal row counts. The current v8 phone template can
 therefore differ from these canonical fallback defaults without being invalid.
-Import/preview/activation of arbitrary new definitions is a separate future
-feature. Legacy published-cycle import remains unchanged.
+New definitions within the supported bounds can be previewed and activated
+through the program bridge. Legacy published-cycle parsing remains separate.
 
 ## Imported clustered revisions
 
-Versioned JSON revisions can now be exported, previewed, and explicitly applied
-from Cycle → Program Updates. See [program update authoring and activation](program-updates.md)
+Versioned JSON revisions can be exported, previewed, and explicitly applied
+with `scripts/program-agent.py` from a trusted paired Mac. No Cycle tab or
+program-update menu is required or shipped. See [program update authoring and activation](program-updates.md)
 for the format, supported bounds, draft protection, and recovery behavior.

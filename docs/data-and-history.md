@@ -37,8 +37,10 @@ Notes use the existing `Exercise.notes` field and stable catalog identity, so th
 same exercise shares its editable note across sessions, slots, and modes. A
 substitution shows the replacement exercise's own note. No schema migration or
 workout-program change is required. Notes survive app restarts and full-store
-backup/restore; workout JSON exports remain performance evidence and do not
-include these mutable catalog notes.
+backup/restore. Exports for embedded program definitions also include referenced
+catalog notes as recovery evidence. Hydration restores notes for missing UUIDs,
+not over existing catalog entries; exact restoration of existing edited or
+cleared notes requires a full-store backup. See [program recovery](program-updates.md#persistence-and-recovery).
 
 The September 8 setup-note import runs once on the reviewed existing catalog IDs
 only. It fills four blank notes, preserves nonblank notes verbatim, and saves an
@@ -78,24 +80,26 @@ Exercise effort history is shared across modes by canonical exercise identity.
 Fixed Cycle first searches completed nonzero occurrences of the same stable
 cycle-instance day, skipping zero-set omissions, and then falls back to the newest qualifying
 Fixed Cycle, Adaptive, or ad hoc effort. Adaptive and ad hoc have no stable
-cycle-day identity and use the global newest effort directly. Prefill copies
-the literal completed set count, weights, and reps without conversion.
+cycle-day identity and use the global newest effort directly. New Fixed/clustered
+rows copy the literal completed set count and weights, with blank actual reps
+and prior reps shown as reference. Adaptive/ad hoc prefill is unchanged.
 
 Cable effort adds one more identity gate: resistance source and the complete
 raw profile must match. Different or unknown profiles are shown as reference
 history but are not silently prefilled or scored against each other.
 
 The versioned clustered program uses an explicit progression key per exercise
-slot. Legs use A-F, arms use A-C, shoulders use A-B, and the alternating
-calves/forearms slot uses A-F even though each cluster has only one runtime
-state. A same-key prior occurrence with an exact resistance profile is preferred;
+slot. Each version defines its identity mapping; historical key namespaces may
+be retained across reordered positions. The current v8 layout is 4/8/6 steps,
+with only one runtime state per whole cluster. A same-key prior occurrence with
+an exact resistance profile is preferred;
 if none exists, the newest same-key occurrence with another or unknown profile
 is the explicit progression fallback. A fresh key may consult only legacy,
 unkeyed global history as initial reference, without retroactively relabeling it
 or considering sessions already owned by any versioned progression identity.
 Legacy cable history must still match the current complete profile to prefill.
-Drafts copy the literal qualifying row count, weights, and reps, so manually
-reducing a non-leg lane from three rows to two carries forward after that lane is
+New drafts copy the literal qualifying row count and weights, not performed
+reps, so manually reducing a non-leg lane from three rows to two carries forward after that lane is
 completed. With no qualifying effort, the template supplies its literal
 prescribed count (v1 defaults to three; the September v2 replacement lanes
 retain the replaced lane count).
@@ -206,6 +210,18 @@ so a queue-write failure retries the scan on a later foreground without
 affecting launch, workout completion, or History. Pending SwiftData sessions are
 serialized first through the current exporter; this local mirror backfill then
 covers older sessions already marked successfully exported.
+
+## Recovery Scope
+
+Daily full-store snapshots preserve the database, including program, rotations,
+readiness, drafts, and catalog notes. Workout JSON supports missing-history
+hydration and the program/occurrence evidence it explicitly contains; one late
+workout export is not a complete store backup.
+
+Agent-managed backup preview/restore is not yet implemented. The program bridge
+only manages supported revisions, not store replacement or recovery. Recovery
+work must distinguish these inputs and prove the intended result on a disposable
+copy before changing a live store.
 
 ## Recovery Behavior
 
@@ -372,6 +388,9 @@ have confirmed upload metadata. Pending/corrupt files cannot displace the last
 seven verified recovery points.
 
 ### CS DB Row consolidation
+
+`Cycle → …` controls in this and the gripper migration section are historical,
+not shipped navigation. The program bridge does not expose these migrations.
 
 The explicit `Cycle → Consolidate CS DB Row` action (or launch argument
 `OPENLIFT_CONSOLIDATE_CS_DB_ROW_2026_09_17`) consolidates the user-confirmed

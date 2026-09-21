@@ -18,7 +18,10 @@ Main tabs:
 - Log
 - Workout
 - History
-- Cycle
+
+Program administration uses the [paired-host bridge](program-updates.md).
+`CycleView` is reachable only in the explicit DEBUG/UI-testing legacy host,
+not in production navigation.
 
 ## Core Data Model
 
@@ -141,8 +144,9 @@ defines a Codable value contract: program/version identity, ordered cluster
 steps and exact template positions, exercise references, fallback set counts,
 and progression rules. [`BundledClusterPrograms.swift`](../Sources/BundledClusterPrograms.swift)
 is the bundled v8 content. It is compiled typed data (no runtime file-loading
-or decoding dependency); JSON round-trip compatibility is tested for later
-program authoring/import work, which is not yet implemented.
+or decoding dependency). New versioned JSON definitions are supported through
+the [program bridge](program-updates.md); the legacy published-cycle format is
+not interchangeable with this contract.
 
 V8 rotation selection, structural validation, progression identities, and
 recovery construction use the generic interpreter. Recovery no longer builds
@@ -172,7 +176,7 @@ It is responsible for:
 - resolving cycle/day labels for history
 - finding the most recent matching completed session by template name and day index
 
-This is the main file to inspect if Workout, History, and Cycle disagree about what is active.
+This is the main file to inspect if Workout, History, and program-bridge status disagree about what is active.
 
 ## Bootstrap Flow
 
@@ -209,10 +213,13 @@ The Workout tab owns:
 - draft export snapshots
 - malformed-entry repair logic
 
-Fixed Cycle numeric fields edit stable local buffers. A roughly 200 ms idle
-coalescer, focus loss, lock, disappearance, and app backgrounding flush one
-SwiftData save; lock always flushes before validation. Draft export sleeps
-before constructing its immutable snapshot, then serializes JSON and performs
+Fixed Cycle numeric fields hold raw text locally in a native UIKit field,
+avoiding per-keystroke SwiftUI/model updates. A one-second idle checkpoint, focus
+loss, workout actions, disappearance, and backgrounding flush validated edits.
+Keyboard Complete Set commits the latest text before validation and completion;
+Done saves and dismisses. See [numeric entry](data-and-history.md#fixed-cycle-numeric-entry).
+
+Draft export sleeps before constructing its immutable snapshot, then serializes JSON and performs
 local/iCloud file I/O on a serial actor rather than the main actor.
 
 Relevant code:
@@ -280,9 +287,9 @@ replaced. Partial-cluster advancement does not exist.
 
 V1 reserved slots default to three draft rows; the explicit v2 revision retains
 completed replacement-lane counts as its new default. If a comparable prior
-performance exists, draft creation copies its literal row count, weights, and
-reps instead. This is why manually completing two rows for a non-leg progression
-lane causes the next occurrence of that same lane to open with two rows; the
+performance exists, new draft creation copies its literal row count and weights,
+while reps start blank; prior reps remain an inline reference. This is why
+manually completing two rows for a non-leg progression lane causes the next occurrence of that same lane to open with two rows; the
 template itself remains immutable.
 
 `WorkoutView` remains the single user-facing Workout page. Its content mutates
@@ -311,31 +318,20 @@ None and Light soreness are treated as normally trainable, with Light losing an
 otherwise equal scheduling tie to None; Moderate and Heavy are excluded from
 automatic planning while manual plan edits remain available.
 
-## Cycle Flow
+## Program Administration
 
-The Cycle tab manages:
+[`ProgramAgentBridge.swift`](../Sources/ProgramAgentBridge.swift) handles explicit
+UUID wake links using the root UI's model context. The paired host stages the
+matching request privately; links alone carry no payload or authority.
+[`ProgramImportService.swift`](../Sources/ProgramImportService.swift) validates
+versioned definitions and performs backup-protected atomic activation.
+[Program updates](program-updates.md) owns the command, approval, replay, and
+transport contract.
 
-- selecting Fixed Cycle or Adaptive Floating as the one active training mode
-- listing templates
-- editing and cloning templates
-- importing published cycle JSON
-- activating a template
-- showing lightweight debug state
-
-Relevant code:
-
-- [`CycleView.swift`](../Sources/CycleView.swift)
-- Adaptive profile validation/versioning:
-  [`AdaptiveProgramService.swift`](../Sources/AdaptiveProgramService.swift)
-- Adaptive profile and complex editor:
-  [`AdaptiveProgramEditorView.swift`](../Sources/AdaptiveProgramEditorView.swift)
-- published cycle parsing: [`PublishedCycleService.swift`](../Sources/PublishedCycleService.swift)
-
-Activation behavior:
-
-- changing to a different active template requires confirmation
-- activating a new template clears only draft sessions for the stale cycle being replaced
-- the selected template id/name is persisted in `UserDefaults`
+`CycleView`, `AdaptiveProgramEditorView`, and the legacy published-template
+importer remain internal code exercised by the DEBUG/UI-testing host. Their
+mode/profile/template controls are not shipped navigation, and the program
+bridge does not expose them. Existing mode state and history remain supported.
 
 ## History Flow
 
@@ -379,8 +375,8 @@ If history looks wrong after corruption or data loss, inspect both the SwiftData
 
 Templates can come from:
 
-1. stored SwiftData templates
-2. published JSON files in `OpenLift/cycles`
+1. stored SwiftData templates, including bridge-applied versioned definitions
+2. legacy published JSON files in `OpenLift/cycles`
 3. built-in fallback starter template from [`BootstrapDataService.swift`](../Sources/BootstrapDataService.swift)
 
 Published JSON format is documented in [`docs/templates.md`](templates.md).
@@ -458,7 +454,3 @@ namespaced rotation-pool metadata, without a schema change or process-global
 registry. Runtime selections carry the definition explicitly. Program updates
 use read-only preview followed by fresh-backup-protected atomic activation;
 exports retain the definition and catalog evidence. See [program updates](program-updates.md).
-
-## Agent-managed program administration
-
-The primary tabs are Log, Workout and History. Program revisions use the paired-host private-container bridge, not a Cycle tab or manual import menu; see [program updates](program-updates.md) for the exact authority, preview/receipt and transport contract. Legacy administration views remain internal code, not a supported navigation destination.

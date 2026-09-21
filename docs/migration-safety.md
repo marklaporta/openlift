@@ -1,5 +1,11 @@
 # SwiftData migration safety
 
+Historical `Cycle → …` instructions below document earlier rollout controls,
+now retained only in the DEBUG/UI-testing administration host. Current supported
+clustered revisions use the [paired-host bridge](program-updates.md). That bridge
+does not expose legacy migrations or full-store restoration; installation alone
+does not authorize or activate any of them.
+
 OpenLift's pre-Adaptive model is declared as `OpenLiftSchemaV1` with schema
 version `1.0.0`. The additive `OpenLiftSchemaV2` adds only
 `TrainingPreference`. `OpenLiftSchemaV3` adds Adaptive-owned records for the
