@@ -1,412 +1,80 @@
-# Templates
-
-For current clustered program authoring and activation, use the
-[paired-host program bridge](program-updates.md). Published cycles below are a
-legacy format. Historical `Cycle → …` paths describe retired administration UI;
-they are not available in the shipped three-tab app.
-
-## How Templates Enter The App
-
-OpenLift can get workout templates from:
-
-1. templates already stored in SwiftData
-2. published JSON files in `OpenLift/cycles`
-3. a built-in fallback starter template named `4D Upper/Lower`
-4. validated versioned revisions applied through the paired-host program bridge
-
-The built-in fallback is only used when there are no stored templates and no published cycles available.
-
-## Built-In Starter Template
-
-The built-in default is a 4-day upper/lower split:
-
-- `Upper A`
-- `Lower A`
-- `Upper B`
-- `Lower B`
-
-Upper days include chest, back, delts, triceps, and biceps.
-Lower days are lower-focused and do not include arm work.
-
-The starter template is defined in [`BootstrapDataService.swift`](../Sources/BootstrapDataService.swift).
-
-## Published JSON Templates
-
-Published templates are JSON files discovered from:
-
-- `iCloud Drive/OpenLift/cycles`
-
-Bootstrap retains legacy published-cycle discovery. The former Cycle-tab
-Refresh/Import/Activate controls are not shipped. Merely placing a file here is
-not an explicit program update, and this JSON format is not accepted by the
-versioned program bridge.
-
-Minimal shape:
-
-```json
-{
-  "name": "4D Upper/Lower",
-  "days": [
-    {
-      "label": "Upper A",
-      "slots": [
-        {
-          "muscle": "chest",
-          "exerciseName": "Flat Dumbbell Press",
-          "defaultSetCount": 3
-        }
-      ]
-    }
-  ]
-}
-```
-
-Notes:
-
-- use `exerciseName` unless you have a specific reason to use `exerciseId`
-- `exerciseName` must resolve against the seeded exercise catalog
-- day labels matter because the app uses them in cycle progression and history display
-
-## Legacy Published-Template Authoring
-
-Good workflow:
-
-1. decide the split and day labels first
-2. pick exercises from the seeded catalog already used by the app
-3. keep slots ordered the way you want them displayed
-4. validate on simulator
-5. verify legacy import in the isolated test host; use the program bridge
-   contract instead for supported updates to an active clustered program
-
-When asking an AI agent to generate a template, give it:
-
-- target split, for example `4-day upper/lower`
-- equipment constraints
-- exercise preferences
-- whether lower days should include any upper-body accessories
-- whether to output a JSON published cycle file or code changes
-
-Good prompt example:
-
-```text
-Create a published cycle JSON for a 4-day upper/lower hypertrophy split using only exercises already in OpenLift's seeded exercise catalog. Keep lower days strictly lower-body. Output valid JSON for OpenLift/cycles.
-```
-
-## Legacy Template Administration
-
-The internal Cycle view, available only in the explicit DEBUG/UI-testing host,
-retains:
-
-- creating templates
-- cloning templates
-- editing template days and slots
-- importing published templates
-- activating a template
-
-Changing to a different active template requires confirmation.
-
-Clustered templates are versioned program content rather than general editable
-templates. Legacy administration disables their editing and cloning and rejects
-published imports that try to replace reserved names. Initial activation follows
-the backup-gated rollouts in [migration safety](migration-safety.md); subsequent
-supported revisions use the [program bridge](program-updates.md).
-
-The original v1 reserved template has 15 structural days, but Workout never
-presents them as one global day rotation. It presents the current selection from all
-three clusters together. Each table column advances independently; rows are
-identity mappings, not synchronized whole-workout days:
-
-The Workout tab may replace a movement for only the current workout or for that
-exact rotation slot going forward. The latter scope means program version plus
-canonical template-day position plus slot position; it does not spill into a
-different raw day that happens to share a shortened progression identity.
-These choices are overlays, not template edits. Resetting a durable preference
-restores the canonical movement, and locked positive-rep work blocks replacement.
-
-**Original v1 mappings (archived after the [v2 revision](#september-2026-clustered-revision-v2)):**
-
-| Identity | Cluster 1: chest + back | Cluster 2: legs + triceps + biceps | Cluster 3: shoulders + calves/forearms |
-|---|---|---|---|
-| A | Incline Dumbbell Press; Lat Pulldown | Belt Squat; Overhead Cable Extension; Incline Curl | Super ROM Dumbbell Lateral Raise; Stair Calves |
-| B | Flat Dumbbell Press; Lat Prayer | Stiff-Leg Deadlift; Cable Pushdown; Dumbbell Preacher Curl | Cable Lateral Raise; Bench-Supported Cable Wrist Curl (Supinated) |
-| C | Incline Press-Flye; Chest Supported Row | Sumo Belt Squat; Dumbbell Skullcrusher; Bayesian Curl | Super ROM Dumbbell Lateral Raise; Stair Calves |
-| D | repeats A | Back Extension; Overhead Cable Extension; Incline Curl | Cable Lateral Raise; Bench-Supported Cable Wrist Extension (Pronated) |
-| E | repeats B | Bulgarian Split Squat; Cable Pushdown; Dumbbell Preacher Curl | Super ROM Dumbbell Lateral Raise; Stair Calves |
-| F | repeats C | Leg Curl; Dumbbell Skullcrusher; Bayesian Curl | Cable Lateral Raise; Captain of Crush |
-
-Cluster 1 therefore has a three-step rotation; Clusters 2 and 3 each have six.
-Cluster 2 derives three-step arm identities inside its six-step leg rotation.
-Cluster 3 derives a two-step shoulder identity inside its six-step
-calves/forearms rotation. One whole-cluster state advances atomically; there is
-no pointer or completion action for an internal lane.
-
-In v1, every slot defaults to three rows. A qualifying prior performance for the exact
-progression identity replaces that default with its literal completed row count,
-weights, and reps. Removing row three and completing that lane therefore makes
-the next matching occurrence a two-row draft without changing the immutable
-template. The two newly introduced cable-wrist exercises start with the approved
-VOLTRA profile of 70% inverse chains and 30% eccentric.
-
-`Complete Cluster` records every prescribed movement as performed or skipped and
-advances that cluster even if all of its rows were skipped. `Finish Workout`
-requires at least one completed cluster and persists only performed work from
-completed occurrences. Partial-cluster advancement is intentionally unsupported.
-
-## Where To Change The Default Starter
-
-If you want to change the built-in fallback template, update:
-
-- [`BootstrapDataService.defaultStarterTemplate(...)`](../Sources/BootstrapDataService.swift)
-- starter-template tests in [`BootstrapDataServiceTests.swift`](../Tests/BootstrapDataServiceTests.swift)
-
-That keeps fresh installs deterministic and test-covered.
-
-
-### Cluster progress and completion recap
-
-Each draft cluster shows Not started, In progress, or Completed with the count of
-locked positive-rep sets. Prefilled editable rows do not mark a cluster started.
-Complete Cluster saves/advances only that cluster; Finish Workout closes the
-session without advancing untouched clusters. If another cluster contains locked
-work, finishing names it and offers a Review action that navigates to that cluster.
-The recap lists actual retained work and all three independent next selections,
-explicitly distinguishing advanced from unchanged rotations. The existing 3/6/6
-rotation model and set-count/prefill policies are unchanged.
-
-## September 2026 clustered revision (v2)
-
-This explicit, backup-gated content revision leaves the v1 reserved template,
-completed history, old pointers, and old durable preferences archived. It does
-not change the V14 SwiftData schema or reset raw cluster positions. The existing
-cycle continues with v2 pointers at the same values.
-
-- Cluster 1 A: Flat Dumbbell Press + Lat Pulldown.
-- Cluster 1 B: Incline Dumbbell Press + Chest Supported Row.
-- Cluster 1 C: Incline Press-Flye + Dumbbell Lat Pullover.
-- Cluster 2 legs A–F: Leg Curl, Belt Squat, Stiff-Leg Deadlift, Safety Bar Squat,
-  Back Extension, Bulgarian Split Squat. The triceps/biceps pairs keep their
-  original raw-day positions; Cluster 3 is entirely unchanged.
-
-Dumbbell Lat Pullover is the default. Cable Lat Pullover is available through the
-existing exact-slot/workout-only substitution flow, with the usual cable/VOLTRA
-resistance-profile editor. No load or VOLTRA settings are invented.
-
-Surviving movements retain their v1 semantic progression identities, independent
-of their new structural position. The pullover gets a fresh identity and copies
-only the retired straight-arm lane's literal completed row count, not its load,
-reps, or resistance profile. Safety Bar Squat reuses the existing safety-squat-bar
-exercise UUID and the same-exercise Sept 5 performance (225 × 6, 5), via the old
-Cluster 2 F progression key. The lookup additionally requires the exercise UUID,
-so leg curls, belt squats, and substitutions cannot contaminate that baseline.
-
-V1 exact-slot preferences are carried by canonical exercise meaning to v2 when
-the canonical movement survives. Preferences on retired lat-prayer/sumo slots
-remain archived, not mapped onto the new movements. In particular, a Bulgarian
-split squat preference on the former sumo slot cannot replace Safety Bar Squat.
-
-The authorized name correction changes the catalog name to **Safety Bar Squat**
-and only that movement's frozen name evidence in session
-`734246BD-22B9-4D6E-BF88-130B5144B28A`. It preserves the exercise UUID, sets, dates,
-profiles, progression key, and all other completed snapshots. The corrected
-session is marked pending and re-exported after the revision transaction.
-
-## Seated dumbbell shrug revision (v3)
-
-V3 adds **Seated Dumbbell Shrugs** after the existing movements in **Cluster 3
-A/C/E** (canonical template positions 9/11/13). Those calf-day variants start
-with two shrug rows and a displayed target of 12–16 reps. B/D/F retain only their
-existing shoulder and forearm movements. This is every other Cluster 3 exposure,
-not a calendar schedule; there is no SLDL exclusion or missed-work catchup.
-
-The first shrug inputs are blank: no working load or completed performance is
-invented. All three shrug slots share one new traps progression identity. Later
-drafts repeat its literal completed row count, weights, and reps, so completing
-one row carries forward one row. The normal add/remove/skip behavior remains.
-
-Existing movements keep their v2 prescriptions, exact-slot substitutions,
-resistance profiles, and v1/v2 progression identities. All three independent raw
-pointers are copied unchanged; activation neither advances a cluster nor forces
-an immediate shrug exposure. V1/v2 templates, preferences, pointers, and completed
-history remain archived. Apply only through the explicit, backup-gated
-[v3 content revision](migration-safety.md#seated-shrug-content-revision-v3):
-finish the current workout, then use **Cycle → Add Seated Dumbbell Shrugs**. The app
-makes and verifies a fresh pre-revision store snapshot before applying.
-
-Catalog bootstrap corrects the former singular label to **Seated Dumbbell
-Shrugs** using the same exercise UUID. It leaves existing slots, draft/completed
-sets, progression keys and frozen historical names unchanged. Old singular-name
-exports remain an import alias; conflicting existing identities are not merged.
-
-## Safety-bar/Bulgarian placement swap (v3 preferences)
-
-**Cycle → Swap Safety Bar Squat & Bulgarians** keeps v3 and swaps only Cluster 2
-D/F through durable exact-slot preferences. The resulting leg order A–F is
-Leg Curl, Belt Squat, Stiff-Leg Deadlift, Bulgarian Split Squat, Back Extension,
-Safety Bar Squat. This separates the two major spinal-loading movements, SLDL
-and Safety Bar Squat, without changing the other lanes or advancing a pointer.
-
-Both original squat UUIDs retain their original progression keys at D/F, so
-same-exercise completed row counts, loads and reps follow the movement. Other
-substitutions retain slot isolation. Canonical templates, completed occurrence
-snapshots, notes and resistance profiles are unchanged. The preference payload
-already supported by JSON export/recovery carries the new placement.
-
-## Third side-delt movement (v4)
-
-The explicit v4 revision changes only the side-delt lane inside Cluster 3:
-A/D = Super ROM Dumbbell Lateral Raise, B/E = Incline Side-Lying Dumbbell
-Lateral Raise, C/F = Cable Lateral Raise. Thus Cable → Super-ROM → Side-Lying
-repeats, while calves, forearms, and A/C/E shrugs keep their existing positions.
-The cluster still has six steps and one pointer; side delts derive their identity
-with modulo 3. No independent shoulder state or additional workout slot is added.
-
-Super-ROM and Cable retain their original exercise/progression identities and
-literal prior-performance row counts. The new movement has a separate stable
-UUID/key, two starting work-set rows, and blank load/reps/history. Each row means
-one set on each side; record the single dumbbell weight and reps per side, not
-the left/right sum. Keep bench angle and arm path consistent for comparisons.
-
-Activation copies all raw pointers. At the verified pre-release Cluster 3
-pointer 18, A remains the upcoming Super-ROM exposure after the previous Cable
-at F; the new movement first appears at B, the second Cluster 3 completion after
-activation. This is an exposure sequence, not a calendar-day guarantee.
-
-## Permanent side-delt reorder (v5)
-
-The explicit v5 revision swaps only Cluster 3's shoulder prescriptions A↔B and
-D↔E: A/D = Incline Side-Lying, B/E = Super-ROM, C/F = Cable. Raw pointers do
-not move. At Cluster 3 pointer 18, incline side-lying is next, then Super-ROM,
-then Cable. Calves, forearms, shrugs and all other slots remain in place.
-Exercise UUIDs, stable progression keys, exact-slot preferences and fallback
-set counts follow their source shoulder exercise. The incline movement keeps
-its v4 key and two starting rows (one set per side per row), not a new identity.
-
-### September 17 chest/back recovery revision (v6)
-
-Explicitly activated from v4 with **Cycle → Apply Chest & Back Recovery Plan**.
-Installation alone does not activate it. Cluster 1 becomes four exposures:
-
-| Step | Chest | Back |
-| --- | --- | --- |
-| A | Flat Dumbbell Press | Lat Pulldown |
-| B | Seated Cable Flye | Existing selected chest-supported cable row |
-| C | Incline Dumbbell Press | Single-Arm Lat Pulldown |
-| D | Incline Dumbbell Flye | Chest-Supported Dumbbell Row |
-
-Existing exercise UUIDs, notes, profile history, and surviving progression keys
-are reused. The two flyes share the historic chest-C key but remain isolated by
-exercise UUID. Restored back movements use new clustered keys with safe unkeyed
-same-exercise history fallback. Single-arm pulldowns are seated side-on; one row
-means one set per side, not a combined left/right total.
-
-Chest/back slots default to two rows only when no qualifying prior effort exists.
-A qualifying effort supplies its literal set count, loads, and reps, including
-pre-v6 history: three completed sets recommend three again, and a later manual
-reduction carries forward. Progression-key and resistance-profile lookup rules
-are unchanged. Other clusters, exact-slot substitutions, and counters remain
-unchanged, including the live v4 side-delt choices (v5 is not implicitly applied).
-
-D uses template position15 so other clusters retain their exact slot addresses.
-Cluster1 logically advances A/B/C/D; raw completion counters remain unchanged.
-Verified phone counter24
-remains24 (A next after the September17 flye exposure). Historical v4 counters and
-occurrences are archived unchanged.
-
-The explicit v6 **Pair Rows with Flye Setup** equipment revision exchanges only
-the B/D back preferences: **Seated Cable Flye + CS DB Row** and
-**Incline DB Flye + SA CS Cable Row**. It retains exercise-linked progression,
-performed-set carry-forward and raw rotation counters; A/C and other clusters
-are unchanged. See [activation and verification](migration-safety.md#september-18-v6-chestback-row-pairing).
-
-## September 18 balanced rotation (v7)
-
-Explicit **Cycle → Apply Balanced Rotation**, or launch flag
-`OPENLIFT_APPLY_BALANCED_ROTATION_2026_09_18`, upgrades active v6 only.
-Installation does not activate it. Raw whole-cluster counters and completed
-records remain unchanged. There are still three counters, not separate lanes.
-
-- Cluster 1 retains its four effective chest/back pairs and progression keys.
-- Cluster 2 has 24 structural steps: eight leg movements × three arm phases.
-  Leg order by raw counter modulo eight is Back Extension, Belt Squat, SLDL,
-  Bulgarian Split Squat, Reverse Hyper, Safety Bar Squat, Leg Curl, Leg Extension.
-  Arms continue modulo three, including across the eighth leg exposure.
-  Counter 25 therefore starts Belt Squat + Cable Pushdown + DB Preacher Curl.
-- Cluster 3 retains its six-step accessory pattern. Shoulders repeat Incline
-  Side-Lying DB Lateral Raise → Super ROM DB Lateral Raise → Cable Lateral Raise.
-  The former Lying Cable Flye substitution remains in historical records only.
-
-Each retained leg variation now returns every eight rather than six leg
-exposures; this adds variety, not extra exercises per workout. Shoulder, calf,
-and leg progression uses an exercise UUID/role key, joining prior compatible
-performed snapshots and safe unkeyed history. Latest compatible effort wins;
-rows are never summed. Literal previous set counts, loads, reps and profile
-comparability survive revision and subsequent manual count changes.
-
-V7 exports include every effective future selection, so export-only recovery
-preserves carried substitutions even before those slots have been performed.
-
-### September 19, 2026 quad phase correction (v7)
-
-`Cycle → Shift Quad Rotation` counts the completed leg extension as the previous
-quad exposure. `OPENLIFT_APPLY_QUAD_PHASE_2026_09_19` invokes the same guarded
-handler. Installation and normal startup do not activate it.
-
-Only the twelve Cluster 2 quad-slot preferences change. From raw counter 26,
-legs are Stiff-Leg Deadlift → Belt Squat → Reverse Hyper → Bulgarian Split Squat
-→ Leg Curl → Safety Bar Squat → Back Extension → Leg Extension, repeating over
-the unchanged 24-exposure leg/arm period. Existing movement UUIDs and v7
-movement progression keys retain previous loads, reps, and literal set counts.
-The already-correct day-5 leg-extension preference is retained unchanged.
-
-Activation rejects pending edits and either workout draft, requires the active
-v7 template, creates and integrity-checks a unique SQLite snapshot in
-`Documents/OpenLift/revision-backups`, then saves only preferences and its
-one-time marker synchronously. Raw counters, template slots, posterior-chain
-and arm selections, other clusters, completed history and profiles are untouched.
-Reactivation is a no-op, including after subsequent user preference changes.
-
-## Explicit v8 synchronized arms (September 19, 2026)
-
-Cycle → **Synchronize Arm Rotation** upgrades an active v7 program only. Installing
-this build does not activate the revision. Cluster 1 now completes chest, back,
-triceps and biceps together over four steps. Its existing A/B/C chest/back pairs
-receive the old A/B/C arm pairs; D receives **Overhead SA Cable Extension** and
-**Seated DB Hammer Curl** (back-supported, neutral grip, no preacher pad).
-Cluster 2 becomes an eight-step legs-only rotation. Cluster 3 remains six steps.
-Completing or skipping a whole cluster advances only that cluster; arms no longer
-advance with a legs-only workout. All three raw counters remain unchanged.
-
-The revision resolves every live v7 exact-slot preference before building v8;
-it refuses to collapse a leg or arm subcycle if repeated positions differ in
-exercise or fallback row count. It does not apply a pending quad reorder or
-change other effective selections. Existing arm progression keys survive their
-move to Cluster 1. Chest/back, leg and accessory progression keys also survive.
-
-The SA overhead cable identity reuses prior compatible history and resistance
-profiles, including its literal completed row count. Its two-row template fallback
-is not a cap. Seated hammer curls are a distinct new identity with two initial
-rows and blank load/reps/previous performance. Each SA overhead row means one set
-on each side; record load and reps per side. Hammer loads are per dumbbell.
-
-## Bundled program definitions (engine foundation)
-
-Current v8 structural content is a typed, Codable `ClusterProgramDefinition` in
-`Sources/BundledClusterPrograms.swift`. The interpreter owns its 4/8/6 step
-layout, structural validation, progression rules and canonical recovery
-fallbacks. Existing templates/overlays retain their stored choices and counts;
-this refactor does not replace or activate them. Setup instructions reference
-live catalog notes, while completed history retains its frozen snapshots.
-
-The bundled recovery defaults are not a prescription reset: exports restore
-all effective future choices and their fallback counts, and qualifying prior
-efforts retain their literal row counts. The current v8 phone template can
-therefore differ from these canonical fallback defaults without being invalid.
-New definitions within the supported bounds can be previewed and activated
-through the program bridge. Legacy published-cycle parsing remains separate.
-
-## Imported clustered revisions
-
-Versioned JSON revisions can be exported, previewed, and explicitly applied
-with `scripts/program-agent.py` from a trusted paired Mac. No Cycle tab or
-program-update menu is required or shipped. See [program update authoring and activation](program-updates.md)
-for the format, supported bounds, draft protection, and recovery behavior.
+# Templates And Clustered Programs
+
+## Current Program
+
+The bundled v8 definition in
+[`BundledClusterPrograms.swift`](../Sources/BundledClusterPrograms.swift) has
+three independently advancing rotations:
+
+| Cluster | Steps | Work |
+|---|---|---|
+| 1 | 4 | Chest, back, triceps, and biceps together |
+| 2 | 8 | Legs |
+| 3 | 6 | Shoulders, calves, forearms, and accessories |
+
+All three current selections appear in one workout. Completing a cluster
+advances only its own raw counter; there is no global workout-day rotation or
+independently advancing movement lane. `Finish Workout` requires at least one
+completed cluster. Skipped rows do not block whole-cluster completion, but only
+locked positive-rep rows backed by performed occurrence snapshots enter history
+and exports.
+
+The stored template and exact-slot overrides determine effective selections.
+Bundled content is a fallback, not authority to reset a live program. Use the
+bridge's `starter` command to inspect the actual program rather than infer it
+from the bundled definition.
+
+## Program Content And Identity
+
+[`ClusterProgramDefinition.swift`](../Sources/ClusterProgramDefinition.swift)
+defines program/version identity, ordered steps and structural template
+positions, exercise references, fallback counts, and progression rules. The
+generic interpreter owns selection, validation, and recovery construction.
+Loading a definition does not activate it or write the store.
+
+A qualifying previous effort supplies its literal set count and weights. With
+no qualifying effort, the stored template supplies its fallback count. New
+Fixed/clustered rows start with blank actual reps; prior reps stay visible as
+reference. Completing two rows can therefore carry two rows forward without
+editing the template.
+
+Progression identity is not display order. Reordering a movement must retain its
+valid identity mapping rather than inherit the previous occupant's loads.
+Existing stored occurrence identities remain readable and are never rebuilt
+from today's definition. Setup instructions reference catalog notes; custom
+and deliberately empty notes survive.
+
+For Overhead SA Cable Extension, one row represents one set on each side;
+record load and reps per side. Seated DB Hammer Curl loads are per dumbbell.
+
+## Exercise Substitutions
+
+Workout can replace a movement for this workout only or for the exact rotation
+slot going forward. Persistent scope is program version + canonical template-day
+position + slot position, not every position sharing a progression identity.
+Resolution is occurrence override, persistent preference, then canonical exercise.
+These choices are overlays, not edits to the reserved template. Locked
+positive-rep work blocks replacement; resetting a persistent preference restores
+the canonical movement.
+
+## Program Updates
+
+Use [`scripts/program-agent.py`](../scripts/program-agent.py) from a trusted
+paired Mac to export a starter, preview a revision, and apply the exact approved
+preview. [Program updates](program-updates.md) defines the supported bounds,
+authority, draft protection, backup, and receipt contract. There is no in-app
+administration menu.
+
+## Fresh-Install Template Selection
+
+Bootstrap uses stored templates first. If none exist, it can discover published
+JSON in `OpenLift/cycles`; otherwise it creates the built-in `4D Upper/Lower`
+fallback: Upper A, Lower A, Upper B, Lower B. This does not automatically activate
+the clustered program.
+
+Published-cycle parsing remains a compatibility input to bootstrap, not the
+versioned bridge format. Its decoder is
+[`PublishedCycleService.swift`](../Sources/PublishedCycleService.swift). Starter
+content and fallback selection live in
+[`BootstrapDataService.swift`](../Sources/BootstrapDataService.swift); changing
+the fallback must not overwrite stored user templates.
