@@ -31,6 +31,72 @@ enum FixedCycleWorkoutError: LocalizedError, Equatable {
     }
 }
 
+/// Workout cards need not be independently advancing scheduling clusters.
+/// Partition by the prescribed slot, not the catalog exercise or its name, so
+/// substitutions keep their placement and progression identity.
+struct ClusterWorkoutDisplayGroup: Identifiable {
+    enum Kind: String { case whole, torso, arms }
+    let selection: FixedCycleClusterProgramService.Selection
+    let kind: Kind
+
+    var id: String { kind == .whole ? selection.id : "\(selection.id).\(kind.rawValue)" }
+    var anchor: String { kind == .arms ? "cluster.\(id)" : "cluster.\(selection.id)" }
+    var stateAccessibilityID: String { kind == .arms ? id : selection.id }
+    var title: String {
+        switch kind {
+        case .whole: selection.cluster.displayName
+        case .torso: "Torso"
+        case .arms: "Arms"
+        }
+    }
+    var completionTitle: String? {
+        switch kind {
+        case .whole: "Complete \(selection.cluster.displayName)"
+        case .torso: nil
+        case .arms: "Complete Torso + Arms"
+        }
+    }
+    func includes(_ muscle: MuscleGroup) -> Bool {
+        let isArm = muscle == .biceps || muscle == .triceps
+        switch kind {
+        case .whole: return true
+        case .torso: return !isArm
+        case .arms: return isArm
+        }
+    }
+
+    static func make(
+        selections: [FixedCycleClusterProgramService.Selection],
+        sessionId: UUID,
+        occurrences: [ClusterOccurrenceRecord]
+    ) -> [Self] {
+        var groups: [Self] = []
+        var arms: Self?
+        for selection in selections {
+            let completed = FixedCycleClusterProgramService.occurrence(
+                sessionID: sessionId, cluster: selection.cluster, occurrences: occurrences
+            )
+            // Completion advances the live selection. The frozen occurrence,
+            // not the next day, still owns this workout's displayed grouping.
+            let muscles = completed?.exerciseSnapshots.map(\.muscle) ?? selection.day.slots.map(\.muscle)
+            let splitsArms = selection.cluster == .cluster1
+                && muscles.contains(where: { $0 == .chest || $0 == .back })
+                && muscles.contains(where: { $0 == .biceps || $0 == .triceps })
+            if splitsArms {
+                groups.append(Self(selection: selection, kind: .torso))
+                arms = Self(selection: selection, kind: .arms)
+            } else {
+                groups.append(Self(selection: selection, kind: .whole))
+            }
+        }
+        if let arms {
+            let afterLegs = groups.firstIndex { $0.selection.cluster == .cluster2 }.map { $0 + 1 }
+            groups.insert(arms, at: afterLegs ?? groups.count)
+        }
+        return groups
+    }
+}
+
 /// UI state follows confirmed set evidence, never prefilled editable values.
 struct ClusterWorkoutProgress: Equatable {
     let completedSetCount: Int
@@ -1396,14 +1462,18 @@ struct WorkoutView: View {
         readiness: FixedCycleReadinessObservation
     ) -> some View {
         Section {
-            Text("Three independent clusters · Draft session")
+            Text("Three independent rotations · Draft session")
                 .font(.headline)
-            Text("Complete Cluster saves that cluster and advances only its rotation. Finish Workout closes the session; untouched clusters stay where they are.")
+            Text("Completing a rotation saves its work and advances only that rotation. Finish Workout closes the session; untouched rotations stay where they are.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
 
-        ForEach(clusterSelections) { selection in
+        let displayGroups = ClusterWorkoutDisplayGroup.make(
+            selections: clusterSelections, sessionId: session.id, occurrences: clusterOccurrences
+        )
+        ForEach(displayGroups) { group in
+            let selection = group.selection
             let completed = FixedCycleClusterProgramService.occurrence(
                 sessionID: session.id,
                 cluster: selection.cluster,
@@ -1412,11 +1482,12 @@ struct WorkoutView: View {
             let displayedStep = completed.map {
                 $0.positionIndex % FixedCycleClusterProgramService.rotationLength(selection.cluster, version: selection.programVersionID, definition: selection.definition)
             } ?? selection.effectiveStep
-            let ids = Set(completed?.exerciseSnapshots.map(\.exerciseId)
-                ?? FixedCycleClusterProgramService.resolvedSlots(
-                    selection: selection, sessionId: session.id,
-                    preferences: clusterExercisePreferences, overrides: clusterExerciseOverrides
-                ).map(\.exerciseId))
+            let displayedSlots = FixedCycleClusterProgramService.resolvedSlots(
+                selection: selection, sessionId: session.id,
+                preferences: clusterExercisePreferences, overrides: clusterExerciseOverrides
+            ).filter { group.includes($0.slot.muscle) }
+            let snapshots = completed?.exerciseSnapshots.filter { group.includes($0.muscle) }
+            let ids = Set(snapshots?.map(\.exerciseId) ?? displayedSlots.map(\.exerciseId))
             let progress = ClusterWorkoutProgress.make(
                 sessionId: session.id, exerciseIds: ids, entries: setEntries, isCompleted: completed != nil
             )
@@ -1424,9 +1495,16 @@ struct WorkoutView: View {
                 Text(progress.summary)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(completed != nil ? .green : .secondary)
-                    .accessibilityIdentifier("workout.clusterState.\(selection.cluster.rawValue)")
-                if let completed {
-                    let performed = completed.exerciseSnapshots.filter {
+                    .accessibilityIdentifier("workout.clusterState.\(group.stateAccessibilityID)")
+                if group.kind != .whole {
+                    Text(group.kind == .torso
+                         ? "Torso and arms share a rotation. Complete both from the Arms card after logging your sets."
+                         : "Linked with torso for today's selection and completion. Log legs and arms in any order.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if completed != nil {
+                    let performed = (snapshots ?? []).filter {
                         $0.completionStatus == .performed
                     }
                     Label(
@@ -1440,19 +1518,14 @@ struct WorkoutView: View {
                     let cautionMuscles = FixedCycleWorkoutService.cautionMuscles(
                         for: selection.day,
                         readiness: readiness
-                    )
+                    ).filter { group.includes($0) }
                     if !cautionMuscles.isEmpty {
                         Text("Caution: \(cautionMuscles.map(\.displayName).joined(separator: ", "))")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
 
-                    ForEach(FixedCycleClusterProgramService.resolvedSlots(
-                        selection: selection,
-                        sessionId: session.id,
-                        preferences: clusterExercisePreferences,
-                        overrides: clusterExerciseOverrides
-                    )) { resolved in
+                    ForEach(displayedSlots) { resolved in
                         let slot = resolved.slot
                         let exercise = exercises.first(where: { $0.id == resolved.exerciseId })
                         let key = resolved.progressionKey
@@ -1551,16 +1624,19 @@ struct WorkoutView: View {
                         )
                     }
 
-                    Button("Complete \(selection.cluster.displayName)") {
-                        completeCluster(selection, in: session)
+                    if let completionTitle = group.completionTitle {
+                        Button(completionTitle) {
+                            completeCluster(selection, in: session)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!isFixedExecutionEnabled)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!isFixedExecutionEnabled)
                 }
             } header: {
-                Text("\(selection.cluster.displayName) · \(FixedCycleClusterProgramService.variantLabel(displayedStep))")
+                Text("\(group.title) · \(FixedCycleClusterProgramService.variantLabel(displayedStep))")
+                    .accessibilityIdentifier("workout.group.\(group.id)")
             }
-            .id("cluster.\(selection.cluster.rawValue)")
+            .id(group.anchor)
         }
 
         Section {
