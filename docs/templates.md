@@ -8,12 +8,20 @@ three independently advancing rotations:
 
 | Cluster | Steps | Work |
 |---|---|---|
-| 1 | 4 | Chest, back, triceps, and biceps together |
+| 1 | 4 | Chest, back, triceps, and biceps scheduled together |
 | 2 | 8 | Legs |
 | 3 | 6 | Shoulders, calves, forearms, and accessories |
 
-All three current selections appear in one workout. Completing a cluster
-advances only its own raw counter; there is no global workout-day rotation or
+All three current selections appear in one workout. Scheduling is separate from
+visual grouping: when Cluster 1 contains torso and direct-arm slots, the workout
+shows Torso → legs (Cluster 2) → Arms → Cluster 3 as separate cards. Torso and
+arms keep one shared rotation and one **Complete Torso + Arms** action after the
+arm rows; log sets anywhere in the workout before completing them. The display
+split uses prescribed slot muscles (including substituted exercises), and
+completed cards use frozen occurrence muscles. Historical unsplit selections
+retain their original cards. This presentation change needs no activation.
+
+Completing a cluster advances only its own raw counter; there is no global workout-day rotation or
 independently advancing movement lane. `Finish Workout` requires at least one
 completed cluster. Skipped rows do not block whole-cluster completion, but only
 locked positive-rep rows backed by performed occurrence snapshots enter history
