@@ -231,8 +231,63 @@ enum MovementPerformanceIndex {
     }
 }
 
+/// Sum every recorded set score so additional sets increase the total.
+/// Only setup/evidence discontinuities reset the baseline, not set-count changes.
+enum MovementAllSetsIndex {
+    struct Point: Identifiable {
+        let id: String
+        let date: Date
+        let setup: MovementHistoryPerformance.Setup
+        let segment: Int
+        let value: Double
+        let totalScore: Double
+        let setCount: Int
+    }
+
+    static func points(for movement: MovementHistory) -> [Point] {
+        guard !movement.isGripper else { return [] }
+        let history = movement.performances.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+        var result: [Point] = []
+        var previousSetup: MovementHistoryPerformance.Setup?
+        var baseline: Double?
+        var segment = 0
+        for performance in history {
+            let positions = performance.sets.compactMap(\.setIndex).sorted()
+            let scores = performance.sets.compactMap { MovementPerformanceIndex.score(weight: $0.weight, reps: $0.reps) }
+            let comparable = !performance.hasAmbiguousEvidence
+                && (!movement.usesResistanceProfiles || performance.profile?.isComplete == true)
+                && (performance.profile == nil || performance.profile?.isComplete == true)
+            guard comparable, positions.first == 1,
+                  positions.count == performance.sets.count, Set(positions).count == positions.count,
+                  scores.count == performance.sets.count else {
+                previousSetup = nil; baseline = nil
+                continue
+            }
+            let total = scores.reduce(0, +)
+            guard total.isFinite, total > 0 else {
+                previousSetup = nil; baseline = nil
+                continue
+            }
+            if previousSetup != performance.setup || baseline == nil {
+                segment += 1
+                baseline = total
+            }
+            let value = 100 * (total / baseline!)
+            guard value.isFinite else {
+                previousSetup = nil; baseline = nil
+                continue
+            }
+            result.append(Point(id: performance.id, date: performance.date, setup: performance.setup,
+                segment: segment, value: value, totalScore: total, setCount: scores.count))
+            previousSetup = performance.setup
+        }
+        return result
+    }
+}
+
 struct MovementPerformanceChart: View {
     let points: [MovementPerformanceIndex.Point]
+    let totalPoints: [MovementAllSetsIndex.Point]
     private var positions: [Int] { Array(Set(points.map(\.setNumber))).sorted() }
     private var starts: [MovementPerformanceIndex.Point] {
         var seen = Set<Int>()
@@ -247,10 +302,17 @@ struct MovementPerformanceChart: View {
         let delta = last.value - 100
         return "First set: \(last.value.formatted(.number.precision(.fractionLength(1)))) · \(delta >= 0 ? "+" : "")\(delta.formatted(.number.precision(.fractionLength(1))))% this segment"
     }
+    private var totalSummary: String {
+        guard let last = totalPoints.last else { return "All sets: unavailable for this setup" }
+        let delta = last.value - 100
+        return "All sets: \(last.value.formatted(.number.precision(.fractionLength(1)))) · \(delta >= 0 ? "+" : "")\(delta.formatted(.number.precision(.fractionLength(1))))% · \(last.setCount) sets"
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(summary).font(.subheadline.weight(.semibold)).foregroundStyle(.cyan)
                 .accessibilityIdentifier("history.index.summary")
+            Text(totalSummary).font(.subheadline.weight(.semibold))
+                .accessibilityIdentifier("history.allSets.summary")
             Chart {
                 RuleMark(y: .value("Baseline", 100))
                     .foregroundStyle(.secondary.opacity(0.5)).lineStyle(StrokeStyle(dash: [4, 4]))
@@ -274,6 +336,16 @@ struct MovementPerformanceChart: View {
                             .accessibilityLabel("First-set load changed to \(point.weight.formatted()) pounds")
                     }
                 }
+                ForEach(totalPoints) { point in
+                    LineMark(x: .value("Date", point.date), y: .value("Index", point.value),
+                        series: .value("Set segment", "total-\(point.segment)"))
+                        .foregroundStyle(Color.primary)
+                        .lineStyle(StrokeStyle(lineWidth: 2.5, dash: [7, 5]))
+                    PointMark(x: .value("Date", point.date), y: .value("Index", point.value))
+                        .foregroundStyle(Color.primary).symbol(.square).symbolSize(30)
+                        .accessibilityLabel("\(point.date.formatted(date: .abbreviated, time: .omitted)), all \(point.setCount) sets")
+                        .accessibilityValue("Total index \(point.value.formatted(.number.precision(.fractionLength(1))))")
+                }
             }
             .chartYScale(domain: .automatic(includesZero: false))
             .chartYAxisLabel("index")
@@ -285,15 +357,24 @@ struct MovementPerformanceChart: View {
             .accessibilityIdentifier("history.index.chart")
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { legend }
-                VStack(alignment: .leading, spacing: 4) { legend }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 95), alignment: .leading)], alignment: .leading, spacing: 6) { legend }
             }
             Text("Load × (1 + reps ÷ 30), relative to the segment’s starting first set = 100. A trend estimate, not measured 1RM.")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("Setup changes reset the baseline and break the lines. Exact weights and reps are below.")
+            Text("Dashed All sets: sum of those set scores, rebased to its starting total = 100. More sets raise the total; it combines performance and set count, not whole-workout 1RM.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Setup changes reset both baselines and break the lines. Exact weights and reps are below.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
     @ViewBuilder private var legend: some View {
+        HStack(spacing: 5) {
+            Path { path in
+                path.move(to: .zero); path.addLine(to: CGPoint(x: 20, y: 0))
+            }.stroke(style: StrokeStyle(lineWidth: 2, dash: [4, 3]))
+                .frame(width: 20, height: 1)
+            Text("All sets").fixedSize()
+        }.foregroundStyle(.primary).font(.caption)
         ForEach(positions, id: \.self) { number in
             HStack(spacing: 5) {
                 Circle().fill(color(number)).frame(width: 6, height: 6)
@@ -335,6 +416,12 @@ struct MovementHistoryDetailView: View {
         return all.filter { $0.setup == movement.setups[selectedSetup] }
     }
 
+    private var allSetsPoints: [MovementAllSetsIndex.Point] {
+        let all = MovementAllSetsIndex.points(for: movement)
+        guard selectedSetup >= 0, movement.setups.indices.contains(selectedSetup) else { return all }
+        return all.filter { $0.setup == movement.setups[selectedSetup] }
+    }
+
     private var performances: [MovementHistoryPerformance] {
         if selectedSetup < 0 { return movement.performances }
         guard movement.setups.indices.contains(selectedSetup) else { return [] }
@@ -370,7 +457,7 @@ struct MovementHistoryDetailView: View {
             }
             Section("Estimated 1RM · performance index") {
                 if !indexPoints.isEmpty {
-                    MovementPerformanceChart(points: indexPoints)
+                    MovementPerformanceChart(points: indexPoints, totalPoints: allSetsPoints)
                 } else {
                     Text(movement.isGripper
                         ? "Gripper models are categorical. Compare the model and reps in your sets below."
@@ -432,7 +519,8 @@ enum MovementHistoryUITestFixture {
                         resistanceProfile: nil, completionStatus: .performed)
                 }))
             for (exercise, base) in [(press, 50.0), (curl, 25.0)] {
-                for set in 1...3 {
+                let count = index == 0 && exercise.id == press.id ? 4 : 3
+                for set in 1...count {
                     context.insert(SetEntry(sessionId: session.id, exerciseId: exercise.id, setIndex: set,
                         weight: base - Double(index) * 2.5, reps: 13 - set + index, isLocked: true))
                 }
