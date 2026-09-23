@@ -61,9 +61,17 @@ and reps across workouts. **Workouts** retains the date-first list and session d
 
 Movement details default to the most recent progression-key/resistance-profile
 setup; the setup picker exposes other setups and all performances without blending
-their trends. Weight/Reps charts plot actual sets, not e1RM or volume. Grippers
-retain model labels and never plot model ordinals as pounds. Completed fixed,
-ad hoc, Adaptive, and export-only records are included; stored sessions win over
+their trends. The performance chart uses `weight × (1 + reps / 30)` (Epley),
+normalized to the first set at the start of each contiguous comparable setup = 100.
+This is a load–rep trend estimate, not measured 1RM. First-set lines are emphasized;
+other set positions share that baseline, and diamonds mark first-set load changes.
+Dates retain calendar spacing. Profile/progression changes (including A → B → A)
+reset the baseline and break lines even when filtering to one setup; missing set
+positions break their own lines. Exact numbered weight/reps rows remain below.
+Zero/nonfinite loads, ambiguous evidence, missing first sets, and unrecorded or
+incomplete cable profiles are not indexed; no bodyweight or resistance modifiers
+are invented. Grippers retain model labels and never index model ordinals as pounds.
+Completed fixed, ad hoc, Adaptive, and export-only records are included; stored sessions win over
 recovery mirrors by ID. Clustered rows require performed occurrence evidence when
 cluster metadata exists. Draft, unlocked, skipped, and zero-rep work is excluded.
 This projection is read-only and does not change progression, programs, or drafts.
