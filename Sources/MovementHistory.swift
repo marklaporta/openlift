@@ -231,7 +231,7 @@ enum MovementPerformanceIndex {
     }
 }
 
-/// Sum every recorded set score so additional sets increase the total.
+/// Average every recorded set score so set count does not inflate performance.
 /// Only setup/evidence discontinuities reset the baseline, not set-count changes.
 enum MovementAllSetsIndex {
     struct Point: Identifiable {
@@ -240,7 +240,7 @@ enum MovementAllSetsIndex {
         let setup: MovementHistoryPerformance.Setup
         let segment: Int
         let value: Double
-        let totalScore: Double
+        let averageScore: Double
         let setCount: Int
     }
 
@@ -268,17 +268,18 @@ enum MovementAllSetsIndex {
                 previousSetup = nil; baseline = nil
                 continue
             }
+            let average = total / Double(scores.count)
             if previousSetup != performance.setup || baseline == nil {
                 segment += 1
-                baseline = total
+                baseline = average
             }
-            let value = 100 * (total / baseline!)
+            let value = 100 * (average / baseline!)
             guard value.isFinite else {
                 previousSetup = nil; baseline = nil
                 continue
             }
             result.append(Point(id: performance.id, date: performance.date, setup: performance.setup,
-                segment: segment, value: value, totalScore: total, setCount: scores.count))
+                segment: segment, value: value, averageScore: average, setCount: scores.count))
             previousSetup = performance.setup
         }
         return result
@@ -287,7 +288,7 @@ enum MovementAllSetsIndex {
 
 struct MovementPerformanceChart: View {
     let points: [MovementPerformanceIndex.Point]
-    let totalPoints: [MovementAllSetsIndex.Point]
+    let averagePoints: [MovementAllSetsIndex.Point]
     private var positions: [Int] { Array(Set(points.map(\.setNumber))).sorted() }
     private var starts: [MovementPerformanceIndex.Point] {
         var seen = Set<Int>()
@@ -302,16 +303,16 @@ struct MovementPerformanceChart: View {
         let delta = last.value - 100
         return "First set: \(last.value.formatted(.number.precision(.fractionLength(1)))) · \(delta >= 0 ? "+" : "")\(delta.formatted(.number.precision(.fractionLength(1))))% this segment"
     }
-    private var totalSummary: String {
-        guard let last = totalPoints.last else { return "All sets: unavailable for this setup" }
+    private var averageSummary: String {
+        guard let last = averagePoints.last else { return "All sets avg: unavailable for this setup" }
         let delta = last.value - 100
-        return "All sets: \(last.value.formatted(.number.precision(.fractionLength(1)))) · \(delta >= 0 ? "+" : "")\(delta.formatted(.number.precision(.fractionLength(1))))% · \(last.setCount) sets"
+        return "All sets avg: \(last.value.formatted(.number.precision(.fractionLength(1)))) · \(delta >= 0 ? "+" : "")\(delta.formatted(.number.precision(.fractionLength(1))))% · \(last.setCount) sets"
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(summary).font(.subheadline.weight(.semibold)).foregroundStyle(.cyan)
                 .accessibilityIdentifier("history.index.summary")
-            Text(totalSummary).font(.subheadline.weight(.semibold))
+            Text(averageSummary).font(.subheadline.weight(.semibold))
                 .accessibilityIdentifier("history.allSets.summary")
             Chart {
                 RuleMark(y: .value("Baseline", 100))
@@ -336,15 +337,15 @@ struct MovementPerformanceChart: View {
                             .accessibilityLabel("First-set load changed to \(point.weight.formatted()) pounds")
                     }
                 }
-                ForEach(totalPoints) { point in
+                ForEach(averagePoints) { point in
                     LineMark(x: .value("Date", point.date), y: .value("Index", point.value),
-                        series: .value("Set segment", "total-\(point.segment)"))
+                        series: .value("Set segment", "average-\(point.segment)"))
                         .foregroundStyle(Color.primary)
                         .lineStyle(StrokeStyle(lineWidth: 2.5, dash: [7, 5]))
                     PointMark(x: .value("Date", point.date), y: .value("Index", point.value))
                         .foregroundStyle(Color.primary).symbol(.square).symbolSize(30)
                         .accessibilityLabel("\(point.date.formatted(date: .abbreviated, time: .omitted)), all \(point.setCount) sets")
-                        .accessibilityValue("Total index \(point.value.formatted(.number.precision(.fractionLength(1))))")
+                        .accessibilityValue("Average set index \(point.value.formatted(.number.precision(.fractionLength(1))))")
                 }
             }
             .chartYScale(domain: .automatic(includesZero: false))
@@ -361,7 +362,7 @@ struct MovementPerformanceChart: View {
             }
             Text("Load × (1 + reps ÷ 30), relative to the segment’s starting first set = 100. A trend estimate, not measured 1RM.")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("Dashed All sets: sum of those set scores, rebased to its starting total = 100. More sets raise the total; it combines performance and set count, not whole-workout 1RM.")
+            Text("Dashed All sets avg: average of all set scores, relative to the segment’s starting average = 100. Set count alone does not raise the index.")
                 .font(.caption).foregroundStyle(.secondary)
             Text("Setup changes reset both baselines and break the lines. Exact weights and reps are below.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -373,7 +374,7 @@ struct MovementPerformanceChart: View {
                 path.move(to: .zero); path.addLine(to: CGPoint(x: 20, y: 0))
             }.stroke(style: StrokeStyle(lineWidth: 2, dash: [4, 3]))
                 .frame(width: 20, height: 1)
-            Text("All sets").fixedSize()
+            Text("All sets avg").fixedSize()
         }.foregroundStyle(.primary).font(.caption)
         ForEach(positions, id: \.self) { number in
             HStack(spacing: 5) {
@@ -457,7 +458,7 @@ struct MovementHistoryDetailView: View {
             }
             Section("Estimated 1RM · performance index") {
                 if !indexPoints.isEmpty {
-                    MovementPerformanceChart(points: indexPoints, totalPoints: allSetsPoints)
+                    MovementPerformanceChart(points: indexPoints, averagePoints: allSetsPoints)
                 } else {
                     Text(movement.isGripper
                         ? "Gripper models are categorical. Compare the model and reps in your sets below."
