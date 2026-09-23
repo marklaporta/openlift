@@ -229,4 +229,67 @@ final class MovementHistoryTests: XCTestCase {
         XCTAssertEqual(Set(points.map(\.series)).count, 4)
     }
 
+    func testAllSetsTotalRewardsAddedSetsWithoutRebasingAndSumsIndividualScores() {
+        let points = MovementAllSetsIndex.points(for: movement([
+            performance(0, weights: [10,10], reps: [10,10]),
+            performance(1, weights: [10,10,10], reps: [10,10,10]),
+            performance(2, weights: [10,10], reps: [10,10]),
+            performance(3, weights: [10,20], reps: [30,15]),
+            performance(4, weights: [10,20], reps: [30,15], numbers: [1,3])
+        ]))
+        XCTAssertEqual(points.map(\.setCount), [2,3,2,2,2])
+        XCTAssertEqual(points.map(\.segment), [1,1,1,1,1])
+        for (point, expected) in zip(points, [100.0,150,100,187.5,187.5]) {
+            XCTAssertEqual(point.value, expected, accuracy: 0.0000001)
+        }
+        XCTAssertEqual(points[3].totalScore, 50, accuracy: 0.0000001,
+            "Sum each set's score, not Epley of summed/averaged weights and reps")
+    }
+
+    func testAllSetsSetupUnitsAndReturningSetupResetBeforeFiltering() {
+        let percent = ResistanceProfileValue.voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
+        let pounds = ResistanceProfileValue.voltra(chainType: .inverseChains, chainPounds: 25, eccentricPounds: 25)
+        let points = MovementAllSetsIndex.points(for: movement([
+            performance(0, weights: [10], reps: [10], profile: percent),
+            performance(86400 * 7, weights: [12,12], reps: [10,10], profile: percent),
+            performance(86400 * 8, weights: [12], reps: [10], profile: pounds),
+            performance(86400 * 9, weights: [15], reps: [10], profile: percent),
+            performance(86400 * 10, weights: [20], reps: [10], key: "b", profile: percent)
+        ], profiles: true))
+        XCTAssertEqual(points.map(\.segment), [1,1,2,3,4])
+        for (point, expected) in zip(points, [100.0,240,100,100,100]) {
+            XCTAssertEqual(point.value, expected, accuracy: 0.0000001)
+        }
+        XCTAssertEqual(points[1].date.timeIntervalSince(points[0].date), 86400 * 7)
+        XCTAssertEqual(points.filter { $0.setup == points[0].setup }.map(\.segment), [1,1,3])
+    }
+
+    func testAllSetsNeverSilentlyDropsInvalidConstituentsOrBridgesThem() {
+        let valid = performance(0, weights: [10,10], reps: [10,10])
+        XCTAssertTrue(MovementAllSetsIndex.points(for: movement([valid], gripper: true)).isEmpty)
+        XCTAssertTrue(MovementAllSetsIndex.points(for: movement([valid], profiles: true)).isEmpty)
+        let invalid = [
+            performance(1, weights: [10,0], reps: [10,10]),
+            performance(1, weights: [10,-1], reps: [10,10]),
+            performance(1, weights: [10,.nan], reps: [10,10]),
+            performance(1, weights: [10,.infinity], reps: [10,10]),
+            performance(1, weights: [10,10], reps: [10,0]),
+            performance(1, weights: [10,10], reps: [10,-1]),
+            performance(1, weights: [10,10], reps: [10,10], numbers: [1,1]),
+            performance(1, weights: [10,10], reps: [10,10], numbers: [0,1]),
+            performance(1, weights: [10,10], reps: [10,10], numbers: [-1,1]),
+            performance(1, weights: [10,10], reps: [10,10], numbers: [2,3]),
+            performance(1, weights: [], reps: []),
+            performance(1, weights: [10,10], reps: [10,10], ambiguous: true),
+            performance(1, weights: [.greatestFiniteMagnitude / 2,.greatestFiniteMagnitude / 2], reps: [30,30])
+        ]
+        for bad in invalid {
+            let points = MovementAllSetsIndex.points(for: movement([valid,bad,
+                performance(2, weights: [20,20], reps: [10,10])]))
+            XCTAssertEqual(points.count, 2)
+            XCTAssertEqual(points.map(\.value), [100,100])
+            XCTAssertEqual(points.map(\.segment), [1,2])
+        }
+    }
+
 }
