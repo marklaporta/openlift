@@ -54,12 +54,19 @@ the selected units without reinterpreting set base weights.
 
 ## What Counts As History
 
-The History tab primarily shows completed `Session` records plus their locked `SetEntry` values.
+The History tab opens in **Movements**: recent-first movement browsing with always-visible
+exercise search and an A–Z sort option. Search accepts compact/expanded names and
+explicitly consolidated CS DB Row aliases. Tap a movement for literal set weights
+and reps across workouts. **Workouts** retains the date-first list and session details.
 
-History is searchable by exercise name. Search results combine Rotation, ad hoc,
-and Adaptive completed work into a newest-first timeline showing the workout
-date and every completed set's weight and reps. Incomplete or unlocked Adaptive
-rows are excluded.
+Movement details default to the most recent progression-key/resistance-profile
+setup; the setup picker exposes other setups and all performances without blending
+their trends. Weight/Reps charts plot actual sets, not e1RM or volume. Grippers
+retain model labels and never plot model ordinals as pounds. Completed fixed,
+ad hoc, Adaptive, and export-only records are included; stored sessions win over
+recovery mirrors by ID. Clustered rows require performed occurrence evidence when
+cluster metadata exists. Draft, unlocked, skipped, and zero-rep work is excluded.
+This projection is read-only and does not change progression, programs, or drafts.
 
 Ad hoc logging remains available in either training mode. Completed locked ad
 hoc sets will be load/recovery evidence for Adaptive planning. Direct sets count

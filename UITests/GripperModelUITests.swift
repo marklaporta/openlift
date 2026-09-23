@@ -27,6 +27,7 @@ final class GripperModelUITests: OpenLiftUITestCase {
         scrollToElement(save, in: app); save.tap()
         XCTAssertTrue(app.staticTexts["Saved to History."].waitForExistence(timeout: 20))
         app.tabBars.buttons["History"].tap()
+        app.buttons["Workouts"].tap()
         let workout = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Off-Schedule")).firstMatch
         XCTAssertTrue(workout.waitForExistence(timeout: 10)); workout.tap()
         XCTAssertTrue(app.staticTexts["Model 1 x 6"].waitForExistence(timeout: 5))
