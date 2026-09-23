@@ -148,4 +148,85 @@ final class MovementHistoryTests: XCTestCase {
         XCTAssertTrue(grippers[0].isGripper)
         XCTAssertEqual(GripperLoadPresentation.set(grippers[0].performances[0].sets[0].weight, reps: 10, exerciseId: gripper.id), "Model 1 × 10")
     }
+    private func performance(_ time: Double, weights: [Double], reps: [Int], key: String = "a",
+        profile: ResistanceProfileValue? = nil, numbers: [Int]? = nil, ambiguous: Bool = false) -> MovementHistoryPerformance {
+        .init(id: "p-\(time)", sessionID: "s-\(time)", date: Date(timeIntervalSince1970: time),
+            exerciseID: nil, name: "Press", workout: "Workout", context: "Setup", progressionKey: key,
+            profile: profile, sets: weights.indices.map { .init(weight: weights[$0], reps: reps[$0], setIndex: numbers?[$0] ?? ($0 + 1)) },
+            hasAmbiguousEvidence: ambiguous)
+    }
+    private func movement(_ performances: [MovementHistoryPerformance], profiles: Bool = false,
+        gripper: Bool = false) -> MovementHistory {
+        .init(id: "test", exerciseID: gripper ? GripperLoadPresentation.exerciseId : nil,
+            name: gripper ? "Captain of Crush" : "Press", searchNames: [], usesResistanceProfiles: profiles,
+            performances: performances.reversed())
+    }
+    func testCustomIndexCombinesLoadAndRepsUsesFirstSetBaselineAndActualDates() throws {
+        let a = performance(0, weights: [11,11], reps: [16,12])
+        let b = performance(86400 * 7, weights: [12,12,12,12], reps: [13,11,9,7])
+        let points = MovementPerformanceIndex.points(for: movement([a,b]))
+        XCTAssertEqual(points.count, 6, "Changing set counts retain every actual set")
+        XCTAssertEqual(points[0].value, 100, accuracy: 0.0001)
+        XCTAssertEqual(points[2].value, 101.97628458498, accuracy: 0.0000001)
+        XCTAssertEqual(points[1].value, 100 * 42 / 46, accuracy: 0.0001, "Other sets use first-set baseline, not their own")
+        XCTAssertEqual(points[2].date.timeIntervalSince(points[0].date), 86400 * 7)
+        XCTAssertTrue(points[2].loadChanged)
+        XCTAssertFalse(points[3].loadChanged)
+        XCTAssertEqual(points[2].weight, 12)
+        XCTAssertEqual(points[2].reps, 13)
+        XCTAssertEqual(points[5].setNumber, 4)
+    }
+    func testProfileUnitsProgressionAndReturningSetupResetBaselineBeforeFiltering() {
+        let percent = ResistanceProfileValue.voltra(chainType: .inverseChains, chainPercent: 25, eccentricPercent: 25)
+        let pounds = ResistanceProfileValue.voltra(chainType: .inverseChains, chainPounds: 25, eccentricPounds: 25)
+        let history = movement([
+            performance(0, weights: [10], reps: [10], profile: percent),
+            performance(1, weights: [12], reps: [10], profile: percent),
+            performance(2, weights: [12], reps: [10], profile: pounds),
+            performance(3, weights: [15], reps: [10], profile: percent),
+            performance(4, weights: [20], reps: [10], key: "b", profile: percent)
+        ], profiles: true)
+        let points = MovementPerformanceIndex.points(for: history)
+        XCTAssertEqual(points.map(\.segment), [1,1,2,3,4])
+        for (point, expected) in zip(points, [100.0,120,100,100,100]) {
+            XCTAssertEqual(point.value, expected, accuracy: 0.0000001)
+        }
+        let filtered = points.filter { $0.setup == points[0].setup }
+        XCTAssertEqual(filtered.map(\.segment), [1,1,3])
+        XCTAssertNotEqual(filtered[0].series, filtered[2].series)
+        XCTAssertFalse(points[3].loadChanged, "A returning setup has a new baseline, not an apparent load jump")
+    }
+    func testMissingSetPositionsBreakOnlyTheirSeriesAndLoadDecreaseIsMarked() {
+        let points = MovementPerformanceIndex.points(for: movement([
+            performance(0, weights: [10,10,10], reps: [10,9,8]),
+            performance(1, weights: [10,10], reps: [11,9], numbers: [1,3]),
+            performance(2, weights: [9,9,9], reps: [12,10,9])
+        ]))
+        XCTAssertEqual(points[0].series, points[5].series)
+        XCTAssertNotEqual(points[1].series, points[6].series)
+        XCTAssertEqual(points[2].series, points[7].series)
+        XCTAssertTrue(points[5].loadChanged)
+    }
+    func testInvalidAndCategoricalLoadsNeverProduceIndexOrBridgeUnknownEvidence() {
+        XCTAssertNil(MovementPerformanceIndex.score(weight: 0, reps: 10))
+        XCTAssertNil(MovementPerformanceIndex.score(weight: .infinity, reps: 10))
+        XCTAssertNil(MovementPerformanceIndex.score(weight: .nan, reps: 10))
+        XCTAssertNil(MovementPerformanceIndex.score(weight: -5, reps: 10))
+        XCTAssertNil(MovementPerformanceIndex.score(weight: 5, reps: 0))
+        let valid = performance(0, weights: [10], reps: [10])
+        XCTAssertTrue(MovementPerformanceIndex.points(for: movement([valid], gripper: true)).isEmpty)
+        XCTAssertTrue(MovementPerformanceIndex.points(for: movement([valid], profiles: true)).isEmpty)
+        let points = MovementPerformanceIndex.points(for: movement([
+            valid,
+            performance(1, weights: [0,10], reps: [10,10]),
+            performance(2, weights: [12], reps: [10]),
+            performance(3, weights: [10], reps: [10], numbers: [3]),
+            performance(4, weights: [15], reps: [10]),
+            performance(5, weights: [16], reps: [10], ambiguous: true),
+            performance(6, weights: [17], reps: [10])
+        ]))
+        XCTAssertEqual(points.map(\.value), [100,100,100,100])
+        XCTAssertEqual(Set(points.map(\.series)).count, 4)
+    }
+
 }

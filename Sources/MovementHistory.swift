@@ -159,6 +159,154 @@ enum MovementHistoryService {
     }
 }
 
+/// Display-only load–rep estimate, normalized within contiguous comparable setups.
+/// Build before filtering so A → B → A never reconnects A across a profile change.
+enum MovementPerformanceIndex {
+    struct Point: Identifiable {
+        let id: String
+        let performanceID: String
+        let date: Date
+        let setup: MovementHistoryPerformance.Setup
+        let segment: Int
+        let series: String
+        let setNumber: Int
+        let value: Double
+        let weight: Double
+        let reps: Int
+        let loadChanged: Bool
+    }
+
+    static func score(weight: Double, reps: Int) -> Double? {
+        guard weight.isFinite, weight > 0, reps > 0 else { return nil }
+        let value = weight * (1 + Double(reps) / 30)
+        return value.isFinite ? value : nil
+    }
+
+    static func points(for movement: MovementHistory) -> [Point] {
+        guard !movement.isGripper else { return [] }
+        let history = movement.performances.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+        var result: [Point] = []
+        var previousSetup: MovementHistoryPerformance.Setup?
+        var baseline: Double?
+        var previousLoad: Double?
+        var segment = 0
+        var lastSeen: [Int: Int] = [:]
+        var runs: [Int: Int] = [:]
+        for (position, performance) in history.enumerated() {
+            let numbered = performance.sets.enumerated().map { ($0.element.setIndex ?? ($0.offset + 1), $0.element) }
+            let firstSets = numbered.filter { $0.0 == 1 }
+            let comparable = !performance.hasAmbiguousEvidence
+                && (!movement.usesResistanceProfiles || performance.profile?.isComplete == true)
+                && (performance.profile == nil || performance.profile?.isComplete == true)
+            guard comparable, firstSets.count == 1,
+                  let firstScore = score(weight: firstSets[0].1.weight, reps: firstSets[0].1.reps) else {
+                previousSetup = nil; baseline = nil; previousLoad = nil
+                continue
+            }
+            if previousSetup != performance.setup || baseline == nil {
+                segment += 1
+                baseline = firstScore
+                previousLoad = nil
+                lastSeen = [:]; runs = [:]
+            }
+            let counts = Dictionary(grouping: numbered, by: { $0.0 })
+            for (number, set) in numbered {
+                guard number > 0, counts[number]?.count == 1,
+                      let score = score(weight: set.weight, reps: set.reps) else { continue }
+                let value = 100 * (score / baseline!)
+                guard value.isFinite else { continue }
+                // A missing/invalid set position breaks only that position's line.
+                if lastSeen[number] != position - 1 { runs[number, default: 0] += 1 }
+                result.append(Point(id: "\(performance.id)-\(number)", performanceID: performance.id,
+                    date: performance.date, setup: performance.setup, segment: segment,
+                    series: "\(segment)-\(number)-\(runs[number, default: 0])", setNumber: number,
+                    value: value, weight: set.weight, reps: set.reps,
+                    loadChanged: number == 1 && previousLoad.map { $0 != set.weight } == true))
+                lastSeen[number] = position
+            }
+            previousSetup = performance.setup
+            previousLoad = firstSets[0].1.weight
+        }
+        return result
+    }
+}
+
+struct MovementPerformanceChart: View {
+    let points: [MovementPerformanceIndex.Point]
+    private var positions: [Int] { Array(Set(points.map(\.setNumber))).sorted() }
+    private var starts: [MovementPerformanceIndex.Point] {
+        var seen = Set<Int>()
+        return points.filter { $0.setNumber == 1 && seen.insert($0.segment).inserted }
+    }
+    private func color(_ number: Int) -> Color {
+        let colors: [Color] = [.cyan, .purple, .orange, .green, .pink, .indigo]
+        return colors[(number - 1) % colors.count]
+    }
+    private var summary: String {
+        guard let last = points.last(where: { $0.setNumber == 1 }) else { return "" }
+        let delta = last.value - 100
+        return "First set: \(last.value.formatted(.number.precision(.fractionLength(1)))) · \(delta >= 0 ? "+" : "")\(delta.formatted(.number.precision(.fractionLength(1))))% this segment"
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(summary).font(.subheadline.weight(.semibold)).foregroundStyle(.cyan)
+                .accessibilityIdentifier("history.index.summary")
+            Chart {
+                RuleMark(y: .value("Baseline", 100))
+                    .foregroundStyle(.secondary.opacity(0.5)).lineStyle(StrokeStyle(dash: [4, 4]))
+                ForEach(Array(starts.dropFirst())) { point in
+                    RuleMark(x: .value("New segment", point.date))
+                        .foregroundStyle(.secondary.opacity(0.4)).lineStyle(StrokeStyle(dash: [3, 4]))
+                }
+                ForEach(points) { point in
+                    LineMark(x: .value("Date", point.date), y: .value("Index", point.value),
+                        series: .value("Set segment", point.series))
+                        .foregroundStyle(color(point.setNumber).opacity(point.setNumber == 1 ? 1 : 0.65))
+                        .lineStyle(StrokeStyle(lineWidth: point.setNumber == 1 ? 3 : 1.5))
+                    PointMark(x: .value("Date", point.date), y: .value("Index", point.value))
+                        .foregroundStyle(color(point.setNumber).opacity(point.setNumber == 1 ? 1 : 0.7))
+                        .symbolSize(point.setNumber == 1 ? 40 : 20)
+                        .accessibilityLabel("\(point.date.formatted(date: .abbreviated, time: .omitted)), set \(point.setNumber)")
+                        .accessibilityValue("Index \(point.value.formatted(.number.precision(.fractionLength(1)))), \(point.weight.formatted()) pounds, \(point.reps) reps")
+                    if point.loadChanged {
+                        PointMark(x: .value("Date", point.date), y: .value("Index", point.value))
+                            .symbol(.diamond).symbolSize(65).foregroundStyle(.yellow)
+                            .accessibilityLabel("First-set load changed to \(point.weight.formatted()) pounds")
+                    }
+                }
+            }
+            .chartYScale(domain: .automatic(includesZero: false))
+            .chartYAxisLabel("index")
+            .chartXScale(range: .plotDimension(padding: 30))
+            .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                AxisValueLabel(format: .dateTime.month(.abbreviated).day()); AxisGridLine()
+            } }
+            .frame(height: 185)
+            .accessibilityIdentifier("history.index.chart")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { legend }
+                VStack(alignment: .leading, spacing: 4) { legend }
+            }
+            Text("Load × (1 + reps ÷ 30), relative to the segment’s starting first set = 100. A trend estimate, not measured 1RM.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Setup changes reset the baseline and break the lines. Exact weights and reps are below.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    @ViewBuilder private var legend: some View {
+        ForEach(positions, id: \.self) { number in
+            HStack(spacing: 5) {
+                Circle().fill(color(number)).frame(width: 6, height: 6)
+                Text("Set \(number)").foregroundStyle(color(number)).fixedSize()
+            }.font(.caption)
+        }
+        HStack(spacing: 5) {
+            Image(systemName: "diamond.fill").font(.system(size: 8))
+            Text("Load change").fixedSize()
+        }.foregroundStyle(.yellow).font(.caption)
+    }
+}
+
 struct MovementHistoryRow: View {
     let movement: MovementHistory
     var body: some View {
@@ -181,7 +329,11 @@ struct MovementHistoryRow: View {
 struct MovementHistoryDetailView: View {
     let movement: MovementHistory
     @State private var selectedSetup = 0
-    @State private var showReps = false
+    private var indexPoints: [MovementPerformanceIndex.Point] {
+        let all = MovementPerformanceIndex.points(for: movement)
+        guard selectedSetup >= 0, movement.setups.indices.contains(selectedSetup) else { return all }
+        return all.filter { $0.setup == movement.setups[selectedSetup] }
+    }
 
     private var performances: [MovementHistoryPerformance] {
         if selectedSetup < 0 { return movement.performances }
@@ -216,30 +368,15 @@ struct MovementHistoryDetailView: View {
                     Text("Resistance settings not recorded").font(.subheadline).foregroundStyle(.secondary)
                 }
             }
-            if !movement.isGripper && selectedSetup >= 0 && performances.count > 1 {
-                Section {
-                    Picker("Measure", selection: $showReps) {
-                        Text("Weight").tag(false)
-                        Text("Reps").tag(true)
-                    }.pickerStyle(.segmented).accessibilityIdentifier("history.measure")
-                    Chart {
-                        ForEach(performances.reversed()) { performance in
-                            ForEach(Array(performance.sets.enumerated()), id: \.offset) { _, set in
-                                PointMark(x: .value("Workout", performance.date),
-                                    y: .value(showReps ? "Reps" : "Weight (lb)", showReps ? Double(set.reps) : set.weight))
-                                    .foregroundStyle(Color.accentColor.opacity(0.75))
-                                    .accessibilityLabel(performance.date.formatted(date: .abbreviated, time: .omitted))
-                                    .accessibilityValue("\(set.weight.formatted()) pounds, \(set.reps) reps")
-                            }
-                        }
-                    }
-                    .chartYAxisLabel(showReps ? "reps" : "lb")
-                    .chartXScale(range: .plotDimension(padding: 30))
-                    .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day()); AxisGridLine() } }
-                    .frame(height: 170)
-                    Text("Each dot is a completed set. Exact weights and reps are below.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } header: { Text("Progression") }
+            Section("Estimated 1RM · performance index") {
+                if !indexPoints.isEmpty {
+                    MovementPerformanceChart(points: indexPoints)
+                } else {
+                    Text(movement.isGripper
+                        ? "Gripper models are categorical. Compare the model and reps in your sets below."
+                        : "No comparable index yet. A recorded positive load, first set, and known resistance setup are needed; exact sets are below.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
             }
             Section("Performances · newest first") {
                 ForEach(performances) { performance in
