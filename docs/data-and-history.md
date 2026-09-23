@@ -72,13 +72,13 @@ Zero/nonfinite loads, ambiguous evidence, missing first sets, and unrecorded or
 incomplete cable profiles are not indexed; no bodyweight or resistance modifiers
 are invented. Grippers retain model labels and never index model ordinals as pounds.
 
-The dashed **All sets**
-overlay sums the Epley scores of every recorded set and rebases each comparable
-setup segment's starting total to 100. Unlike the individual-set lines, it measures
-both set performance and set count: adding a set raises the total without resetting
-the baseline. It is not a whole-workout 1RM. Invalid or duplicate set positions,
-missing set 1, invalid constituent scores, or ambiguous/incomplete setup evidence
-leave that occurrence's total unindexed and break the total trend; raw sets remain.
+The dashed **All sets avg** overlay averages the Epley scores of every recorded
+set and rebases each comparable setup segment's starting average to 100. Set
+count changes neither inflate the index nor reset its baseline: two → three → two
+identical sets stay at 100. This is average per-set performance, not a whole-workout
+1RM. Invalid or duplicate set positions, missing set 1, invalid constituent scores,
+or ambiguous/incomplete setup evidence leave that occurrence's average unindexed
+and break its trend; raw sets remain.
 
 Completed fixed, ad hoc, Adaptive, and export-only records are included; stored sessions win over
 recovery mirrors by ID. Clustered rows require performed occurrence evidence when

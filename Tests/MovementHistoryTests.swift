@@ -229,21 +229,23 @@ final class MovementHistoryTests: XCTestCase {
         XCTAssertEqual(Set(points.map(\.series)).count, 4)
     }
 
-    func testAllSetsTotalRewardsAddedSetsWithoutRebasingAndSumsIndividualScores() {
+    func testAllSetsAverageNormalizesCountWithoutRebasingAndAveragesIndividualScores() {
         let points = MovementAllSetsIndex.points(for: movement([
             performance(0, weights: [10,10], reps: [10,10]),
             performance(1, weights: [10,10,10], reps: [10,10,10]),
             performance(2, weights: [10,10], reps: [10,10]),
             performance(3, weights: [10,20], reps: [30,15]),
-            performance(4, weights: [10,20], reps: [30,15], numbers: [1,3])
+            performance(4, weights: [10,20], reps: [30,15], numbers: [1,3]),
+            performance(5, weights: [10,20,30], reps: [30,15,10]),
+            performance(6, weights: [11,11,11], reps: [10,10,10])
         ]))
-        XCTAssertEqual(points.map(\.setCount), [2,3,2,2,2])
-        XCTAssertEqual(points.map(\.segment), [1,1,1,1,1])
-        for (point, expected) in zip(points, [100.0,150,100,187.5,187.5]) {
+        XCTAssertEqual(points.map(\.setCount), [2,3,2,2,2,3,3])
+        XCTAssertEqual(points.map(\.segment), [1,1,1,1,1,1,1])
+        for (point, expected) in zip(points, [100.0,100,100,187.5,187.5,225,110]) {
             XCTAssertEqual(point.value, expected, accuracy: 0.0000001)
         }
-        XCTAssertEqual(points[3].totalScore, 50, accuracy: 0.0000001,
-            "Sum each set's score, not Epley of summed/averaged weights and reps")
+        XCTAssertEqual(points[3].averageScore, 25, accuracy: 0.0000001,
+            "Average each set's score, not Epley of averaged weights and reps")
     }
 
     func testAllSetsSetupUnitsAndReturningSetupResetBeforeFiltering() {
@@ -257,7 +259,7 @@ final class MovementHistoryTests: XCTestCase {
             performance(86400 * 10, weights: [20], reps: [10], key: "b", profile: percent)
         ], profiles: true))
         XCTAssertEqual(points.map(\.segment), [1,1,2,3,4])
-        for (point, expected) in zip(points, [100.0,240,100,100,100]) {
+        for (point, expected) in zip(points, [100.0,120,100,100,100]) {
             XCTAssertEqual(point.value, expected, accuracy: 0.0000001)
         }
         XCTAssertEqual(points[1].date.timeIntervalSince(points[0].date), 86400 * 7)
