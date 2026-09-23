@@ -64,6 +64,10 @@ struct HistoryView: View {
     @Query private var generatedPlans: [GeneratedWorkoutPlan]
     @State private var exportedSessions: [ExportedSessionSummary] = []
     @State private var searchText = ""
+    @State private var showsWorkouts = false
+    @State private var alphabetical = false
+    @Query private var clusterOccurrences: [ClusterOccurrenceRecord]
+    @Query private var resistanceProfiles: [ExerciseResistanceProfile]
 
     private var completedSessions: [Session] {
         let candidates = sessions.filter {
@@ -95,61 +99,66 @@ struct HistoryView: View {
         !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var exerciseSearchResults: [HistoryExerciseOccurrence] {
-        var results = HistoryExerciseSearchService.results(
-            query: searchText,
-            sessions: completedSessions,
-            setEntries: setEntries,
-            adaptiveSessions: completedAdaptiveSessions,
-            adaptiveSetEntries: adaptiveSetEntries,
-            exercises: exercises
-        )
-        let knownSessionIds = Set(completedSessions.map { $0.id.uuidString.lowercased() })
-            .union(completedAdaptiveSessions.map { $0.id.uuidString.lowercased() })
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        for exported in exportedSessions where !knownSessionIds.contains(exported.id.lowercased()) {
-            for (index, exercise) in exported.exercises.enumerated() where
-                exercise.exercise_name.localizedCaseInsensitiveContains(query) {
-                results.append(
-                    HistoryExerciseOccurrence(
-                        id: "exported-\(exported.id)-\(index)",
-                        date: exported.date,
-                        exerciseName: exercise.exercise_name,
-                        workoutName: exported.cycleName,
-                        sets: exercise.sets.sorted { $0.set_index < $1.set_index }.map {
-                            HistoryExerciseSet(weight: $0.weight, reps: $0.reps)
-                        }
-                    )
-                )
-            }
-        }
-        return results.sorted {
-            if $0.date != $1.date { return $0.date > $1.date }
-            return $0.id < $1.id
-        }
+    private var movements: [MovementHistory] {
+        MovementHistoryService.movements(sessions: completedSessions, setEntries: setEntries,
+            adaptiveSessions: completedAdaptiveSessions, adaptiveSetEntries: adaptiveSetEntries,
+            exercises: exercises, occurrences: clusterOccurrences, profiles: resistanceProfiles,
+            exports: exportedSessions)
+    }
+
+    private var filteredMovements: [MovementHistory] {
+        MovementHistoryService.matching(movements, query: searchText, alphabetical: alphabetical)
+    }
+
+    private var filteredTimeline: [HistoryTimelineEntry] {
+        guard hasSearchQuery else { return timelineEntries }
+        let ids = Set(filteredMovements.flatMap { $0.performances.map(\.sessionID) })
+        return timelineEntries.filter { ids.contains($0.id) }
     }
 
     var body: some View {
         NavigationStack {
             List {
-                if hasSearchQuery {
-                    if exerciseSearchResults.isEmpty {
+                Section {
+                    Picker("History by", selection: $showsWorkouts) {
+                        Text("Movements").tag(false)
+                        Text("Workouts").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("history.mode")
+                }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                if !showsWorkouts {
+                    if movements.isEmpty {
+                        ContentUnavailableView("No Movement History", systemImage: "dumbbell",
+                            description: Text("Finish a workout to track your weights and reps here."))
+                    } else if filteredMovements.isEmpty {
                         ContentUnavailableView.search(text: searchText)
                     } else {
-                        Section("Exercise History") {
-                            ForEach(exerciseSearchResults) { occurrence in
-                                HistoryExerciseOccurrenceView(occurrence: occurrence)
+                        Section {
+                            ForEach(filteredMovements) { movement in
+                                NavigationLink {
+                                    MovementHistoryDetailView(movement: movement)
+                                } label: { MovementHistoryRow(movement: movement) }
+                                .accessibilityIdentifier("history.movement.\(movement.name)")
+                            }
+                        } header: {
+                            HStack {
+                                Text("\(filteredMovements.count) movements")
+                                Spacer()
+                                Button { alphabetical.toggle() } label: {
+                                    Label(alphabetical ? "A–Z" : "Recent", systemImage: "arrow.up.arrow.down")
+                                }.accessibilityIdentifier("history.sort")
                             }
                         }
                     }
-                } else if timelineEntries.isEmpty {
-                    ContentUnavailableView(
-                        "No Completed Sessions",
-                        systemImage: "clock.arrow.circlepath",
-                        description: Text("Finish a workout to see it in history.")
-                    )
+                } else if filteredTimeline.isEmpty {
+                    if hasSearchQuery { ContentUnavailableView.search(text: searchText) }
+                    else {
+                        ContentUnavailableView("No Completed Sessions", systemImage: "clock.arrow.circlepath",
+                            description: Text("Finish a workout to see it in history."))
+                    }
                 } else {
-                    ForEach(timelineEntries) { entry in
+                    ForEach(filteredTimeline) { entry in
                         switch entry {
                         case .exported(let exported):
                             NavigationLink {
@@ -182,7 +191,7 @@ struct HistoryView: View {
                 }
             }
             .navigationTitle("History")
-            .searchable(text: $searchText, prompt: "Search exercises")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search exercises")
             .task {
                 _ = try? AdaptiveExportService.hydrateAvailableExports(modelContext: modelContext)
                 reloadExportedSessions()
@@ -237,6 +246,7 @@ struct HistoryView: View {
 struct HistoryExerciseSet: Equatable {
     let weight: Double
     let reps: Int
+    var setIndex: Int? = nil
 }
 
 struct HistoryExerciseOccurrence: Identifiable, Equatable {
@@ -845,6 +855,7 @@ struct ExportedSessionSummary: Identifiable {
     let exerciseCount: Int
     let exercises: [SessionExportService.ExportExercise]
     var dayLabelSnapshot: String? = nil
+    var clusterOccurrences: [SessionExportService.ClusterOccurrencePayload]? = nil
 
     var dayLabel: String {
         dayLabelSnapshot ?? "Day \(cycleDayIndex + 1)"
@@ -873,7 +884,8 @@ struct ExportedSessionSummary: Identifiable {
         return Self(id: payload.session_id, date: date, cycleName: payload.cycle_name,
                     cycleDayIndex: payload.cycle_day_index, exerciseCount: payload.exercises.count,
                     exercises: payload.exercises,
-                    dayLabelSnapshot: payload.fixed_cycle?.day_label ?? (payload.workout_kind == "ad_hoc" ? "Off-Schedule" : nil))
+                    dayLabelSnapshot: payload.fixed_cycle?.day_label ?? (payload.workout_kind == "ad_hoc" ? "Off-Schedule" : nil),
+                    clusterOccurrences: payload.fixed_cycle?.cluster_occurrences)
     }
 
     static func loadAll(environment: SessionExportService.ExportEnvironment = .live()) -> [ExportedSessionSummary] {

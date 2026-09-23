@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DA2300000000000000000001 /* MovementHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2300000000000000000002; };
 		D20260920100000000000001 /* ProgramAgentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20260920100000000000002; };
 		D20260920000000000000003 /* WorkoutNumericField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20260920000000000000004 /* WorkoutNumericField.swift */; };
 		D20260920000000000000001 /* InputResponsivenessProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20260920000000000000002 /* InputResponsivenessProbe.swift */; };
@@ -69,6 +70,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DA2300000000000000000002 /* MovementHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovementHistory.swift; sourceTree = "<group>"; };
 		D20260920100000000000002 /* ProgramAgentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramAgentBridge.swift; sourceTree = "<group>"; };
 		D20260920000000000000004 /* WorkoutNumericField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutNumericField.swift; sourceTree = "<group>"; };
 		D20260920000000000000002 /* InputResponsivenessProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputResponsivenessProbe.swift; sourceTree = "<group>"; };
@@ -195,6 +197,7 @@
 				F20000000000000000000048 /* ExerciseNotesView.swift */,
 				F20000000000000000000050 /* ExerciseSetupNotesMigration.swift */,
 				36BC97ACBFC2F3135919BE0C /* HistoryView.swift */,
+				DA2300000000000000000002 /* MovementHistory.swift */,
 				E7E50088A602E2773296E6DD /* ImportView.swift */,
 				A22222222222222222222222 /* LogWorkoutView.swift */,
 				9B5C389CDFB0AC4404609392 /* Info.plist */,
@@ -370,6 +373,7 @@
 				F10000000000000000000048 /* ExerciseNotesView.swift in Sources */,
 				F10000000000000000000050 /* ExerciseSetupNotesMigration.swift in Sources */,
 				70C2298C3C511DC074837077 /* HistoryView.swift in Sources */,
+				DA2300000000000000000001 /* MovementHistory.swift in Sources */,
 				1F6E588A059838A62777CE81 /* ImportView.swift in Sources */,
 				A11111111111111111111111 /* LogWorkoutView.swift in Sources */,
 				87F67DB5992A7D5B22EF2FD4 /* Models.swift in Sources */,

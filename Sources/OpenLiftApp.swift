@@ -127,6 +127,12 @@ struct OpenLiftApp: App {
                     try JSONEncoder().encode(package).write(to: directory.appendingPathComponent("OpenLift-Test-Revision.json"), options: .atomic)
                 } catch { fatalError("Program import UI fixture failed: \(error)") }
             }
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["OPENLIFT_MOVEMENT_HISTORY_UI"] == "1" {
+                do { try MovementHistoryUITestFixture.seed(in: ModelContext(container)) }
+                catch { fatalError("History UI fixture failed: \(error)") }
+            }
+            #endif
             if ProcessInfo.processInfo.environment["OPENLIFT_INPUT_HISTORY_UI"] == "1" {
                 do { try WorkoutInputUITestFixture.seed(in: ModelContext(container)) }
                 catch { fatalError("Input UI fixture failed: \(error)") }
